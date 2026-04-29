@@ -1,1 +1,9 @@
 Drone-Handbook.pdf
+venv/
+venv/*
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
