@@ -39,6 +39,9 @@ uv run main.py --name prototyp-drone --battery 45
 ---
 
 ### other software
+To configure the drone with a web based ui:
+use **micoControl** : https://micoair.com/configurator/
+
 
 #### Ardu-pilot:
 - stm32cubeprogrammer
