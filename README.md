@@ -46,3 +46,7 @@ MissionPlanner is also viable: https://ardupilot.org/planner/
 
 #### Ardu-pilot:
 - stm32cubeprogrammer
+
+
+# Beispiel-Projekte Kamera
+https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person
