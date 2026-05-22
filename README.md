@@ -49,4 +49,6 @@ MissionPlanner is also viable: https://ardupilot.org/planner/
 
 
 # Beispiel-Projekte Kamera
-https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person
+1. https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person
+
+2. GUI for models on pi camera: https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-app-gui-tool
