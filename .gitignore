@@ -7,3 +7,14 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Local Raspberry Pi images / card dumps
+*.img
+*.iso
+*.qcow2
+*.raw
