@@ -110,3 +110,14 @@ ssh -F /dev/null seb@100.99.38.65 'pkill -f "main.py stream"'
 ```
 
 Open http://100.99.38.65:8080/ in browser
+
+### enable eduroam and change wifi
+```
+ssh -t seb@100.99.38.65 'cd ~/eduroam-setup && ./install-eduroam-fuas.sh'
+
+ssh -t seb@100.99.38.65 'sudo nmcli connection up eduroam ifname wlan0'
+
+tailscale ping 100.99.38.65
+
+ssh seb@100.99.38.65
+```
