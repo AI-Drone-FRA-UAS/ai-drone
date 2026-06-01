@@ -1,11 +1,21 @@
-Drone-Handbook.pdf
-venv/
-venv/*
+# Virtual environments
 .venv/
+venv/
+
+# Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# IDE
 .vscode/
 .idea/
+
+# OS
 .DS_Store
 
 # Local secrets
@@ -13,8 +23,12 @@ __pycache__/
 .env.*
 !.env.example
 
-# Local Raspberry Pi images / card dumps
+# Large local files — Raspberry Pi images
+raspios-lite/
 *.img
 *.iso
 *.qcow2
 *.raw
+
+# Large handbook PDF
+Drone-Handbook.pdf

@@ -1,6 +1,8 @@
-# Raspberry Pi Zero 2 WH: Flash microSD and SSH Over USB
+# Raspberry Pi USB SSH: Flash Storage and Connect
 
 ## Target Setup
+
+Default Zero 2 profile:
 
 ```text
 Pi username: seb
@@ -12,11 +14,24 @@ SSH command: ssh seb@192.168.7.2
 
 Use the Pi Zero 2 WH micro-USB port labeled `USB` for the PC connection. The `PWR IN` port is power-only.
 
-## Linux: Flash the microSD
+Pi 4 profile:
 
-Insert the microSD card into the USB adapter and plug it into the PC.
+```text
+Profile:     PI_PROFILE=pi4
+Pi username: seb
+Pi hostname: seb-is-pm2
+Pi USB IP:   192.168.8.2
+Host USB IP: 192.168.8.1
+SSH command: ssh seb@192.168.8.2
+```
 
-Check that the card is `/dev/sda`:
+Use the Pi 4 USB-C power/data port for the PC connection. The USB-A ports are not the USB gadget port.
+
+## Linux: Flash the Storage
+
+Insert the microSD card or USB boot stick into the PC. The scripts cannot flash or patch storage while it is inserted into the Pi.
+
+Check that the storage is `/dev/sda`:
 
 ```bash
 lsblk -o NAME,PATH,SIZE,MODEL,TRAN,TYPE,FSTYPE,LABEL,MOUNTPOINTS
@@ -27,6 +42,13 @@ Flash and configure the card:
 ```bash
 cd /home/abaris/ai-drone
 ./prepare-and-flash-pi.sh
+```
+
+For the Pi 4:
+
+```bash
+cd /home/abaris/ai-drone
+PI_PROFILE=pi4 ./prepare-and-flash-pi.sh
 ```
 
 When prompted:
@@ -48,9 +70,9 @@ Then enter:
 
 Wait until the script prints `Done`.
 
-## Linux: Enable USB SSH on the microSD
+## Linux: Enable USB SSH on the storage
 
-Keep the microSD in the USB adapter and run:
+Keep the storage in the PC and run:
 
 ```bash
 cd /home/abaris/ai-drone
@@ -59,12 +81,23 @@ sync
 sudo eject /dev/sda
 ```
 
-Now remove the microSD from the USB adapter.
+For the Pi 4:
+
+```bash
+cd /home/abaris/ai-drone
+PI_PROFILE=pi4 ./enable-pi-usb-gadget.sh
+sync
+sudo eject /dev/sda
+```
+
+Now remove the storage from the PC.
 
 ## Linux: Boot and Connect
 
-1. Put the microSD card into the Raspberry Pi Zero 2 WH.
-2. Connect the PC to the Pi port labeled `USB` with a data-capable micro-USB cable.
+1. Put the prepared storage into the Raspberry Pi.
+2. Connect the PC to the Pi USB gadget port with a data-capable cable:
+   - Zero 2 WH: micro-USB port labeled `USB`
+   - Pi 4: USB-C power/data port
 3. Wait 1-3 minutes.
 4. Run:
 
@@ -73,12 +106,25 @@ cd /home/abaris/ai-drone
 ./connect-pi-usb-ssh.sh
 ```
 
+For the Pi 4:
+
+```bash
+cd /home/abaris/ai-drone
+PI_PROFILE=pi4 ./connect-pi-usb-ssh.sh
+```
+
 When SSH asks for a password, enter the Pi password you chose during flashing.
 
 Manual SSH command:
 
 ```bash
 ssh seb@192.168.7.2
+```
+
+Pi 4 manual SSH command:
+
+```bash
+ssh seb@192.168.8.2
 ```
 
 Confirm login:
@@ -95,6 +141,14 @@ Expected:
 seb-is-pm
 seb
 192.168.7.2/24
+```
+
+Pi 4 expected:
+
+```text
+seb-is-pm2
+seb
+192.168.8.2/24
 ```
 
 ## Windows: Connect to the Prepared Pi
@@ -147,11 +201,13 @@ ssh seb@192.168.7.2
 ## Notes
 
 - Use a data-capable USB cable. Charge-only cables will not work for SSH.
-- Usually the Pi can be powered from the same USB cable connected to the `USB` port.
-- If the Pi is unstable, also power it through `PWR IN`.
+- Usually the Zero 2 WH can be powered from the same USB cable connected to the `USB` port.
+- The Pi 4 needs a stable USB-C power/data connection; if it reboots or disconnects, use a powered USB data path or separate stable power.
+- Connect one Raspberry Pi at a time unless you explicitly choose the correct `USB_IFACE`.
 - If SSH warns about host authenticity on first connect, type `yes`.
 - If SSH host keys conflict after reflashing, run:
 
 ```bash
 ssh-keygen -R 192.168.7.2
+ssh-keygen -R 192.168.8.2
 ```

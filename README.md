@@ -1,54 +1,112 @@
-# Project ai-drone for Fra-Uas with Professor Baun
+# AI Drone — Fra-UAS / Professor Baun
 
-## Setup
+Camera, computer vision, and flight integration for a 3.5" CineWhoop drone
+with a Raspberry Pi Zero 2 WH companion computer and IMX500 AI Camera.
 
-### 1. Install uv
+## Quick Start — Laptop
 
-**Linux / WSL:**
 ```bash
+# Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install all desktop dependencies
+uv sync --group desktop --group dev
+
+# Smoke test
+uv run python main.py status
+
+# Camera preview (opens an OpenCV window, press 'q' to quit)
+uv run python main.py camera
 ```
 
-**Windows:**
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+## Quick Start — Raspberry Pi
 
-### 2. Install dependencies
+> **Prerequisites on the Pi** (already done):
+> ```bash
+> sudo apt install -y python3-picamera2 imx500-all
+> ```
+> `uv` must also be installed on the Pi.
 
 ```bash
-uv sync
+# Deploy the project and install raspi deps
+./deploy.sh
+
+# Deploy to the Pi 4 profile instead
+PI_PROFILE=pi4 ./deploy.sh
+
+# Deploy and immediately run the camera
+./deploy.sh --run
+
+# Deploy and open an interactive shell on the Pi
+./deploy.sh --ssh
 ```
 
-### 3. Run
+The deploy script rsyncs the project to `seb@192.168.7.2:/home/seb/ai-drone`
+by default, or `seb@192.168.8.2:/home/seb/ai-drone` with `PI_PROFILE=pi4`.
+It creates a `.venv` with system site packages enabled so the project can see
+apt-installed `picamera2` and `libcamera`.
 
-```bash
-uv run main.py
+## CLI Commands
+
+```
+main.py status  [--name NAME] [--battery N]   # Drone status smoke test
+main.py camera  [--frames N] [--output PATH]  # Camera preview / capture
 ```
 
-With optional parameters:
-```bash
-uv run main.py --name prototyp-drone --battery 45
+| Command | Laptop | Pi |
+|---------|--------|----|
+| `status` | ✓ | ✓ |
+| `camera` | OpenCV window (or synthetic if no webcam) | picamera2 + IMX500 (headless capture) |
+
+## Project Structure
+
+```
+ai-drone/
+├── main.py                  # Entry point
+├── ai_drone/
+│   ├── __init__.py
+│   ├── camera.py            # Platform-aware camera (picamera2 / OpenCV)
+│   └── cli.py               # Typer CLI (status, camera)
+├── tests/
+│   └── test_camera.py
+├── deploy.sh                # Sync & run on the Pi
+├── connect-pi-usb-ssh.sh    # USB-SSH connection helper
+├── enable-pi-usb-gadget.sh  # Patch microSD for USB Ethernet
+├── pi-targets.sh            # Pi profile defaults
+├── prepare-and-flash-pi.sh  # Flash Raspberry Pi OS
+├── wait-for-pi-ssh.sh       # Wait for Pi over Wi-Fi
+├── pyproject.toml
+└── drone-project.md         # Hardware & implementation reference
 ```
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--name`  | `Prototyp` | Drone name |
-| `--battery` | `69` | Battery level (%) |
+## Architecture
 
----
+The `Camera` class in `ai_drone/camera.py` auto-detects the platform:
 
-### other software
-To configure the drone with a web based ui:
-use **micoControl** : https://micoair.com/configurator/
+- **Raspberry Pi** → uses `picamera2` (system package) to talk to the
+  IMX500 AI Camera via libcamera
+- **Laptop** → uses `opencv-python` (`VideoCapture`) for webcam access
+- **No webcam** → falls back to a synthetic test pattern
 
-MissionPlanner is also viable: https://ardupilot.org/planner/
+Detection works by reading `/proc/device-tree/model`.
 
-#### Ardu-pilot:
-- stm32cubeprogrammer
+## Other Software
+
+- [MicoControl](https://micoair.com/configurator/) — web-based drone configuration
+- [MissionPlanner](https://ardupilot.org/planner/) — ArduPilot ground control
+- [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html) — FC firmware flashing
+
+### Example Camera Projects
+
+1. [Nearest Person (Sony)](https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person)
+2. [Pi Camera GUI Tool (Sony)](https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-app-gui-tool)
 
 
-# Beispiel-Projekte Kamera
-1. https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person
+### start stream
 
-2. GUI for models on pi camera: https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-app-gui-tool
+```
+PI_HOST=seb@100.99.38.65 ./deploy.sh --stream
+ssh -F /dev/null seb@100.99.38.65 'pkill -f "main.py stream"'
+```
+
+Open http://100.99.38.65:8080/ in browser

@@ -1,7 +1,7 @@
 [project]
 name = "ai-drone"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI drone companion — camera, CV, and flight integration"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,31 +11,17 @@ dependencies = [
     "typer>=0.25.1",
 ]
 
-# Desktop commands:
-#   uv sync --no-dev --group desktop
-#   uv run --no-dev --group desktop python main.py --name desktop-test --battery 42
-#
-# Raspberry Pi commands over the current USB cable SSH target.
-# This Pi is cable-only right now, so the smoke test uses its staged uv binary,
-# local uv cache, and system Python instead of downloading from the Pi.
-#   rsync -az --delete --exclude .git --exclude .venv --exclude .ruff_cache --exclude __pycache__ --exclude Drone-Handbook.pdf --exclude raspios-lite ./ seb@192.168.7.2:/home/seb/ai-drone/
-#   ssh seb@192.168.7.2 'cd /home/seb/ai-drone && PATH=/home/seb/.local/bin:$PATH UV_CACHE_DIR=/home/seb/.cache/uv uv sync --offline --python /usr/bin/python3 --only-group raspi'
-#   ssh seb@192.168.7.2 'cd /home/seb/ai-drone && PATH=/home/seb/.local/bin:$PATH UV_CACHE_DIR=/home/seb/.cache/uv uv run --offline --python /usr/bin/python3 --only-group raspi python -c "import serial; print(\"raspi dependency test ok\")"'
-#   ssh seb@192.168.7.2 'cd /home/seb/ai-drone && PATH=/home/seb/.local/bin:$PATH UV_CACHE_DIR=/home/seb/.cache/uv uv run --offline --python /usr/bin/python3 --no-dev --group raspi python main.py --name raspi-test --battery 88'
-
 [dependency-groups]
 desktop = [
     "numpy>=2.4.4",
     "opencv-python>=4.13.0.92",
-    "pandas>=3.0.2",
     "pillow>=12.2.0",
-    "platformdirs>=4.9.6",
 ]
 raspi = [
     "pyserial>=3.5",
+    "numpy>=2.4.4",
 ]
 dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.12",
-    "ty>=0.0.33",
 ]
