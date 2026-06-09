@@ -49,14 +49,20 @@ apt-installed `picamera2` and `libcamera`.
 ## CLI Commands
 
 ```
-main.py status  [--name NAME] [--battery N]   # Drone status smoke test
-main.py camera  [--frames N] [--output PATH]  # Camera preview / capture
+main.py status   [--name NAME] [--battery N]           # Drone status smoke test
+main.py camera   [--frames N] [--output PATH]          # Camera preview / capture
+main.py stream   [--port N]                            # MJPEG live video over HTTP
+main.py nearest  [--output stream|headless|display]    # People detection + nearest-neighbour distance
+                 [--altitude M] [--fov DEG] [--rotate 0|90|180|270]
+                 [--regions FILE] [--confidence F] [--threshold M] [--port N]
 ```
 
 | Command | Laptop | Pi |
 |---------|--------|----|
 | `status` | ✓ | ✓ |
 | `camera` | OpenCV window (or synthetic if no webcam) | picamera2 + IMX500 (headless capture) |
+| `stream` | webcam → browser | picamera2 + IMX500 → browser |
+| `nearest` | — | IMX500 on-sensor NanoDet + ByteTrack → browser/log |
 
 ## Project Structure
 
@@ -66,7 +72,11 @@ ai-drone/
 ├── ai_drone/
 │   ├── __init__.py
 │   ├── camera.py            # Platform-aware camera (picamera2 / OpenCV)
-│   └── cli.py               # Typer CLI (status, camera)
+│   ├── stream.py            # MJPEG HTTP streaming server
+│   ├── nearest_person.py    # People detection + nearest-neighbour distance (IMX500/modlib)
+│   ├── data/
+│   │   └── nearest_person_regions.json  # Default 3D-calibration regions
+│   └── cli.py               # Typer CLI (status, camera, stream, nearest)
 ├── tests/
 │   └── test_camera.py
 ├── deploy.sh                # Sync & run on the Pi
@@ -90,6 +100,46 @@ The `Camera` class in `ai_drone/camera.py` auto-detects the platform:
 
 Detection works by reading `/proc/device-tree/model`.
 
+## Nearest-Person Detector
+
+`main.py nearest` is our integration of Sony's
+[`aitrios-rpi-sample-apps` *nearest-person*](https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person)
+example, adapted for the drone. The NanoDet object-detection model runs **on
+the IMX500 sensor itself** (not the Pi CPU) via `modlib`; people are tracked
+with ByteTrack and the pixel gap to each person's nearest neighbour is
+converted to metres.
+
+**Output modes** (`--output`):
+
+- `stream` *(default)* — annotated MJPEG at `http://<pi-ip>:8080/`; best for the drone.
+- `headless` — no image, logs `people=N  nearest pair=… m` per frame.
+- `display` — OpenCV window (needs a desktop session on the Pi).
+
+**Distance calibration** — two options:
+
+- *Fixed-camera* (default): per-region distance-per-pixel from a JSON file
+  (`--regions`, defaults to `ai_drone/data/nearest_person_regions.json`).
+  Regenerate it for a new scene with Sony's
+  [`tools/3D-calibration`](aitrios-rpi-sample-apps/tools/3D-calibration/).
+- *Altitude* (drone): pass `--altitude <m>` (and `--fov <deg>` for your lens)
+  to compute metres-per-pixel live from flight geometry — assumes a
+  straight-down camera over flat ground, so treat absolute values as
+  approximate and calibrate `--fov` to your lens.
+
+`--rotate {0,90,180,270}` rotates the displayed/streamed image when the camera
+is mounted rotated (it does not affect the detection maths).
+
+```bash
+# From the laptop: deploy + start the detector stream on the Pi
+PI_HOST=seb@100.99.38.65 ./deploy.sh --nearest
+
+# Altitude-based distance at 5 m with a 66° lens, image flipped 180°
+PI_HOST=seb@100.99.38.65 ./deploy.sh --nearest --altitude 5 --fov 66 --rotate 180
+```
+
+Then open `http://100.99.38.65:8080/` in a browser. First run uploads the model
+to the sensor, which takes a few minutes; subsequent runs start in seconds.
+
 ## Other Software
 
 - [MicoControl](https://micoair.com/configurator/) — web-based drone configuration
@@ -101,12 +151,33 @@ Detection works by reading `/proc/device-tree/model`.
 1. [Nearest Person (Sony)](https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-apps/tree/main/examples/nearest-person)
 2. [Pi Camera GUI Tool (Sony)](https://github.com/SonySemiconductorSolutions/aitrios-rpi-sample-app-gui-tool)
 
+### connect to pi
+
+Key-based login is set up via `~/.ssh/config` (key `~/.ssh/pi_drone`), so both
+of these work without a password:
+
+```
+ssh drone-pi            # alias
+ssh seb@100.99.38.65    # by IP
+```
+
+`deploy.sh` picks up that key automatically (it defaults `SSH_CONFIG` to
+`~/.ssh/config`).
 
 ### start stream
 
+Plain camera stream:
+
 ```
 PI_HOST=seb@100.99.38.65 ./deploy.sh --stream
-ssh -F /dev/null seb@100.99.38.65 'pkill -f "main.py stream"'
+ssh drone-pi 'pkill -f "main.py stream"'
+```
+
+Nearest-person detector stream (see [Nearest-Person Detector](#nearest-person-detector)):
+
+```
+PI_HOST=seb@100.99.38.65 ./deploy.sh --nearest
+ssh drone-pi 'pkill -f "main.py nearest"'
 ```
 
 Open http://100.99.38.65:8080/ in browser
@@ -121,3 +192,6 @@ tailscale ping 100.99.38.65
 
 ssh seb@100.99.38.65
 ```
+
+
+PI_HOST=seb@100.99.38.65 ./deploy.sh --nearest
