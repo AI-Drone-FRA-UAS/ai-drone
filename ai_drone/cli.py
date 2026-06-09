@@ -15,6 +15,7 @@ app = typer.Typer(help="AI Drone — camera, CV, and flight tools.")
 # Models
 # ---------------------------------------------------------------------------
 
+
 class DroneStatus(BaseModel):
     name: str
     battery: int
@@ -25,6 +26,7 @@ class DroneStatus(BaseModel):
 # Commands
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def status(
     name: str = typer.Option("Prototyp", help="Drone name"),
@@ -32,15 +34,15 @@ def status(
 ) -> None:
     """Print basic drone status (smoke test)."""
     s = DroneStatus(name=name, battery=battery)
-    rprint(
-        f"[bold green]{s.name}[/] battery: {s.battery}% | armed: {s.armed}"
-    )
+    rprint(f"[bold green]{s.name}[/] battery: {s.battery}% | armed: {s.armed}")
 
 
 @app.command()
 def camera(
     frames: int = typer.Option(0, help="Capture N frames then exit (0 = live preview)"),
-    output: str = typer.Option("", help="Save last frame to this path instead of showing"),
+    output: str = typer.Option(
+        "", help="Save last frame to this path instead of showing"
+    ),
 ) -> None:
     """Open the camera and show a live preview or capture frames.
 
@@ -75,9 +77,57 @@ def stream(
         run_stream(cam, port=port)
 
 
+@app.command()
+def nearest(
+    output: str = typer.Option(
+        "stream", help="Output mode: stream | headless | display"
+    ),
+    regions: str = typer.Option(
+        "", help="Path to 3D-calibration JSON (default: bundled regions)"
+    ),
+    confidence: float = typer.Option(0.40, help="Min detection confidence"),
+    threshold: float = typer.Option(
+        2.0, help="Distance (m) below which a pair is flagged"
+    ),
+    port: int = typer.Option(8080, help="HTTP port for stream mode"),
+    rotate: int = typer.Option(0, help="Rotate output: 0, 90, 180 or 270 degrees"),
+    altitude: float = typer.Option(
+        0.0, help="Drone altitude (m); >0 derives distance from flight geometry"
+    ),
+    fov: float = typer.Option(
+        66.0, help="Lens horizontal field of view (deg), for altitude mode"
+    ),
+) -> None:
+    """Detect & track people and report the nearest neighbour distance.
+
+    Runs the NanoDet model on the IMX500 AI Camera (Pi only, via modlib).
+    Adapted from Sony's aitrios-rpi-sample-apps 'nearest-person' example.
+
+    - stream  : annotated MJPEG at http://<pi-ip>:<port>/ (best for the drone)
+    - headless: no image, logs nearest-pair distance per frame
+    - display : OpenCV window (needs a desktop session)
+
+    Distance calibration: a fixed-camera JSON (--regions) by default, or pass
+    --altitude (with --fov) to compute metres-per-pixel live from drone height.
+    """
+    from ai_drone.nearest_person import run_nearest_person
+
+    run_nearest_person(
+        regions_file=regions or None,
+        confidence=confidence,
+        output=output,
+        port=port,
+        distance_threshold=threshold,
+        rotate=rotate,
+        altitude=altitude,
+        fov=fov,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Camera loops
 # ---------------------------------------------------------------------------
+
 
 def _camera_loop_opencv(
     cam: object,
