@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import sys
+from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 import numpy as np
 
@@ -24,9 +25,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _PiCamera(Protocol):
+    """Subset of picamera2 used by this module."""
+
+    def create_still_configuration(self, *args: object, **kwargs: object) -> object: ...
+    def configure(self, config: object) -> None: ...
+    def start(self) -> None: ...
+    def capture_array(self, name: str) -> NDArray[np.uint8]: ...
+    def stop(self) -> None: ...
+    def close(self) -> None: ...
+
+
+class _OpenCVCamera(Protocol):
+    """Subset of cv2.VideoCapture used by this module."""
+
+    def isOpened(self) -> bool: ...
+    def release(self) -> None: ...
+    def read(self) -> tuple[bool, NDArray[np.uint8]]: ...
+
+
+_CameraHandle = _PiCamera | _OpenCVCamera | None
+
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------
+
 
 def is_raspberry_pi() -> bool:
     """Return *True* when running on a Raspberry Pi."""
@@ -44,6 +68,7 @@ _ON_PI = is_raspberry_pi()
 # Camera wrapper
 # ---------------------------------------------------------------------------
 
+
 class Camera:
     """Unified camera interface for Pi (picamera2) and laptop (OpenCV).
 
@@ -56,7 +81,7 @@ class Camera:
 
     def __init__(self) -> None:
         self._backend: str
-        self._cam: object
+        self._cam: _CameraHandle
 
         if _ON_PI:
             self._init_picamera2()
@@ -69,7 +94,7 @@ class Camera:
 
     def _init_picamera2(self) -> None:
         try:
-            from picamera2 import Picamera2  # type: ignore[import-untyped]
+            picamera2 = import_module("picamera2")
         except ImportError:
             logger.error(
                 "picamera2 not found.  Install it with:\n"
@@ -78,7 +103,8 @@ class Camera:
             )
             sys.exit(1)
 
-        cam = Picamera2()
+        picamera_cls = cast("type[_PiCamera]", getattr(picamera2, "Picamera2"))
+        cam = picamera_cls()
         # Use a small still config for low memory footprint on the Zero 2.
         config = cam.create_still_configuration(
             main={"size": (640, 480), "format": "RGB888"},
@@ -95,16 +121,13 @@ class Camera:
             import cv2  # type: ignore[import-untyped]
         except ImportError:
             logger.error(
-                "opencv-python not found.  Install it with:\n"
-                "  uv sync --group desktop"
+                "opencv-python not found.  Install it with:\n  uv sync --group desktop"
             )
             sys.exit(1)
 
-        cap = cv2.VideoCapture(0)
+        cap = cast("_OpenCVCamera", cv2.VideoCapture(0))
         if not cap.isOpened():
-            logger.warning(
-                "No webcam detected — using a synthetic test pattern."
-            )
+            logger.warning("No webcam detected — using a synthetic test pattern.")
             cap.release()
             self._cam = None
             self._backend = "synthetic"
@@ -123,21 +146,17 @@ class Camera:
     def capture(self) -> NDArray[np.uint8]:
         """Capture a single frame and return it as an HxWx3 BGR numpy array."""
         if self._backend == "picamera2":
-            from picamera2 import Picamera2  # type: ignore[import-untyped]
-
-            cam: Picamera2 = self._cam  # type: ignore[assignment]
+            cam = cast("_PiCamera", self._cam)
             # picamera2 returns RGB; convert to BGR for OpenCV compat.
             rgb = cam.capture_array("main")
             return rgb[:, :, ::-1].copy()
 
         if self._backend == "opencv":
-            import cv2  # type: ignore[import-untyped]
-
-            cap: cv2.VideoCapture = self._cam  # type: ignore[assignment]
+            cap = cast("_OpenCVCamera", self._cam)
             ret, frame = cap.read()
             if not ret:
                 raise RuntimeError("Failed to read frame from webcam.")
-            return frame  # type: ignore[return-value]
+            return frame
 
         # Synthetic fallback — purple/green gradient test pattern.
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -148,10 +167,12 @@ class Camera:
     def close(self) -> None:
         """Release camera resources."""
         if self._backend == "picamera2":
-            self._cam.stop()  # type: ignore[union-attr]
-            self._cam.close()  # type: ignore[union-attr]
+            cam = cast("_PiCamera", self._cam)
+            cam.stop()
+            cam.close()
         elif self._backend == "opencv":
-            self._cam.release()  # type: ignore[union-attr]
+            cap = cast("_OpenCVCamera", self._cam)
+            cap.release()
 
         logger.info("Camera closed  [backend=%s]", self._backend)
 
