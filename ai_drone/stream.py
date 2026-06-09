@@ -22,8 +22,13 @@ _frame_condition = threading.Condition(_frame_lock)
 _current_frame: bytes = b""
 
 
-def _update_frame(jpeg: bytes) -> None:
-    """Push a new JPEG frame to all connected clients."""
+def push_frame(jpeg: bytes) -> None:
+    """Push a new JPEG frame to all connected clients.
+
+    Public entry point used by any producer (the plain camera loop in
+    :func:`run_stream` or the nearest-person pipeline) to hand the latest
+    encoded frame to the MJPEG server.
+    """
     global _current_frame  # noqa: PLW0603
     with _frame_condition:
         _current_frame = jpeg
@@ -82,6 +87,21 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
         """Suppress default per-request logging — too noisy for video."""
 
 
+def start_server(host: str = "0.0.0.0", port: int = 8080) -> HTTPServer:
+    """Start the MJPEG HTTP server in a background thread and return it.
+
+    Producers then feed frames with :func:`push_frame`. Call
+    ``server.shutdown()`` then ``server.server_close()`` when done.
+    """
+    global _current_frame  # noqa: PLW0603
+    with _frame_condition:
+        _current_frame = b""  # drop any frame left over from a previous session
+    server = HTTPServer((host, port), _MJPEGHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    return server
+
+
 def run_stream(cam: Camera, host: str = "0.0.0.0", port: int = 8080) -> None:
     """Capture frames from *cam* and serve them as an MJPEG HTTP stream.
 
@@ -90,9 +110,7 @@ def run_stream(cam: Camera, host: str = "0.0.0.0", port: int = 8080) -> None:
     import cv2  # type: ignore[import-untyped]
     from rich import print as rprint
 
-    server = HTTPServer((host, port), _MJPEGHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
+    server = start_server(host, port)
 
     rprint(f"[bold green]Streaming on http://{host}:{port}/[/]")
     rprint("[dim]Open this URL in a browser on your laptop. Press Ctrl-C to stop.[/]")
@@ -101,8 +119,9 @@ def run_stream(cam: Camera, host: str = "0.0.0.0", port: int = 8080) -> None:
         while True:
             frame = cam.capture()
             _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            _update_frame(jpeg.tobytes())
+            push_frame(jpeg.tobytes())
     except KeyboardInterrupt:
         rprint("\n[yellow]Stream stopped.[/]")
     finally:
         server.shutdown()
+        server.server_close()

@@ -13,9 +13,7 @@ class TestIsRaspberryPi:
     def test_returns_false_on_laptop(self) -> None:
         assert is_raspberry_pi() is False
 
-    def test_returns_true_when_model_file_contains_pi(
-        self, tmp_path: object
-    ) -> None:
+    def test_returns_true_when_model_file_contains_pi(self, tmp_path: object) -> None:
         from pathlib import Path
 
         fake_model = Path(str(tmp_path)) / "model"
@@ -24,7 +22,9 @@ class TestIsRaspberryPi:
         with patch("ai_drone.camera.Path") as mock_path:
             mock_path.return_value = fake_model
             # Patch the exact call: Path("/proc/device-tree/model")
-            mock_path.side_effect = lambda p: fake_model if "model" in str(p) else Path(p)
+            mock_path.side_effect = lambda p: (
+                fake_model if "model" in str(p) else Path(p)
+            )
             # Simpler: directly test the logic
             assert "raspberry pi" in fake_model.read_text().lower()
 
