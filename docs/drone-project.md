@@ -209,5 +209,5 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 
 | Component | Status |
 |-----------|--------|
-| MicroAir MTF-01P (LiDAR / Optical Flow) | FC end soldered — sensor end open |
+| MicroAir MTF-01P (LiDAR / Optical Flow) | Connected on UART5; permanent mounting/power reliability still to verify |
 | Raspberry Pi Zero 2 WH | FC end soldered — RPi end open |
