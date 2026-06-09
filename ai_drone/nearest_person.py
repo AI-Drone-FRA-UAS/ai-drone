@@ -7,8 +7,7 @@ reference; this module reworks it to fit the AI-Drone project:
 
 * runs entirely through ``modlib`` (the model executes **on** the IMX500
   sensor, not on the Pi CPU);
-* offers three output modes so it is useful on a headless drone:
-    - ``display``  — OpenCV window (needs a desktop / X session);
+* offers two headless output modes for the drone:
     - ``stream``   — annotated MJPEG over HTTP, reusing :mod:`ai_drone.stream`;
     - ``headless`` — no image, just logs the nearest-neighbour distances.
 
@@ -28,10 +27,10 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-import numpy as np
+import numpy as np  # ty: ignore[unresolved-import] - Pi-only dependency
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
+    from numpy.typing import NDArray  # ty: ignore[unresolved-import]
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ def load_regions(regions_file: str | Path | None) -> tuple[list, list[float]]:
     Returns a tuple ``(areas, dpp)`` where ``areas`` is a list of
     ``modlib.apps.Area`` and ``dpp[i]`` is the metres-per-pixel for that area.
     """
-    from modlib.apps import Area  # lazy: Pi-only dependency
+    from modlib.apps import Area  # ty: ignore[unresolved-import] - Pi-only
 
     path = Path(regions_file) if regions_file else DEFAULT_REGIONS
     calibration = json.loads(path.read_text())
@@ -112,7 +111,7 @@ def _dpp_at(
     as "uncalibrated", not as zero distance. When regions overlap on a shared
     edge the last match wins, matching the Sony reference's loop.
     """
-    import cv2  # type: ignore[import-untyped]
+    import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
 
     norm = (point[0] / width, point[1] / height)
     found: float | None = None
@@ -138,7 +137,9 @@ def compute_pairings(
     example). Pairs whose endpoints fall outside every region are skipped rather
     than reported as a bogus 0 m.
     """
-    from modlib.apps.calculate import calculate_distance_matrix
+    from modlib.apps.calculate import (  # ty: ignore[unresolved-import]
+        calculate_distance_matrix,
+    )
 
     xc, yc = detections.center_points
     xc, yc = xc * width, yc * height
@@ -186,8 +187,8 @@ def _annotate(
     distance_threshold: float,
 ) -> NDArray[np.uint8]:
     """Draw boxes, distance labels and nearest-neighbour arrows on the frame."""
-    import cv2  # type: ignore[import-untyped]
-    from modlib.apps.annotate import Color
+    import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+    from modlib.apps.annotate import Color  # ty: ignore[unresolved-import]
 
     # One label per detection, aligned by index. People with no neighbour
     # (no pairing) just get a plain "Person" box.
@@ -223,12 +224,12 @@ def run_nearest_person(
         regions_file: Path to a 3D-calibration JSON (areas + dpp). Defaults to
             the bundled :data:`DEFAULT_REGIONS`. Ignored when ``altitude > 0``.
         confidence: Minimum detection confidence to keep.
-        output: ``"display"``, ``"stream"`` or ``"headless"``.
+        output: ``"stream"`` or ``"headless"``.
         port: HTTP port for ``stream`` mode.
         distance_threshold: Metres below which a pair is flagged (red arrow /
             logged as "close").
         rotate: Output rotation in degrees: 0, 90, 180 or 270. Cosmetic only
-            (applied to the displayed/streamed image, not to detection maths) —
+            (applied to the streamed image, not to detection maths) —
             use it when the camera is mounted rotated on the airframe.
         altitude: Drone height in metres. When > 0, distance is computed live
             from flight geometry (:func:`altitude_dpp`) instead of the static
@@ -239,22 +240,23 @@ def run_nearest_person(
     Raises:
         ValueError: for an unknown ``output`` mode or ``rotate`` angle.
     """
-    import cv2  # type: ignore[import-untyped]
-    from rich import print as rprint
+    import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+    from rich import print as rprint  # ty: ignore[unresolved-import]
 
-    from modlib.apps import Annotator, ColorPalette
-    from modlib.apps.tracker.byte_tracker import BYTETracker
-    from modlib.devices import AiCamera
-    from modlib.models.zoo import NanoDetPlus416x416
+    from modlib.apps import Annotator, ColorPalette  # ty: ignore[unresolved-import]
+    from modlib.apps.tracker.byte_tracker import (  # ty: ignore[unresolved-import]
+        BYTETracker,
+    )
+    from modlib.devices import AiCamera  # ty: ignore[unresolved-import]
+    from modlib.models.zoo import (  # ty: ignore[unresolved-import]
+        NanoDetPlus416x416,
+    )
 
     from ai_drone.stream import push_frame, start_server
 
-    # Validate inputs up front so a typo fails fast instead of, e.g., silently
-    # falling through to display mode and crashing on a headless drone.
-    if output not in ("stream", "headless", "display"):
-        raise ValueError(
-            f"output must be one of: stream, headless, display (got {output!r})"
-        )
+    # Validate inputs before model deployment so command typos fail quickly.
+    if output not in ("stream", "headless"):
+        raise ValueError(f"output must be stream or headless (got {output!r})")
 
     # Map rotation degrees → cv2 code (None = no rotation).
     rot_map = {
@@ -301,10 +303,6 @@ def run_nearest_person(
         rprint("[dim]Open this URL in a browser. Press Ctrl-C to stop.[/]")
     elif output == "headless":
         rprint("[bold cyan]Nearest-person running headless. Press Ctrl-C to stop.[/]")
-    else:
-        rprint(
-            "[bold cyan]Nearest-person display mode. Close the window or Ctrl-C to stop.[/]"
-        )
 
     try:
         with device as stream:
@@ -347,7 +345,7 @@ def run_nearest_person(
                 if output == "stream":
                     # AiCamera/NanoDet frames are already BGR (what imencode
                     # expects); only convert genuine RGB sources to avoid an
-                    # R/B swap. Mirrors modlib's own Frame.display() guard.
+                    # R/B swap. Mirrors modlib's own frame conversion.
                     img = frame.image
                     if frame.color_format == "RGB":
                         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
@@ -355,8 +353,6 @@ def run_nearest_person(
                         img = cv2.rotate(img, rot_code)
                     _, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     push_frame(jpeg.tobytes())
-                else:
-                    frame.display(rotate=rot_code)
     except KeyboardInterrupt:
         rprint("\n[yellow]Nearest-person stopped.[/]")
     finally:

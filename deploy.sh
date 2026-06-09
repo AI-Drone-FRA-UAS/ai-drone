@@ -2,13 +2,11 @@
 # deploy.sh — Sync the project to the Raspberry Pi and optionally run it.
 #
 # Usage:
-#   ./deploy.sh            # sync + install deps on the Pi
-#   ./deploy.sh --snap     # sync + take one photo + copy it to laptop
-#   ./deploy.sh --stream   # sync + start live video stream (open in browser)
-#   ./deploy.sh --nearest  # sync + start nearest-person detector stream
-#                          #   (extra args are forwarded, e.g. --nearest --altitude 5)
-#   ./deploy.sh --run      # sync + run camera capture test
-#   ./deploy.sh --ssh      # sync + open an interactive shell
+#   ./deploy.sh            # sync + install dependencies on the Pi
+#   ./deploy.sh --picam    # start the IMX500 AI stream on the Pi
+#                          #   (extra args are forwarded)
+#   ./deploy.sh --lidar    # sample MTF-01P data through the Pi's FC serial link
+#   ./deploy.sh --ssh      # sync + open an interactive shell on the Pi
 #
 # Environment variables (all optional):
 #   PI_PROFILE — Pi target profile   (default: zero2; use pi4 for seb-is-pm2)
@@ -20,7 +18,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/pi-targets.sh"
 
 PI_USER="${PI_USER:-$DEFAULT_PI_USERNAME}"
-PI_HOST="${PI_HOST:-$PI_USER@$DEFAULT_PI_USB_IP}"
+
+if [[ -z "${PI_HOST:-}" ]]; then
+  if ping -c 1 -W 1 "$DEFAULT_PI_USB_IP" >/dev/null 2>&1; then
+    PI_HOST="$PI_USER@$DEFAULT_PI_USB_IP"
+  elif ping -c 1 -W 1 "$DEFAULT_PI_HOSTNAME" >/dev/null 2>&1; then
+    PI_HOST="$PI_USER@$DEFAULT_PI_HOSTNAME"
+  else
+    PI_HOST="$PI_USER@$DEFAULT_PI_USB_IP"
+  fi
+fi
+
 # Derive PI_USER from the (possibly overridden) PI_HOST before using it for
 # PI_DIR, so a custom PI_HOST username and the remote home directory agree.
 PI_USER="${PI_HOST%%@*}"
@@ -34,7 +42,6 @@ DEFAULT_SSH_CONFIG="${HOME:-}/.ssh/config"
 [[ -f "$DEFAULT_SSH_CONFIG" ]] || DEFAULT_SSH_CONFIG=/dev/null
 SSH_CONFIG="${SSH_CONFIG:-$DEFAULT_SSH_CONFIG}"
 SSH_CMD=(ssh -F "$SSH_CONFIG")
-SCP_CMD=(scp -F "$SSH_CONFIG")
 RSYNC_SSH="ssh -F ${SSH_CONFIG}"
 
 # ── 1. Sync ────────────────────────────────────────────────────────────────
@@ -45,6 +52,7 @@ rsync -az --delete \
   --exclude .venv \
   --exclude .ruff_cache \
   --exclude .pytest_cache \
+  --exclude artifacts \
   --exclude __pycache__ \
   --exclude aitrios-rpi-sample-apps \
   --exclude Drone-Handbook.pdf \
@@ -61,41 +69,34 @@ echo "  ✓ deps installed"
 
 # ── 3. Optional: run or shell ─────────────────────────────────────────────
 case "${1:-}" in
-  --snap)
-    echo "▸ Taking one photo on the Pi …"
-    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python main.py camera --frames 1 --output /tmp/ai_drone_capture.jpg"
-    echo "▸ Copying photo to laptop …"
-    "${SCP_CMD[@]}" "${PI_HOST}:/tmp/ai_drone_capture.jpg" ./capture.jpg
-    echo "  ✓ Saved to ./capture.jpg"
-    ;;
-  --stream)
-    echo "▸ Starting live video stream on the Pi …"
+  --picam)
+    EXTRA=""
+    if (( $# > 1 )); then
+      printf -v EXTRA " %q" "${@:2}"
+    fi
+    echo "▸ Starting the IMX500 AI stream on the Pi …"
     echo "  Open http://${PI_IP}:8080/ in your browser."
     echo "  Press Ctrl-C to stop."
-    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python main.py stream"
+    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python test_picam.py${EXTRA}"
     ;;
-  --nearest)
-    # Forward any extra args (e.g. --altitude 5 --fov 66 --rotate 180) to the CLI.
-    EXTRA="${*:2}"
-    echo "▸ Starting nearest-person detector stream on the Pi …"
-    echo "  Open http://${PI_IP}:8080/ in your browser."
-    echo "  Press Ctrl-C to stop."
-    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python main.py nearest --output stream ${EXTRA}"
-    ;;
-  --run)
-    echo "▸ Running camera test on the Pi …"
-    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python main.py camera"
+  --lidar)
+    EXTRA=""
+    if (( $# > 1 )); then
+      printf -v EXTRA " %q" "${@:2}"
+    fi
+    echo "▸ Sampling the MTF-01P through the Pi's flight-controller link …"
+    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python test_lidar.py --device /dev/serial0${EXTRA}"
     ;;
   --ssh)
     echo "▸ Opening shell on the Pi …"
     exec "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && exec \$SHELL --login"
     ;;
   "")
-    echo "Done. Use --snap, --stream, --nearest, --run, or --ssh."
+    echo "Done. Use --picam, --lidar, or --ssh."
     ;;
   *)
     echo "Unknown flag: $1" >&2
-    echo "Usage: $0 [--snap|--stream|--nearest|--run|--ssh]" >&2
+    echo "Usage: $0 [--picam|--lidar|--ssh] [command options]" >&2
     exit 1
     ;;
 esac

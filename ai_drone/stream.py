@@ -1,18 +1,10 @@
-"""Lightweight MJPEG HTTP streaming server.
-
-Runs on the Pi, serves camera frames as a multipart JPEG stream.
-Open http://<pi-ip>:8080 in any browser on the laptop to view.
-"""
+"""Lightweight MJPEG server for the Pi's annotated AI-camera frames."""
 
 from __future__ import annotations
 
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ai_drone.camera import Camera
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +17,8 @@ _current_frame: bytes = b""
 def push_frame(jpeg: bytes) -> None:
     """Push a new JPEG frame to all connected clients.
 
-    Public entry point used by any producer (the plain camera loop in
-    :func:`run_stream` or the nearest-person pipeline) to hand the latest
-    encoded frame to the MJPEG server.
+    The nearest-person pipeline uses this to hand the latest encoded frame to
+    the MJPEG server.
     """
     global _current_frame  # noqa: PLW0603
     with _frame_condition:
@@ -100,28 +91,3 @@ def start_server(host: str = "0.0.0.0", port: int = 8080) -> HTTPServer:
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     return server
-
-
-def run_stream(cam: Camera, host: str = "0.0.0.0", port: int = 8080) -> None:
-    """Capture frames from *cam* and serve them as an MJPEG HTTP stream.
-
-    Blocks until interrupted (Ctrl-C).
-    """
-    import cv2  # type: ignore[import-untyped]
-    from rich import print as rprint
-
-    server = start_server(host, port)
-
-    rprint(f"[bold green]Streaming on http://{host}:{port}/[/]")
-    rprint("[dim]Open this URL in a browser on your laptop. Press Ctrl-C to stop.[/]")
-
-    try:
-        while True:
-            frame = cam.capture()
-            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            push_frame(jpeg.tobytes())
-    except KeyboardInterrupt:
-        rprint("\n[yellow]Stream stopped.[/]")
-    finally:
-        server.shutdown()
-        server.server_close()
