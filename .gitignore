@@ -30,5 +30,7 @@ raspios-lite/
 *.qcow2
 *.raw
 
+aitrios-rpi-sample-apps/
+
 # Large handbook PDF
 Drone-Handbook.pdf
