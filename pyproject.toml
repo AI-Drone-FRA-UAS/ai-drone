@@ -5,9 +5,23 @@ description = "Raspberry Pi AI camera and ArduPilot sensor tools for the drone"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "future>=1.0.0",
+    "mavproxy>=1.8.74",
+    "pillow>=12.2.0",
     "pymavlink>=2.4.49",
     "pyserial>=3.5",
 ]
+
+[project.scripts]
+drone-console = "ai_drone.console:main"
+drone-health = "ai_drone.health:main"
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
 
 [dependency-groups]
 raspi = [

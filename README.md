@@ -1,16 +1,60 @@
 # AI Drone Professor Baun
 
-# install dependencies:
+# Install dependencies
+
 ```bash
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install all desktop dependencies
-uv sync --group desktop --group dev
+# Install the project runtime
+uv sync
+
+# Optional development tools
+uv sync --group dev
 
 # Smoke test
-uv run python main.py status
+uv run python -c "from pymavlink import mavutil; print('pymavlink ready')"
 ```
+
+## Connect the flight controller from a developer machine
+
+The project includes MAVProxy plus the compatibility packages required by its
+default console modules. With the flight controller connected over USB:
+
+```bash
+uv run drone-console
+```
+
+`drone-console` prefers the stable ArduPilot `/dev/serial/by-id/...` path,
+falls back to `/dev/ttyACM*`, and uses 115200 baud. To override those defaults:
+
+```bash
+uv run drone-console --device /dev/ttyACM0 --baud 115200
+```
+
+Check both working MAVLink paths from the developer machine:
+
+```bash
+uv run drone-health
+```
+
+This checks:
+
+1. developer machine -> flight controller over USB; and
+2. `seb@seb-is-pm` -> `/dev/serial0` -> flight controller over UART4.
+
+Both checks require a heartbeat and a read-only `SYSID_THISMAV` response. Enter
+the Pi SSH password when prompted. To check only one path:
+
+```bash
+uv run drone-health --usb-only
+uv run drone-health --pi-only
+```
+
+For the complete physical connection sequence, safety constraints, stable
+device path, MAVProxy commands, shutdown procedure, and troubleshooting, see
+[Developer Machine Drone Connection](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md).
+
 ## Quick Start — Raspberry Pi
 
 **Prerequisites on the Pi** (already done):
@@ -81,16 +125,15 @@ enabled so it can use apt-installed `picamera2`/libcamera, then installs the
 
 ## Pi lidar link
 
-After the Pi-to-flight-controller UART cable is connected and `/dev/serial0`
-provides MAVLink, the same test can run on the drone:
+The Pi-to-flight-controller UART4 cable is connected and `/dev/serial0`
+provides MAVLink. The same sensor test can run on the drone:
 
 ```bash
 ./deploy.sh --lidar
 ```
 
-The current project hardware notes still list the Pi end of that cable as
-pending, so USB from the laptop to the flight controller is the working lidar
-test path today.
+The UART wiring is Pi TXD (pin 8) to FC R4, Pi RXD (pin 10) to FC T4, and
+Pi GND (pin 6) to FC GND.
 
 ## Development checks
 

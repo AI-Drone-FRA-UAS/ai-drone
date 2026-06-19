@@ -12,6 +12,11 @@ __pycache__/
 .ruff_cache/
 artifacts/
 
+# MAVProxy local telemetry and parameter cache
+mav.tlog
+mav.tlog.raw
+mav.parm
+
 # IDE
 .vscode/
 .idea/
