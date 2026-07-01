@@ -3,8 +3,9 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from ai_drone import deploy, pi_usb_ssh
+from ai_drone import connect, deploy, pi_usb_ssh, pi_wifi
 from ai_drone.pi_targets import (
+    DEFAULT_PI_AP_SSID,
     DEFAULT_PI_HOSTNAME,
     DEFAULT_PI_USB_IP,
     ping_command,
@@ -282,15 +283,123 @@ def test_usb_dry_run_uses_windows_commands(monkeypatch, capsys) -> None:
     assert "ssh -t seb@192.168.7.2" in output
 
 
-def test_drone_connect_entrypoint_is_primary_alias() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+def test_connect_entrypoints_replace_drone_connect() -> None:
+    scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
-    assert pyproject["project"]["scripts"]["drone-connect"] == (
-        "ai_drone.pi_usb_ssh:main"
+    assert scripts["autoconnect"] == "ai_drone.connect:auto_main"
+    assert scripts["manuconnect"] == "ai_drone.connect:manual_main"
+    assert "drone-connect" not in scripts
+    assert "drone-pi-usb-ssh" not in scripts
+
+
+def test_wifi_join_command_per_platform() -> None:
+    assert pi_wifi.join_command("AI-Drone-Zero", "Linux") == [
+        "nmcli",
+        "con",
+        "up",
+        "AI-Drone-Zero",
+    ]
+    assert pi_wifi.join_command("AI-Drone-Zero", "Darwin", "en0") == [
+        "networksetup",
+        "-setairportnetwork",
+        "en0",
+        "AI-Drone-Zero",
+    ]
+    assert pi_wifi.join_command("AI-Drone-Zero", "Windows") == [
+        "netsh",
+        "wlan",
+        "connect",
+        "name=AI-Drone-Zero",
+        "ssid=AI-Drone-Zero",
+    ]
+
+
+def test_wifi_scan_detects_ssid_per_platform() -> None:
+    linux_scan = "Espresso Macchiato\nAI-Drone-Zero\nXyz\n"
+    assert pi_wifi.ssid_in_scan_output("AI-Drone-Zero", linux_scan, "Linux")
+    assert not pi_wifi.ssid_in_scan_output("Nope", linux_scan, "Linux")
+
+    windows_scan = "SSID 1 : Xyz\nSSID 2 : AI-Drone-Zero\n"
+    assert pi_wifi.ssid_in_scan_output("AI-Drone-Zero", windows_scan, "Windows")
+    assert not pi_wifi.ssid_in_scan_output("Nope", windows_scan, "Windows")
+
+
+def test_auto_dry_run_lists_transports_in_priority_order(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+
+    result = connect.run_auto(["--dry-run"], environ={"TIMEOUT_SECONDS": "1"})
+
+    output = capsys.readouterr().out
+    assert result == 0
+    tailscale_at = output.index("1. Tailscale")
+    wifi_at = output.index("2. Pi Wi-Fi AP")
+    usb_at = output.index("3. USB cable")
+    assert tailscale_at < wifi_at < usb_at
+    assert "ssh -t seb@seb-is-pm" in output
+    assert f"nmcli con up {DEFAULT_PI_AP_SSID}" in output
+
+
+def test_auto_connects_over_tailscale_first(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return _Completed(0)
+
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(connect.subprocess, "run", fake_run)
+
+    result = connect.run_auto([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert ["ssh", "-t", "seb@seb-is-pm"] in calls
+    # Tailscale won, so no Wi-Fi join and no USB configuration happened.
+    assert not any(cmd[:1] == ["nmcli"] for cmd in calls)
+    assert not any(cmd[:2] == ["sudo", "ip"] for cmd in calls)
+
+
+def test_auto_falls_through_to_usb_when_others_fail(monkeypatch) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    # Tailscale probe fails; AP is not broadcasting.
+    monkeypatch.setattr(
+        connect.subprocess, "run", lambda command, **kwargs: _Completed(1)
     )
-    assert pyproject["project"]["scripts"]["drone-pi-usb-ssh"] == (
-        "ai_drone.pi_usb_ssh:main"
+    monkeypatch.setattr(connect.pi_wifi, "ap_available", lambda ssid, system: False)
+
+    usb_calls: list[object] = []
+
+    def fake_usb(*, environ=None, dry_run=False):
+        usb_calls.append(environ)
+        return True
+
+    monkeypatch.setattr(connect, "connect_usb", fake_usb)
+
+    result = connect.run_auto([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert usb_calls  # USB was reached as the last resort
+
+
+def test_manual_choice_dispatches_wifi(monkeypatch) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        connect,
+        "connect_wifi_ap",
+        lambda target, system, *, dry_run: dispatched.append("wifi") or True,
     )
+    monkeypatch.setattr(
+        connect,
+        "connect_tailscale",
+        lambda ssh_target, *, dry_run: dispatched.append("tailscale") or True,
+    )
+
+    result = connect.run_manual([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert dispatched == ["wifi"]
 
 
 class _Completed:

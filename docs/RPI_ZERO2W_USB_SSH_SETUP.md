@@ -71,7 +71,9 @@ Now remove the storage from the PC.
 
 ```bash
 cd /home/abaris/ai-drone
-uv run drone-connect
+uv run autoconnect          # tries Tailscale, then AI-Drone-Zero, then USB
+# or, to go straight to the cable:
+uv run manuconnect          # then choose 3) USB cable
 ```
 
 When SSH asks for a password, enter the Pi password you chose during flashing.
@@ -125,20 +127,20 @@ adapter, configure it, and open SSH from native Windows. Run PowerShell or
 Windows Terminal as Administrator so the adapter IP can be changed:
 
 ```powershell
-uv run drone-connect
+uv run autoconnect
 ```
 
-`drone-connect` first tries normal SSH over Wi-Fi, the Pi hotspot
-(`192.168.4.1`), and the Pi hostname before it configures USB. Use
-`uv run drone-connect --network-only` when the Pi is already on Wi-Fi or you are
-connected to its hotspot and you do not want USB configuration.
+`autoconnect` first tries Tailscale (`seb@seb-is-pm`), then the Pi's own AP
+`AI-Drone-Zero` (`192.168.4.1`), and finally configures USB. To skip straight to
+the cable, use `uv run manuconnect` and choose `3) USB cable`.
 
-Use `uv run drone-connect --dry-run` to preview the direct SSH targets and, if
-needed, the PowerShell and `netsh` USB commands before changing adapter
-settings. If USB auto-detection fails, pass the adapter name explicitly:
+Use `uv run autoconnect --dry-run` to preview every transport's commands,
+including the PowerShell and `netsh` USB commands, before changing adapter
+settings. If USB auto-detection fails, name the adapter with the `USB_IFACE`
+environment variable:
 
 ```powershell
-uv run drone-connect --usb-iface "Ethernet 4"
+$env:USB_IFACE = "Ethernet 4"; uv run manuconnect   # then choose 3
 ```
 
 If the USB network adapter does not appear, install/select the Microsoft `USB RNDIS Adapter` or `Remote NDIS Compatible Device` driver in Device Manager.
@@ -169,7 +171,7 @@ ssh seb@192.168.7.2
 Or use the repo helper:
 
 ```bash
-uv run drone-connect
+uv run autoconnect
 ```
 
 ## Notes
@@ -185,4 +187,4 @@ ssh-keygen -R 192.168.7.2
 ```
 
 The legacy `./connect-pi-usb-ssh.sh` script remains as a compatibility wrapper
-around `uv run drone-connect`.
+around `uv run autoconnect`.

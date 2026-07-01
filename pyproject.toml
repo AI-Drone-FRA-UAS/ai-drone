@@ -13,11 +13,11 @@ dependencies = [
 ]
 
 [project.scripts]
-drone-connect = "ai_drone.pi_usb_ssh:main"
+autoconnect = "ai_drone.connect:auto_main"
 drone-console = "ai_drone.console:main"
 drone-deploy = "ai_drone.deploy:main"
 drone-health = "ai_drone.health:main"
-drone-pi-usb-ssh = "ai_drone.pi_usb_ssh:main"
+manuconnect = "ai_drone.connect:manual_main"
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]

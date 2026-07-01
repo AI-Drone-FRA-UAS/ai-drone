@@ -154,29 +154,37 @@ Fresh checkout flow:
 ```bash
 git clone git@github.com:AI-Drone-FRA-UAS/ai-drone.git
 cd ai-drone
-uv run drone-connect
+uv run autoconnect
 ```
 
-`drone-connect` first tries normal SSH targets for Wi-Fi or the Pi hotspot:
-`seb-is-pm.local`, `seb-is-pm`, `192.168.4.1`, and `192.168.7.2`.
-If none respond, it falls back to the USB/RNDIS cable path, configures the
-laptop-side `192.168.7.1/24` address, waits for the Pi at `192.168.7.2`, and
-opens SSH. On Windows, run the terminal as Administrator for USB fallback
+There are two connect commands, both trying the same three transports in the
+same priority order:
+
+1. **Tailscale** — `ssh seb@seb-is-pm`. The normal case: the Pi prefers a known
+   Wi-Fi, so it has internet and is on the tailnet.
+2. **The Pi's own Wi-Fi AP** `AI-Drone-Zero` (`192.168.4.1`). The Pi self-hosts
+   this only when it can't reach a known network.
+3. **USB cable** — the RNDIS gadget path (laptop side `192.168.7.1/24`, Pi at
+   `192.168.7.2`). Always-there last resort.
+
+```bash
+uv run autoconnect     # try 1 -> 2 -> 3, stop at the first that connects
+uv run manuconnect     # pick 1, 2, or 3 from a menu
+```
+
+`autoconnect --dry-run` prints the commands each transport would run without
+connecting. On Windows, run the terminal as Administrator for the USB path
 because changing the adapter IP requires elevation.
 
-To try only Wi-Fi/hotspot/network SSH and never configure USB:
+Joining `AI-Drone-Zero` uses a **pre-saved** OS Wi-Fi profile (the script never
+handles the password). Save it once, e.g. on Linux:
 
 ```bash
-uv run drone-connect --network-only
+nmcli dev wifi connect AI-Drone-Zero password <PSK>
 ```
 
-If adapter auto-detection fails, pass the interface explicitly:
-
-```bash
-uv run drone-connect --usb-iface "Ethernet 4"
-```
-
-The legacy `./connect-pi-usb-ssh.sh` wrapper remains for compatibility.
+The legacy `./connect-pi-usb-ssh.sh` wrapper still works and now calls
+`autoconnect`.
 
 `drone-deploy` uses `rsync` on Unix when available and otherwise streams a tar
 archive over SSH, so native Windows does not need a local `rsync` install.

@@ -16,6 +16,7 @@ DEFAULT_PI_USB_IP = "192.168.7.2"
 DEFAULT_PI_HOTSPOT_IP = "192.168.4.1"
 DEFAULT_HOST_USB_IP = "192.168.7.1"
 DEFAULT_PI_USB_PORT_HINT = "Pi Zero 2 WH micro-USB port labeled USB, not PWR IN"
+DEFAULT_PI_AP_SSID = "AI-Drone-Zero"
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,12 @@ class DeployTarget:
 
 @dataclass(frozen=True)
 class UsbTarget:
-    """Resolved USB gadget network settings."""
+    """Resolved USB gadget network settings.
+
+    Also carries the Tailscale hostname (``pi_hostname``) and the Pi's own
+    Wi-Fi AP details (``ap_ssid`` / ``ap_ip``) so the ``autoconnect`` /
+    ``manuconnect`` orchestrator can resolve every transport from one place.
+    """
 
     pi_ip: str
     host_ip: str
@@ -40,6 +46,8 @@ class UsbTarget:
     port_hint: str
     usb_iface: str | None
     timeout_seconds: int
+    ap_ssid: str
+    ap_ip: str
 
 
 def _env(environ: Mapping[str, str] | None) -> Mapping[str, str]:
@@ -132,4 +140,6 @@ def resolve_usb_target(environ: Mapping[str, str] | None = None) -> UsbTarget:
         port_hint=values.get("PI_USB_PORT_HINT", DEFAULT_PI_USB_PORT_HINT),
         usb_iface=values.get("USB_IFACE") or None,
         timeout_seconds=timeout,
+        ap_ssid=values.get("PI_AP_SSID", DEFAULT_PI_AP_SSID),
+        ap_ip=values.get("PI_AP_IP", DEFAULT_PI_HOTSPOT_IP),
     )
