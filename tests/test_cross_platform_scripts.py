@@ -208,6 +208,57 @@ def test_usb_windows_config_commands() -> None:
     ]
 
 
+def test_network_ssh_targets_try_hostname_hotspot_and_usb_ip() -> None:
+    assert pi_usb_ssh.network_ssh_targets(
+        "seb",
+        "seb-is-pm",
+        "192.168.7.2",
+        ["seb@custom.local"],
+    ) == [
+        "seb@custom.local",
+        "seb@seb-is-pm.local",
+        "seb@seb-is-pm",
+        "seb@192.168.4.1",
+        "seb@192.168.7.2",
+    ]
+
+
+def test_network_only_dry_run_prints_plain_ssh_targets(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
+
+    result = pi_usb_ssh.run(
+        ["--network-only", "--dry-run", "--ssh-target", "seb@drone.local"],
+        environ={"TIMEOUT_SECONDS": "1"},
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Would try existing Wi-Fi/hotspot/network SSH targets first" in output
+    assert "ssh -t seb@drone.local" in output
+    assert "Configuring laptop side" not in output
+
+
+def test_network_only_uses_reachable_target(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:1] == ["ping"] and command[-1] == "192.168.4.1":
+            return _Completed(0)
+        if command[:1] == ["ping"]:
+            return _Completed(1)
+        return _Completed(0)
+
+    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(pi_usb_ssh.subprocess, "run", fake_run)
+
+    result = pi_usb_ssh.run(["--network-only"], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert ["ssh", "-t", "seb@192.168.4.1"] in calls
+    assert not any(command[:2] == ["sudo", "ip"] for command in calls)
+
+
 def test_windows_find_script_prefers_active_usb_adapter() -> None:
     script = pi_usb_ssh.windows_find_script()
 
@@ -240,3 +291,9 @@ def test_drone_connect_entrypoint_is_primary_alias() -> None:
     assert pyproject["project"]["scripts"]["drone-pi-usb-ssh"] == (
         "ai_drone.pi_usb_ssh:main"
     )
+
+
+class _Completed:
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        self.stdout = ""

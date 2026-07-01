@@ -10,14 +10,22 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from ai_drone.pi_targets import UsbTarget, ping_command, resolve_usb_target
+from ai_drone.pi_targets import (
+    DEFAULT_PI_HOTSPOT_IP,
+    UsbTarget,
+    ping_command,
+    resolve_usb_target,
+)
 
 MTU = "1412"
 
 
 def _parser(target: UsbTarget) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Bring up the Pi USB Ethernet link and SSH into the Pi."
+        description=(
+            "SSH into the Pi over Wi-Fi/hotspot when reachable, otherwise bring "
+            "up the USB Ethernet link."
+        )
     )
     parser.add_argument("--pi-ip", default=target.pi_ip)
     parser.add_argument("--host-ip", default=target.host_ip)
@@ -25,6 +33,21 @@ def _parser(target: UsbTarget) -> argparse.ArgumentParser:
     parser.add_argument("--pi-hostname", default=target.pi_hostname)
     parser.add_argument("--usb-iface", default=target.usb_iface)
     parser.add_argument("--timeout", type=int, default=target.timeout_seconds)
+    parser.add_argument(
+        "--ssh-target",
+        action="append",
+        help="explicit SSH target to try before auto-detected targets; can repeat",
+    )
+    parser.add_argument(
+        "--network-only",
+        action="store_true",
+        help="only try existing Wi-Fi/hotspot/network SSH targets",
+    )
+    parser.add_argument(
+        "--usb-only",
+        action="store_true",
+        help="skip Wi-Fi/hotspot checks and configure the USB link immediately",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -237,6 +260,35 @@ def ssh_command(pi_user: str, pi_ip: str) -> list[str]:
     return ["ssh", "-t", f"{pi_user}@{pi_ip}", remote]
 
 
+def plain_ssh_command(target: str) -> list[str]:
+    return ["ssh", "-t", target]
+
+
+def _host_from_ssh_target(target: str) -> str:
+    return target.rsplit("@", 1)[-1]
+
+
+def network_ssh_targets(
+    pi_user: str,
+    pi_hostname: str,
+    pi_usb_ip: str,
+    explicit_targets: Sequence[str] | None = None,
+) -> list[str]:
+    candidates = [
+        *(explicit_targets or ()),
+        f"{pi_user}@{pi_hostname}.local",
+        f"{pi_user}@{pi_hostname}",
+        f"{pi_user}@{DEFAULT_PI_HOTSPOT_IP}",
+        f"{pi_user}@{pi_usb_ip}",
+    ]
+
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
 def _print_command(command: Sequence[str]) -> None:
     print(f"  {shlex.join(command)}", flush=True)
 
@@ -292,6 +344,64 @@ def wait_for_ping(
     return False
 
 
+def _host_responds(host: str, system: str) -> bool:
+    completed = subprocess.run(
+        ping_command(host, system),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def find_reachable_network_target(
+    targets: Sequence[str],
+    system: str,
+    *,
+    timeout_seconds: int = 0,
+) -> str | None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        for target in targets:
+            if _host_responds(_host_from_ssh_target(target), system):
+                return target
+        if timeout_seconds <= 0 or time.monotonic() >= deadline:
+            return None
+        time.sleep(2)
+
+
+def print_network_targets(targets: Sequence[str], system: str) -> None:
+    print("Would try existing Wi-Fi/hotspot/network SSH targets first:", flush=True)
+    for target in targets:
+        _print_command(ping_command(_host_from_ssh_target(target), system))
+        _print_command(plain_ssh_command(target))
+
+
+def try_network_ssh(
+    targets: Sequence[str],
+    system: str,
+    *,
+    timeout_seconds: int = 0,
+    dry_run: bool,
+) -> bool:
+    if dry_run:
+        print_network_targets(targets, system)
+        return False
+
+    print("Checking existing Wi-Fi/hotspot/network SSH targets...", flush=True)
+    target = find_reachable_network_target(
+        targets,
+        system,
+        timeout_seconds=timeout_seconds,
+    )
+    if target is None:
+        return False
+
+    print(f"Pi is reachable at {_host_from_ssh_target(target)}.", flush=True)
+    _run(plain_ssh_command(target), dry_run=False)
+    return True
+
+
 def run(
     arguments: Sequence[str] | None = None,
     *,
@@ -302,8 +412,39 @@ def run(
     args = parser.parse_args(arguments)
     if args.timeout <= 0:
         parser.error("--timeout must be greater than zero")
+    if args.network_only and args.usb_only:
+        parser.error("--network-only and --usb-only cannot be used together")
 
     system = platform.system()
+    targets = network_ssh_targets(
+        args.pi_user,
+        args.pi_hostname,
+        args.pi_ip,
+        args.ssh_target,
+    )
+
+    if not args.usb_only:
+        connected = try_network_ssh(
+            targets,
+            system,
+            timeout_seconds=args.timeout if args.network_only else 0,
+            dry_run=args.dry_run,
+        )
+        if connected:
+            return 0
+        if args.network_only:
+            if args.dry_run:
+                return 0
+            print("No existing Wi-Fi/hotspot/network SSH target responded.", flush=True)
+            return 1
+        if not args.dry_run:
+            print(
+                "No existing network target responded; falling back to USB.", flush=True
+            )
+
+    if args.dry_run:
+        print("If none of those respond, would configure USB Ethernet:", flush=True)
+
     print("Waiting for Pi USB Ethernet interface...", flush=True)
     print(f"Target: {args.pi_hostname}", flush=True)
     print(

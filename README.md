@@ -147,7 +147,7 @@ uv run --group dev ty check .
 uv run --group dev pytest
 ```
 
-## Connect to the Pi over USB
+## Connect to the Pi
 
 Fresh checkout flow:
 
@@ -157,10 +157,18 @@ cd ai-drone
 uv run drone-connect
 ```
 
-`drone-connect` auto-detects the Pi USB/RNDIS Ethernet adapter on Linux, macOS,
-and native Windows, configures the laptop-side `192.168.7.1/24` address, waits
-for the Pi at `192.168.7.2`, and opens SSH.
-On Windows, run the terminal as Administrator so the adapter IP can be changed.
+`drone-connect` first tries normal SSH targets for Wi-Fi or the Pi hotspot:
+`seb-is-pm.local`, `seb-is-pm`, `192.168.4.1`, and `192.168.7.2`.
+If none respond, it falls back to the USB/RNDIS cable path, configures the
+laptop-side `192.168.7.1/24` address, waits for the Pi at `192.168.7.2`, and
+opens SSH. On Windows, run the terminal as Administrator for USB fallback
+because changing the adapter IP requires elevation.
+
+To try only Wi-Fi/hotspot/network SSH and never configure USB:
+
+```bash
+uv run drone-connect --network-only
+```
 
 If adapter auto-detection fails, pass the interface explicitly:
 

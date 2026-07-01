@@ -128,9 +128,14 @@ Windows Terminal as Administrator so the adapter IP can be changed:
 uv run drone-connect
 ```
 
-Use `uv run drone-connect --dry-run` to preview the PowerShell and `netsh`
-commands before changing adapter settings. If auto-detection fails, pass the
-adapter name explicitly:
+`drone-connect` first tries normal SSH over Wi-Fi, the Pi hotspot
+(`192.168.4.1`), and the Pi hostname before it configures USB. Use
+`uv run drone-connect --network-only` when the Pi is already on Wi-Fi or you are
+connected to its hotspot and you do not want USB configuration.
+
+Use `uv run drone-connect --dry-run` to preview the direct SSH targets and, if
+needed, the PowerShell and `netsh` USB commands before changing adapter
+settings. If USB auto-detection fails, pass the adapter name explicitly:
 
 ```powershell
 uv run drone-connect --usb-iface "Ethernet 4"

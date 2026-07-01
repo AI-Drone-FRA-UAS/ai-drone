@@ -13,6 +13,7 @@ from pathlib import Path
 DEFAULT_PI_HOSTNAME = "seb-is-pm"
 DEFAULT_PI_USERNAME = "seb"
 DEFAULT_PI_USB_IP = "192.168.7.2"
+DEFAULT_PI_HOTSPOT_IP = "192.168.4.1"
 DEFAULT_HOST_USB_IP = "192.168.7.1"
 DEFAULT_PI_USB_PORT_HINT = "Pi Zero 2 WH micro-USB port labeled USB, not PWR IN"
 
