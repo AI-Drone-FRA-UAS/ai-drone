@@ -3,8 +3,12 @@
 # Install dependencies
 
 ```bash
-# Install uv (if not already installed)
+# Install uv (Linux/MacOS)
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install uv (Windows)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
 
 # Install the project runtime
 uv sync
