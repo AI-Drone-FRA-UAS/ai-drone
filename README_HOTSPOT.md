@@ -48,5 +48,15 @@ Du kannst die Internetverbindung deines Macs über das USB-Kabel mit dem Raspber
 * Geräte, die mit dem WLAN `AI-Drone-Zero` verbunden sind, haben nun vollen Internetzugang über deinen Mac!
 
 ### Wichtiger Hinweis zur SSH-Verbindung über USB:
-Bei aktiver Internetfreigabe hat der Pi auf der USB-Schnittstelle **nicht mehr** die statische IP `192.168.7.2`. Du erreachst ihn stattdessen über seinen lokalen Hostnamen:
+Bei aktiver Internetfreigabe hat der Pi auf der USB-Schnittstelle **nicht mehr** die statische IP `192.168.7.2`. Du erreichst ihn stattdessen über seinen lokalen Hostnamen:
 * **SSH-Befehl:** `ssh seb@seb-is-pm.local`
+
+---
+
+## 4. Fallback-Modus (WLAN-Priorisierung)
+
+Der Hotspot ist so konfiguriert, dass er als **Fallback** (Ausweichlösung) dient:
+* **Wenn bekannte WLANs in Reichweite sind** (z. B. dein Heim-WLAN oder dein Handy-Hotspot), verbindet sich der Pi automatisch als Client mit diesen Netzen (Priorität: `0` oder höher).
+* **Wenn kein bekanntes WLAN gefunden wird** (z. B. wenn du unterwegs bist), startet der Pi automatisch den eigenen Hotspot `AI-Drone-Zero` (Priorität: `-10`).
+
+Du musst also nichts manuell umschalten. Der Pi entscheidet beim Booten selbstständig, welcher Modus gestartet wird.
