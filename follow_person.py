@@ -93,7 +93,12 @@ def main() -> int:
     logger = logging.getLogger("follow_person")
 
     logger.info("=== AI-Drone: Autonomes Follow-Person Skript ===")
-    logger.info("Konfiguration: Target-Dist=%.1fm, Max-Speed=%.2fm/s, Max-Alt=%.1fm", args.target_dist, args.max_speed, args.max_alt)
+    logger.info(
+        "Konfiguration: Target-Dist=%.1fm, Max-Speed=%.2fm/s, Max-Alt=%.1fm",
+        args.target_dist,
+        args.max_speed,
+        args.max_alt,
+    )
 
     try:
         with DroneController(
@@ -110,18 +115,23 @@ def main() -> int:
 
             if args.sim_target:
                 logger.info("Modus: SIMULIERT (kein Takeoff, keine Kamera).")
-                follower.run_simulated_tracking(duration_s=args.duration if args.duration > 0 else 15.0)
+                follower.run_simulated_tracking(
+                    duration_s=args.duration if args.duration > 0 else 15.0
+                )
             else:
                 logger.info("Modus: ECHTER FLUG MIT IMX500 AI-KAMERA.")
                 # 1. Arm und Takeoff
                 drone.arm()
-                drone.takeoff(alt=args.takeoff_alt)
+                drone.takeoff(target_alt=args.takeoff_alt)
                 logger.info("Takeoff abgeschlossen. Schwebe für 2 Sekunden...")
                 import time
+
                 time.sleep(2.0)
 
                 # 2. Starte visuelles Tracking
-                follower.run_live_tracking(max_duration_s=args.duration if args.duration > 0 else None)
+                follower.run_live_tracking(
+                    max_duration_s=args.duration if args.duration > 0 else None
+                )
 
                 # 3. Land nach Beendigung
                 logger.info("Tracking beendet. Leite Landung ein...")

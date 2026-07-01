@@ -11,7 +11,9 @@ from ai_drone.follower import AutonomousFollower, PersonTarget, get_person_targe
 class MockDetection:
     """Hilfsklasse zum Simulieren einer Kamera-Detektion von modlib oder numpy."""
 
-    def __init__(self, box: list[float], confidence: float = 0.85, class_id: int = 0) -> None:
+    def __init__(
+        self, box: list[float], confidence: float = 0.85, class_id: int = 0
+    ) -> None:
         self.box = box
         self.confidence = confidence
         self.class_id = class_id
@@ -33,21 +35,33 @@ def test_get_person_target_calculation():
 
 def test_get_person_target_filters_classes_and_confidence():
     """Testet, dass Nicht-Personen und Detektionen mit geringer Konfidenz ignoriert werden."""
-    det_low_conf = MockDetection(box=[10.0, 10.0, 50.0, 50.0], confidence=0.2, class_id=0)
-    det_car = MockDetection(box=[100.0, 100.0, 300.0, 300.0], confidence=0.9, class_id=2)  # z.B. Auto
+    det_low_conf = MockDetection(
+        box=[10.0, 10.0, 50.0, 50.0], confidence=0.2, class_id=0
+    )
+    det_car = MockDetection(
+        box=[100.0, 100.0, 300.0, 300.0], confidence=0.9, class_id=2
+    )  # z.B. Auto
 
-    target = get_person_target([det_low_conf, det_car], frame_width=640, frame_height=480, min_confidence=0.4)
+    target = get_person_target(
+        [det_low_conf, det_car], frame_width=640, frame_height=480, min_confidence=0.4
+    )
     assert target is None
 
 
 def test_compute_velocity_command_forward_and_yaw():
     """Testet die P-Regelung für Vorwärts-/Rückwärtsbewegung und Gier-Rate."""
     mock_drone = MagicMock()
-    follower = AutonomousFollower(mock_drone, target_dist_m=2.0, kp_dist=0.5, kp_yaw=0.5)
+    follower = AutonomousFollower(
+        mock_drone, target_dist_m=2.0, kp_dist=0.5, kp_yaw=0.5
+    )
 
     # Person ist 3.0 m entfernt (> 2.0 m Target) und rechts im Bild (offset_x = +100 px)
     target = PersonTarget(
-        distance_m=3.0, offset_x_px=100.0, offset_y_px=0.0, confidence=0.8, box_area=1000.0
+        distance_m=3.0,
+        offset_x_px=100.0,
+        offset_y_px=0.0,
+        confidence=0.8,
+        box_area=1000.0,
     )
 
     vx, vy, vz, yaw_rate = follower.compute_velocity_command(target)

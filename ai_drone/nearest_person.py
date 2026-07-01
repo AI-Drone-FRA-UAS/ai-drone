@@ -27,10 +27,10 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-import numpy as np  # ty: ignore[unresolved-import] - Pi-only dependency
+import numpy as np
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray  # ty: ignore[unresolved-import]
+    from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 

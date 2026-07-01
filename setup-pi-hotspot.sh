@@ -10,6 +10,25 @@
 
 set -euo pipefail
 
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+require_value() {
+    local option="$1"
+    local value="${2:-}"
+    [[ -n "$value" ]] || die "$option requires a value"
+}
+
+require_raspberry_pi_linux() {
+    [[ "$(uname -s)" == "Linux" ]] || die "This script only runs on Raspberry Pi OS/Linux."
+    [[ -r /proc/device-tree/model ]] || die "Cannot confirm this is a Raspberry Pi."
+    tr '\0' '\n' < /proc/device-tree/model | grep -qi "raspberry pi" \
+        || die "This script only runs on a Raspberry Pi."
+    command -v systemctl >/dev/null 2>&1 || die "systemctl is required."
+}
+
 # Default settings
 SSID="AI-Drone-Zero"
 PASSWORD="aidrone123"
@@ -21,18 +40,22 @@ CON_NAME="Hotspot"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ssid)
+      require_value "$1" "${2:-}"
       SSID="$2"
       shift 2
       ;;
     --password)
+      require_value "$1" "${2:-}"
       PASSWORD="$2"
       shift 2
       ;;
     --interface)
+      require_value "$1" "${2:-}"
       IFACE="$2"
       shift 2
       ;;
     --ip)
+      require_value "$1" "${2:-}"
       IP_ADDR="$2"
       shift 2
       ;;
@@ -41,22 +64,21 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown option: $1" >&2
-      exit 1
+      die "Unknown option: $1"
       ;;
   esac
 done
 
+require_raspberry_pi_linux
+
 # Ensure script is run as root
 if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root (using sudo)." >&2
-   exit 1
+   die "This script must be run as root (using sudo)."
 fi
 
 # Check if Password is at least 8 characters
 if [[ ${#PASSWORD} -lt 8 ]]; then
-    echo "Error: Password must be at least 8 characters long for WPA2 security." >&2
-    exit 1
+    die "Password must be at least 8 characters long for WPA2 security."
 fi
 
 echo "=================================================="

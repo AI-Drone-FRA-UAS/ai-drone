@@ -1,13 +1,13 @@
 from pymavlink import mavutil
+from pymavlink.dialects.v10 import ardupilotmega as mavlink
 import time
-import sys
 
 # ---------------- Configuration ----------------
 PORT = "/dev/serial0"
 BAUD = 921600
 
-TAKEOFF_ALT = 0.4      # meters
-MAX_ALTITUDE = 0.5     # meters
+TAKEOFF_ALT = 0.4  # meters
+MAX_ALTITUDE = 0.5  # meters
 # ------------------------------------------------
 
 
@@ -21,7 +21,7 @@ def set_mode(master, mode_name):
 
     master.mav.set_mode_send(
         master.target_system,
-        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+        mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
         mode_id,
     )
 
@@ -33,9 +33,9 @@ def request_position_stream(master):
     master.mav.request_data_stream_send(
         master.target_system,
         master.target_component,
-        mavutil.mavlink.MAV_DATA_STREAM_POSITION,
-        10,     # 10 Hz
-        1
+        mavlink.MAV_DATA_STREAM_POSITION,
+        10,  # 10 Hz
+        1,
     )
 
 
@@ -61,81 +61,84 @@ def emergency_land(master):
     set_mode(master, "LAND")
 
 
-print("Connecting...")
-master = mavutil.mavlink_connection(PORT, baud=BAUD)
+def main():
+    print("Connecting...")
+    master = mavutil.mavlink_connection(PORT, baud=BAUD)
 
-print("Waiting for heartbeat...")
-master.wait_heartbeat()
+    print("Waiting for heartbeat...")
+    master.wait_heartbeat()
 
-print("Connected")
+    print("Connected")
 
-# Ask ArduPilot to send position messages
-request_position_stream(master)
+    # Ask ArduPilot to send position messages
+    request_position_stream(master)
 
-# Change mode
-print("Setting mode to guided...")
-set_mode(master, "GUIDED")
+    # Change mode
+    print("Setting mode to guided...")
+    set_mode(master, "GUIDED")
 
-# Arm
-print("Arming...")
-master.arducopter_arm()
-master.motors_armed_wait()
-print("Armed")
+    # Arm
+    print("Arming...")
+    master.arducopter_arm()
+    master.motors_armed_wait()
+    print("Armed")
 
-time.sleep(2)
+    time.sleep(2)
 
-# Takeoff
-print(f"Taking off to {TAKEOFF_ALT} meters")
+    # Takeoff
+    print(f"Taking off to {TAKEOFF_ALT} meters")
 
-master.mav.command_long_send(
-    master.target_system,
-    master.target_component,
-    mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    TAKEOFF_ALT,
-)
-
-missing = 0
-
-while True:
-
-    altitude = get_relative_alt(master)
-
-    if altitude is None:
-        missing += 1
-        print(f"No altitude data ({missing}/10)")
-
-        if missing >= 10:
-            print("No altitude received. Landing.")
-            emergency_land(master)
-            break
-
-        continue
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        mavlink.MAV_CMD_NAV_TAKEOFF,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        TAKEOFF_ALT,
+    )
 
     missing = 0
 
-    if altitude >= TAKEOFF_ALT * 0.95:
-        print("Target altitude reached")
-        break
+    while True:
+        altitude = get_relative_alt(master)
 
-    if altitude > MAX_ALTITUDE:
-        print("Altitude limit exceeded")
-        emergency_land(master)
-        break
+        if altitude is None:
+            missing += 1
+            print(f"No altitude data ({missing}/10)")
 
-    time.sleep(0.2)
+            if missing >= 10:
+                print("No altitude received. Landing.")
+                emergency_land(master)
+                break
 
-print("Hovering...")
-time.sleep(5)
+            continue
 
-print("Landing...")
-set_mode(master, "LAND")
+        missing = 0
 
-print("Done")
+        if altitude >= TAKEOFF_ALT * 0.95:
+            print("Target altitude reached")
+            break
 
+        if altitude > MAX_ALTITUDE:
+            print("Altitude limit exceeded")
+            emergency_land(master)
+            break
+
+        time.sleep(0.2)
+
+    print("Hovering...")
+    time.sleep(5)
+
+    print("Landing...")
+    set_mode(master, "LAND")
+
+    print("Done")
+
+
+if __name__ == "__main__":
+    main()
