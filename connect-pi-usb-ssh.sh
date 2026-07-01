@@ -37,7 +37,7 @@ find_usb_iface() {
 }
 
 echo "Waiting for Pi USB Ethernet interface..."
-echo "Profile: $PI_PROFILE ($PI_HOSTNAME)"
+echo "Target: $PI_HOSTNAME"
 echo "Use a data-capable USB cable from the laptop to the $PI_USB_PORT_HINT."
 echo
 

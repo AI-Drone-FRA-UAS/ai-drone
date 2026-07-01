@@ -100,11 +100,10 @@ The camera test runs NanoDet on the IMX500 and serves annotated MJPEG from the
 Pi. From the laptop, deploy and start it remotely:
 
 ```bash
-PI_PROFILE=pi4 ./deploy.sh --picam
+./deploy.sh --picam
 ```
 
-Open `http://192.168.8.2:8080/` for the Pi 4 USB profile. For the Zero 2
-profile, omit `PI_PROFILE=pi4` and open `http://192.168.7.2:8080/`.
+Open `http://192.168.7.2:8080/` (the Pi Zero 2 USB address).
 
 When already logged into the Pi:
 

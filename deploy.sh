@@ -9,7 +9,6 @@
 #   ./deploy.sh --ssh      # sync + open an interactive shell on the Pi
 #
 # Environment variables (all optional):
-#   PI_PROFILE — Pi target profile   (default: zero2; use pi4 for seb-is-pm2)
 #   PI_HOST   — SSH target          (default: seb@192.168.7.2)
 #   PI_DIR    — Remote project dir  (default: /home/seb/ai-drone)
 set -euo pipefail
@@ -42,7 +41,7 @@ DEFAULT_SSH_CONFIG="${HOME:-}/.ssh/config"
 [[ -f "$DEFAULT_SSH_CONFIG" ]] || DEFAULT_SSH_CONFIG=/dev/null
 SSH_CONFIG="${SSH_CONFIG:-$DEFAULT_SSH_CONFIG}"
 SSH_CMD=(ssh -F "$SSH_CONFIG")
-RSYNC_SSH="ssh -F ${SSH_CONFIG}"
+RSYNC_SSH="${SSH_CMD[*]}"
 
 # ── 1. Sync ────────────────────────────────────────────────────────────────
 echo "▸ Syncing to ${PI_HOST}:${PI_DIR}/ …"
@@ -68,22 +67,19 @@ echo "▸ Installing raspi dependencies on the Pi …"
 echo "  ✓ deps installed"
 
 # ── 3. Optional: run or shell ─────────────────────────────────────────────
+EXTRA=""
+if (( $# > 1 )); then
+  printf -v EXTRA " %q" "${@:2}"
+fi
+
 case "${1:-}" in
   --picam)
-    EXTRA=""
-    if (( $# > 1 )); then
-      printf -v EXTRA " %q" "${@:2}"
-    fi
     echo "▸ Starting the IMX500 AI stream on the Pi …"
     echo "  Open http://${PI_IP}:8080/ in your browser."
     echo "  Press Ctrl-C to stop."
     "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python test_picam.py${EXTRA}"
     ;;
   --lidar)
-    EXTRA=""
-    if (( $# > 1 )); then
-      printf -v EXTRA " %q" "${@:2}"
-    fi
     echo "▸ Sampling the MTF-01P through the Pi's flight-controller link …"
     "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python test_lidar.py --device /dev/serial0${EXTRA}"
     ;;
