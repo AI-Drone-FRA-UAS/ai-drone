@@ -94,8 +94,9 @@ if systemctl is-active --quiet NetworkManager || command -v nmcli >/dev/null 2>&
         802-11-wireless-security.key-mgmt wpa-psk \
         802-11-wireless-security.psk "$PASSWORD"
     
-    # Set high autoconnect priority
-    nmcli connection modify "$CON_NAME" connection.autoconnect-priority 100
+    # Set low autoconnect priority (-10) so it acts as a fallback.
+    # Regular client Wi-Fi networks (default priority 0) will be preferred if they are in range.
+    nmcli connection modify "$CON_NAME" connection.autoconnect-priority -10
     
     # Bring it up
     echo "▸ Activating hotspot..."
