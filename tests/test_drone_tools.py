@@ -5,26 +5,26 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from ai_drone import console, health
-import test_lidar
-import test_picam
+from ai_drone import mavlink_devices
+from ai_drone.cli import lidar, picam, servo
 
 
 def test_requested_serial_device_is_used(tmp_path) -> None:
     device = tmp_path / "tty-test"
     device.touch()
 
-    assert test_lidar._find_device(str(device)) == device
+    assert lidar._find_device(str(device)) == device
 
 
 def test_rangefinder_message_becomes_csv_row(monkeypatch) -> None:
-    monkeypatch.setattr(test_lidar.time, "monotonic", lambda: 12.5)
+    monkeypatch.setattr(lidar.time, "monotonic", lambda: 12.5)
     message = SimpleNamespace(
         get_type=lambda: "RANGEFINDER",
         distance=0.75,
         voltage=4.9,
     )
 
-    row = test_lidar._row(message, started=10.0)
+    row = lidar._row(message, started=10.0)
 
     assert row["elapsed_s"] == 2.5
     assert row["message"] == "RANGEFINDER"
@@ -33,9 +33,15 @@ def test_rangefinder_message_becomes_csv_row(monkeypatch) -> None:
 
 
 def test_picam_is_disabled_off_pi(monkeypatch) -> None:
-    monkeypatch.setattr(test_picam.Path, "read_text", lambda _path: "Desktop PC")
+    monkeypatch.setattr(picam.Path, "read_text", lambda _path: "Desktop PC")
 
-    assert test_picam._is_raspberry_pi() is False
+    assert picam._is_raspberry_pi() is False
+
+
+def test_servo_input_parsing() -> None:
+    assert servo._target_value_from_input("1500us", min_us=900, max_us=2100) == 0.0
+    assert servo._target_value_from_input("30deg", min_us=900, max_us=2100) == 0.5
+    assert servo._target_value_from_input("-0.25", min_us=900, max_us=2100) == -0.25
 
 
 def test_drone_console_uses_requested_device(tmp_path, monkeypatch) -> None:
@@ -59,6 +65,7 @@ def test_drone_console_prefers_stable_device(tmp_path, monkeypatch) -> None:
     stable_device = tmp_path / "flywoo"
     stable_device.touch()
     monkeypatch.setattr(console, "STABLE_DEVICE", stable_device)
+    monkeypatch.setattr(mavlink_devices.Path, "glob", lambda _path, _pattern: [])
     monkeypatch.setattr(console.shutil, "which", lambda _name: "/venv/bin/mavproxy.py")
 
     command = console._command([])

@@ -12,7 +12,13 @@ SSH command: ssh seb@192.168.7.2
 
 Use the Pi Zero 2 WH micro-USB port labeled `USB` for the PC connection. The `PWR IN` port is power-only.
 
-## Linux: Flash the Storage
+## Historical Linux: Flash the Storage
+
+Status: the root helper scripts referenced in this section,
+`./prepare-and-flash-pi.sh` and `./enable-pi-usb-gadget.sh`, are not present in
+this checkout. Treat these flashing steps as historical notes until those
+helpers are restored or replaced. The connection sections below still document
+the current `uv run autoconnect` and `uv run manuconnect` commands.
 
 Insert the microSD card or USB boot stick into the PC. The scripts cannot flash or patch storage while it is inserted into the Pi.
 
@@ -48,7 +54,7 @@ Then enter:
 
 Wait until the script prints `Done`.
 
-## Linux: Enable USB SSH on the storage
+## Historical Linux: Enable USB SSH on the storage
 
 Keep the storage in the PC and run:
 

@@ -31,13 +31,8 @@ class DeployTarget:
 
 
 @dataclass(frozen=True)
-class UsbTarget:
-    """Resolved USB gadget network settings.
-
-    Also carries the Tailscale hostname (``pi_hostname``) and the Pi's own
-    Wi-Fi AP details (``ap_ssid`` / ``ap_ip``) so the ``autoconnect`` /
-    ``manuconnect`` orchestrator can resolve every transport from one place.
-    """
+class ConnectionTarget:
+    """Resolved settings for all Raspberry Pi connection transports."""
 
     pi_ip: str
     host_ip: str
@@ -129,10 +124,15 @@ def resolve_deploy_target(
     )
 
 
-def resolve_usb_target(environ: Mapping[str, str] | None = None) -> UsbTarget:
+UsbTarget = ConnectionTarget
+
+
+def resolve_connection_target(
+    environ: Mapping[str, str] | None = None,
+) -> ConnectionTarget:
     values = _env(environ)
     timeout = int(values.get("TIMEOUT_SECONDS", "180"))
-    return UsbTarget(
+    return ConnectionTarget(
         pi_ip=values.get("PI_IP", DEFAULT_PI_USB_IP),
         host_ip=values.get("HOST_IP", DEFAULT_HOST_USB_IP),
         pi_user=values.get("PI_USER", DEFAULT_PI_USERNAME),
@@ -143,3 +143,9 @@ def resolve_usb_target(environ: Mapping[str, str] | None = None) -> UsbTarget:
         ap_ssid=values.get("PI_AP_SSID", DEFAULT_PI_AP_SSID),
         ap_ip=values.get("PI_AP_IP", DEFAULT_PI_HOTSPOT_IP),
     )
+
+
+def resolve_usb_target(
+    environ: Mapping[str, str] | None = None,
+) -> ConnectionTarget:
+    return resolve_connection_target(environ)

@@ -78,7 +78,7 @@ Connect the flight controller over USB and power the drone so the MTF-01P has
 power. Keep the vehicle disarmed.
 
 ```bash
-uv run test_lidar.py
+uv run drone-lidar
 ```
 
 The script:
@@ -91,8 +91,8 @@ The script:
 Useful options:
 
 ```bash
-uv run test_lidar.py --duration 10
-uv run test_lidar.py --device /dev/ttyACM0 --output artifacts/lidar.csv
+uv run drone-lidar --duration 10
+uv run drone-lidar --device /dev/ttyACM0 --output artifacts/lidar.csv
 ```
 
 It does not arm the drone, start motors, change flight mode, or write
@@ -113,7 +113,7 @@ When already logged into the Pi:
 
 ```bash
 cd ~/ai-drone
-uv run test_picam.py
+uv run drone-picam
 ```
 
 First deploy the project if the Pi environment has not been prepared:
@@ -140,20 +140,15 @@ Pi GND (pin 6) to FC GND.
 
 ## Servo test
 
-To test the SG90 (9g) servo motor on the Raspberry Pi Zero:
-1. Wire the servo:
-   - **VCC (Red)** -> Pi 5V (e.g., physical Pin 2 or 4). *Warning: For heavy loads, use a separate 5V power supply to avoid brownouts.*
-   - **GND (Brown/Black)** -> Pi GND (e.g., physical Pin 6).
-   - **Signal (Yellow/Orange)** -> Pi BCM GPIO 12 (physical Pin 32).
-2. Deploy and run the test script:
-   ```bash
-   ./deploy.sh --servo
-   ```
-   By default, this will run in **sweep** mode. You can customize the behavior or change the mode by forwarding parameters:
-   ```bash
-   ./deploy.sh --servo --mode manual
-   ./deploy.sh --servo --mode center
-   ```
+The SG90/MS18-F signal wire is on BCM GPIO 12 (physical pin 32). The servo VCC
+uses 5V and GND from the Pi for light bench tests; use a separate 5V supply for
+loaded tests to avoid Pi brownouts.
+
+```bash
+uv run drone-deploy --servo
+uv run drone-deploy --servo --mode manual
+uv run drone-deploy --servo --mode center
+```
 
 ## Development checks
 
@@ -208,3 +203,16 @@ archive over SSH, so native Windows does not need a local `rsync` install.
 
 Hardware details and the parameter backup are in
 `docs/DRONE_CONFIGURATION.md` and `params/`.
+
+## Repository layout
+
+- `docs/` contains maintained setup and operating guides, including the
+  [hotspot guide](docs/HOTSPOT.md).
+- `notes/` contains dated or ad hoc bring-up notes, including the
+  [19 June 2026 session report](notes/19-06-session.md).
+- `hardware/3d-prints/` contains STL/3MF print assets.
+- `scripts/` contains shell helpers that are not Python package entry points.
+  Root wrappers such as `./deploy.sh`, `./connect-pi-usb-ssh.sh`, and
+  `./setup-pi-hotspot.sh` remain for compatibility.
+- Large local reference assets belong under `docs/assets/`, for example the
+  ignored `docs/assets/Drone-Handbook.pdf`.

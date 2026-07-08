@@ -72,42 +72,42 @@ The project includes a dedicated autonomous follower module (**`ai_drone.followe
 
 ---
 
-## 4. CLI Tools (`control_drone.py` & `follow_person.py`)
+## 4. CLI Tools (`drone-control` & `drone-follow`)
 
 Two command-line tools are provided for bench diagnostics, safety verification, and autonomous flight missions without requiring manual code edits.
 
-### 1. General Flight Control (`control_drone.py`)
+### 1. General Flight Control (`drone-control`)
 
 #### Passive Sensor Monitoring (`status`)
 Connects to the flight controller and streams real-time LiDAR altitude, LiPo voltage, and flight mode. **Motors remain disarmed.** Ideal for bench testing sensor calibration.
 ```bash
-python control_drone.py status --duration 10
+uv run drone-control status --duration 10
 ```
 
 #### Autonomous Hover Test (`hover`)
 Arms the motors, ascends to `--takeoff-alt`, maintains a stable hover for the specified duration, and lands autonomously.
 ```bash
-python control_drone.py hover --takeoff-alt 0.4 --duration 5 --max-alt 0.8
+uv run drone-control hover --takeoff-alt 0.4 --duration 5 --max-alt 0.8
 ```
 
 #### Body-Frame Velocity Demonstrator (`velocity-test`)
 Demonstrates flight maneuverability by issuing body-frame velocity vectors during flight.
 ```bash
 # Ascends to 0.4m, rotates right at 10 deg/s for 4 seconds, and lands
-python control_drone.py velocity-test --takeoff-alt 0.4 --duration 4 --vx 0.0 --yaw-rate 10.0
+uv run drone-control velocity-test --takeoff-alt 0.4 --duration 4 --vx 0.0 --yaw-rate 10.0
 ```
 
-### 2. Autonomous Person Tracking (`follow_person.py`)
+### 2. Autonomous Person Tracking (`drone-follow`)
 
 A standalone executable script for running the complete AI tracking pipeline:
 ```bash
 # Run simulated person tracking on your desktop (no takeoff, no camera required)
-python follow_person.py --sim-target --duration 15
+uv run drone-follow --sim-target --duration 15
 
 # Run live autonomous person tracking with the IMX500 AI camera in a flight safety net
-python follow_person.py --device /dev/serial0 --takeoff-alt 0.5 --target-dist 2.0 --max-alt 0.8
+uv run drone-follow --device /dev/serial0 --takeoff-alt 0.5 --target-dist 2.0 --max-alt 0.8
 ```
-*(Alternatively, you can invoke the subcommand via `python control_drone.py follow --sim-target`)*.
+*(Alternatively, use the subcommand via `uv run drone-control follow --sim-target`.)*
 
 ---
 
@@ -121,4 +121,4 @@ Because current ArduPilot parameters on the drone have `ARMING_CHECK=0` and `FEN
    * **Context Manager Protection**: All flight operations should be wrapped inside `with DroneController(...) as drone:`. If an unhandled exception, syntax error, or `Ctrl+C` keyboard interrupt occurs, the `__exit__` block automatically triggers `emergency_stop()` (`LAND` or `DISARM`).
    * **Altitude Guard**: If vibrations or optical flow drift cause the drone to exceed `max_altitude`, the controller immediately overrides velocity commands and lands.
    * **Battery Guard**: Never take off with a low LiPo battery. The automated follower aborts missions immediately if battery voltage drops below `14.4 V` (for a 4S battery).
-4. **Pre-Flight Check**: Always run `python control_drone.py status` before arming to verify that LiDAR altitude reads ~0.00 m on the ground and LiPo battery voltage is above `15.0 V`.
+4. **Pre-Flight Check**: Always run `uv run drone-control status` before arming to verify that LiDAR altitude reads ~0.00 m on the ground and LiPo battery voltage is above `15.0 V`.

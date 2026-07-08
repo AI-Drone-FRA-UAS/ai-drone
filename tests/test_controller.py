@@ -30,8 +30,8 @@ def test_find_device_paths(tmp_path: Any) -> None:
 
     # 4. Automatisches Finden, wenn requested=None
     with (
-        patch("ai_drone.controller.Path.glob") as mock_glob,
-        patch("ai_drone.controller.Path.exists") as mock_exists,
+        patch("ai_drone.mavlink_devices.Path.glob") as mock_glob,
+        patch("ai_drone.mavlink_devices.Path.exists") as mock_exists,
     ):
         # Simuliere, dass /dev/serial0 existiert
         mock_glob.return_value = []

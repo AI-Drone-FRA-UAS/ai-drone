@@ -20,7 +20,7 @@ Verified on 2026-06-09.
 - Range: 1-800 cm, downward orientation (`RNGFND1_ORIENT=25`)
 - EKF3 uses optical flow for horizontal velocity and rangefinder height.
 
-The sensor requires drone battery power. `test_lidar.py` does not power or
+The sensor requires drone battery power. `drone-lidar` does not power or
 arm anything; it only requests telemetry from ArduPilot and saves received
 range/flow messages.
 

@@ -8,33 +8,29 @@ import shutil
 from pathlib import Path
 from typing import NoReturn, Sequence
 
-STABLE_DEVICE = Path(
-    "/dev/serial/by-id/usb-ArduPilot_FlywooF745_200023000451333436353531-if00"
+from ai_drone.mavlink_devices import (
+    STABLE_FLIGHT_CONTROLLER_DEVICE,
+    find_serial_device,
 )
+
+STABLE_DEVICE = STABLE_FLIGHT_CONTROLLER_DEVICE
 DEFAULT_BAUD = 115200
 
 
 def _find_device(requested: str | None) -> Path:
-    if requested:
-        device = Path(requested)
-        if not device.exists():
-            raise SystemExit(f"Serial device does not exist: {device}")
-        return device
-
-    candidates = [
-        STABLE_DEVICE,
-        *sorted(Path("/dev/serial/by-id").glob("*ArduPilot*")),
-        Path("/dev/ttyACM0"),
-        *sorted(Path("/dev").glob("ttyACM*")),
-    ]
-    for device in candidates:
-        if device.exists():
-            return device
-
-    raise SystemExit(
-        "No ArduPilot USB serial device found. Connect the flight controller "
-        "or pass --device /dev/..."
-    )
+    try:
+        return find_serial_device(
+            requested,
+            prefer_stable=True,
+            include_pi_uart=False,
+            stable_device=STABLE_DEVICE,
+            missing_message=(
+                "No ArduPilot USB serial device found. Connect the flight "
+                "controller or pass --device /dev/..."
+            ),
+        )
+    except FileNotFoundError as error:
+        raise SystemExit(str(error)) from error
 
 
 def _command(arguments: Sequence[str] | None = None) -> list[str]:

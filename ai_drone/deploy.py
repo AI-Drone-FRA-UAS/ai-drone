@@ -151,12 +151,21 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
     suffix = f" {extra}" if extra else ""
 
     if plan.mode == "picam":
-        command = f"cd {shlex.quote(target.project_dir)} && .venv/bin/python test_picam.py{suffix}"
+        command = (
+            f"cd {shlex.quote(target.project_dir)} && "
+            f".venv/bin/python -m ai_drone.cli.picam{suffix}"
+        )
         return remote_command(target, command, tty=True)
     if plan.mode == "lidar":
         command = (
             f"cd {shlex.quote(target.project_dir)} && "
-            f".venv/bin/python test_lidar.py --device /dev/serial0{suffix}"
+            f".venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0{suffix}"
+        )
+        return remote_command(target, command, tty=True)
+    if plan.mode == "servo":
+        command = (
+            f"cd {shlex.quote(target.project_dir)} && "
+            f".venv/bin/python -m ai_drone.cli.servo{suffix}"
         )
         return remote_command(target, command, tty=True)
     if plan.mode == "servo":

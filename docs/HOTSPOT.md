@@ -13,6 +13,14 @@ Der Hotspot wird beim Booten des Pi automatisch gestartet.
 * **IP-Adresse des Pi (Gateway):** `192.168.4.1`
 * **IP-Bereich für Clients:** `192.168.4.10` bis `192.168.4.254`
 
+Konfiguration aus diesem Repository:
+
+```bash
+sudo scripts/setup-pi-hotspot.sh
+```
+
+Der alte Root-Pfad `sudo ./setup-pi-hotspot.sh` bleibt als Wrapper erhalten.
+
 ---
 
 ## 2. Verbindung testen (Smartphone / Tablet)

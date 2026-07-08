@@ -15,8 +15,14 @@ dependencies = [
 [project.scripts]
 autoconnect = "ai_drone.connect:auto_main"
 drone-console = "ai_drone.console:main"
+drone-control = "ai_drone.cli.control:main"
 drone-deploy = "ai_drone.deploy:main"
+drone-fly-and-land = "ai_drone.cli.fly_and_land:main"
+drone-follow = "ai_drone.cli.follow_person:main"
 drone-health = "ai_drone.health:main"
+drone-lidar = "ai_drone.cli.lidar:main"
+drone-picam = "ai_drone.cli.picam:main"
+drone-servo = "ai_drone.cli.servo:main"
 manuconnect = "ai_drone.connect:manual_main"
 
 [build-system]

@@ -10,8 +10,8 @@ Two entry points share the same three transports and priority order:
 * ``manuconnect`` (:func:`run_manual`) shows the same three as a menu and runs
   the one the user picks.
 
-The heavy lifting is reused: the USB path is ``pi_usb_ssh`` unchanged, the Wi-Fi
-command builders live in ``pi_wifi``, and Tailscale is a plain ``ssh``.
+This module owns transport selection. The Wi-Fi command builders live in
+``pi_wifi`` and the USB link setup lives in ``pi_usb_ssh``.
 """
 
 from __future__ import annotations
@@ -20,10 +20,16 @@ import argparse
 import platform
 import shlex
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 
 from ai_drone import pi_usb_ssh, pi_wifi
-from ai_drone.pi_targets import UsbTarget, ping_command, resolve_usb_target
+from ai_drone.pi_targets import (
+    DEFAULT_PI_HOTSPOT_IP,
+    ConnectionTarget,
+    ping_command,
+    resolve_connection_target,
+)
 
 # The AP is either up (answers immediately) or absent — do not wait 3 minutes.
 AP_PING_TIMEOUT = 15
@@ -32,6 +38,10 @@ TAILSCALE_CONNECT_TIMEOUT = 5
 
 def _print_command(command: Sequence[str]) -> None:
     print(f"  {shlex.join(command)}", flush=True)
+
+
+def interactive_ssh_command(target: str) -> list[str]:
+    return ["ssh", "-t", target]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -67,7 +77,7 @@ def tailscale_probe_command(ssh_target: str) -> list[str]:
 
 def connect_tailscale(ssh_target: str, *, dry_run: bool) -> bool:
     probe = tailscale_probe_command(ssh_target)
-    interactive = pi_usb_ssh.plain_ssh_command(ssh_target)
+    interactive = interactive_ssh_command(ssh_target)
     if dry_run:
         print("1. Tailscale:", flush=True)
         _print_command(probe)
@@ -93,12 +103,38 @@ def _restore_wifi(previous: str | None, system: str, device: str | None) -> None
     subprocess.run(pi_wifi.join_command(previous, system, device), check=False)
 
 
-def connect_wifi_ap(target: UsbTarget, system: str, *, dry_run: bool) -> bool:
+def wait_for_ping(
+    host: str,
+    timeout_seconds: int,
+    system: str,
+    *,
+    dry_run: bool,
+) -> bool:
+    command = ping_command(host, system)
+    if dry_run:
+        _print_command(command)
+        return True
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if completed.returncode == 0:
+            return True
+        time.sleep(3)
+    return False
+
+
+def connect_wifi_ap(target: ConnectionTarget, system: str, *, dry_run: bool) -> bool:
     ssid = target.ap_ssid
     ap_target = f"{target.pi_user}@{target.ap_ip}"
     device = None if dry_run else pi_wifi.wifi_device(system)
     join = pi_wifi.join_command(ssid, system, device)
-    interactive = pi_usb_ssh.plain_ssh_command(ap_target)
+    interactive = interactive_ssh_command(ap_target)
 
     if dry_run:
         print("2. Pi Wi-Fi AP:", flush=True)
@@ -124,9 +160,7 @@ def connect_wifi_ap(target: UsbTarget, system: str, *, dry_run: bool) -> bool:
         _restore_wifi(previous, system, device)
         return False
 
-    if not pi_usb_ssh.wait_for_ping(
-        target.ap_ip, AP_PING_TIMEOUT, system, dry_run=False
-    ):
+    if not wait_for_ping(target.ap_ip, AP_PING_TIMEOUT, system, dry_run=False):
         print(f"  Joined {ssid} but {target.ap_ip} did not answer.", flush=True)
         _restore_wifi(previous, system, device)
         return False
@@ -154,8 +188,124 @@ def connect_usb(
 # --- Orchestration ------------------------------------------------------------
 
 
-def _tailscale_target(target: UsbTarget) -> str:
+def _tailscale_target(target: ConnectionTarget) -> str:
     return f"{target.pi_user}@{target.pi_hostname}"
+
+
+def _host_from_ssh_target(target: str) -> str:
+    return target.rsplit("@", 1)[-1]
+
+
+def network_ssh_targets(
+    pi_user: str,
+    pi_hostname: str,
+    pi_usb_ip: str,
+    explicit_targets: Sequence[str] | None = None,
+) -> list[str]:
+    candidates = [
+        *(explicit_targets or ()),
+        f"{pi_user}@{pi_hostname}.local",
+        f"{pi_user}@{pi_hostname}",
+        f"{pi_user}@{DEFAULT_PI_HOTSPOT_IP}",
+        f"{pi_user}@{pi_usb_ip}",
+    ]
+
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def _host_responds(host: str, system: str) -> bool:
+    completed = subprocess.run(
+        ping_command(host, system),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def find_reachable_network_target(
+    targets: Sequence[str],
+    system: str,
+    *,
+    timeout_seconds: int = 0,
+) -> str | None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        for target in targets:
+            if _host_responds(_host_from_ssh_target(target), system):
+                return target
+        if timeout_seconds <= 0 or time.monotonic() >= deadline:
+            return None
+        time.sleep(2)
+
+
+def print_network_targets(targets: Sequence[str], system: str) -> None:
+    print("Would try existing Wi-Fi/hotspot/network SSH targets first:", flush=True)
+    for target in targets:
+        _print_command(ping_command(_host_from_ssh_target(target), system))
+        _print_command(interactive_ssh_command(target))
+
+
+def try_network_ssh(
+    targets: Sequence[str],
+    system: str,
+    *,
+    timeout_seconds: int = 0,
+    dry_run: bool,
+) -> bool:
+    if dry_run:
+        print_network_targets(targets, system)
+        return False
+
+    print("Checking existing Wi-Fi/hotspot/network SSH targets...", flush=True)
+    target = find_reachable_network_target(
+        targets,
+        system,
+        timeout_seconds=timeout_seconds,
+    )
+    if target is None:
+        return False
+
+    print(f"Pi is reachable at {_host_from_ssh_target(target)}.", flush=True)
+    command = interactive_ssh_command(target)
+    _print_command(command)
+    subprocess.run(command, check=True)
+    return True
+
+
+def run_legacy_usb_entrypoint(
+    args: argparse.Namespace,
+    defaults: ConnectionTarget,
+    system: str,
+) -> int:
+    targets = network_ssh_targets(
+        args.pi_user,
+        args.pi_hostname,
+        args.pi_ip,
+        args.ssh_target,
+    )
+
+    connected = try_network_ssh(
+        targets,
+        system,
+        timeout_seconds=args.timeout if args.network_only else 0,
+        dry_run=args.dry_run,
+    )
+    if connected:
+        return 0
+    if args.network_only:
+        if args.dry_run:
+            return 0
+        print("No existing Wi-Fi/hotspot/network SSH target responded.", flush=True)
+        return 1
+    if not args.dry_run:
+        print("No existing network target responded; falling back to USB.", flush=True)
+
+    return pi_usb_ssh.run_usb_transport(args, defaults, system)
 
 
 def run_auto(
@@ -165,7 +315,7 @@ def run_auto(
 ) -> int:
     args = _parser().parse_args(arguments)
     system = platform.system()
-    target = resolve_usb_target(environ)
+    target = resolve_connection_target(environ)
     tailscale_target = _tailscale_target(target)
 
     if args.dry_run:
@@ -199,7 +349,7 @@ def run_manual(
 ) -> int:
     args = _parser().parse_args(arguments)
     system = platform.system()
-    target = resolve_usb_target(environ)
+    target = resolve_connection_target(environ)
     tailscale_target = _tailscale_target(target)
 
     print("How do you want to connect to the Pi?", flush=True)

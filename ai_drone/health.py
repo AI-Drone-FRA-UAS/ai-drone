@@ -12,7 +12,8 @@ from typing import Sequence
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone.console import DEFAULT_BAUD, _find_device
+from ai_drone.console import DEFAULT_BAUD
+from ai_drone.mavlink_devices import find_serial_device
 
 DEFAULT_PI_HOST = "seb@seb-is-pm"
 DEFAULT_PI_DEVICE = "/dev/serial0"
@@ -192,9 +193,17 @@ def run(arguments: Sequence[str] | None = None) -> int:
     checks_passed = True
     if not args.pi_only:
         try:
-            device = _find_device(args.usb_device)
+            device = find_serial_device(
+                args.usb_device,
+                prefer_stable=True,
+                include_pi_uart=False,
+                missing_message=(
+                    "No ArduPilot USB serial device found. Connect the flight "
+                    "controller or pass --usb-device /dev/..."
+                ),
+            )
             result = check_local_link(device, args.baud, args.timeout)
-        except (OSError, RuntimeError) as error:
+        except (OSError, RuntimeError, FileNotFoundError) as error:
             print(f"FAIL Developer USB: {error}", flush=True)
             checks_passed = False
         else:

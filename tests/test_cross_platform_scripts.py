@@ -5,10 +5,12 @@ from pathlib import Path
 
 from ai_drone import connect, deploy, pi_usb_ssh, pi_wifi
 from ai_drone.pi_targets import (
+    ConnectionTarget,
     DEFAULT_PI_AP_SSID,
     DEFAULT_PI_HOSTNAME,
     DEFAULT_PI_USB_IP,
     ping_command,
+    resolve_connection_target,
     resolve_deploy_target,
     resolve_usb_target,
 )
@@ -118,7 +120,42 @@ def test_deploy_mode_command_forwards_lidar_arguments(tmp_path: Path) -> None:
 
     assert command is not None
     assert command[:2] == ["ssh", "-t"]
-    assert "test_lidar.py --device /dev/serial0 --duration 10" in command[-1]
+    assert (
+        ".venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0 --duration 10"
+        in command[-1]
+    )
+
+
+def test_deploy_mode_command_uses_module_for_picam(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--picam", "--port", "9090"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.picam --port 9090" in command[-1]
+
+
+def test_deploy_mode_command_uses_module_for_servo(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--servo", "--mode", "center"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.servo --mode center" in command[-1]
 
 
 def test_tar_sync_paths_exclude_local_caches(tmp_path: Path) -> None:
@@ -140,23 +177,24 @@ def test_tar_sync_paths_exclude_local_caches(tmp_path: Path) -> None:
     assert "tests/__pycache__/ignored.pyc" not in paths
 
 
-def test_usb_target_reads_environment() -> None:
-    target = resolve_usb_target(
-        {
-            "PI_IP": "10.0.0.2",
-            "HOST_IP": "10.0.0.1",
-            "PI_USER": "pilot",
-            "PI_HOSTNAME": "drone-pi",
-            "USB_IFACE": "Ethernet 4",
-            "TIMEOUT_SECONDS": "7",
-        }
-    )
+def test_connection_target_reads_environment() -> None:
+    environ = {
+        "PI_IP": "10.0.0.2",
+        "HOST_IP": "10.0.0.1",
+        "PI_USER": "pilot",
+        "PI_HOSTNAME": "drone-pi",
+        "USB_IFACE": "Ethernet 4",
+        "TIMEOUT_SECONDS": "7",
+    }
+    target = resolve_connection_target(environ)
 
+    assert isinstance(target, ConnectionTarget)
     assert target.pi_ip == "10.0.0.2"
     assert target.host_ip == "10.0.0.1"
     assert target.pi_user == "pilot"
     assert target.usb_iface == "Ethernet 4"
     assert target.timeout_seconds == 7
+    assert resolve_usb_target(environ) == target
 
 
 def test_ping_command_is_platform_specific() -> None:
@@ -210,7 +248,7 @@ def test_usb_windows_config_commands() -> None:
 
 
 def test_network_ssh_targets_try_hostname_hotspot_and_usb_ip() -> None:
-    assert pi_usb_ssh.network_ssh_targets(
+    assert connect.network_ssh_targets(
         "seb",
         "seb-is-pm",
         "192.168.7.2",
@@ -251,7 +289,7 @@ def test_network_only_uses_reachable_target(monkeypatch) -> None:
         return _Completed(0)
 
     monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(pi_usb_ssh.subprocess, "run", fake_run)
+    monkeypatch.setattr(connect.subprocess, "run", fake_run)
 
     result = pi_usb_ssh.run(["--network-only"], environ={"TIMEOUT_SECONDS": "1"})
 
@@ -290,6 +328,17 @@ def test_connect_entrypoints_replace_drone_connect() -> None:
     assert scripts["manuconnect"] == "ai_drone.connect:manual_main"
     assert "drone-connect" not in scripts
     assert "drone-pi-usb-ssh" not in scripts
+
+
+def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
+    scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
+
+    assert scripts["drone-picam"] == "ai_drone.cli.picam:main"
+    assert scripts["drone-lidar"] == "ai_drone.cli.lidar:main"
+    assert scripts["drone-control"] == "ai_drone.cli.control:main"
+    assert scripts["drone-follow"] == "ai_drone.cli.follow_person:main"
+    assert scripts["drone-fly-and-land"] == "ai_drone.cli.fly_and_land:main"
+    assert scripts["drone-servo"] == "ai_drone.cli.servo:main"
 
 
 def test_wifi_join_command_per_platform() -> None:

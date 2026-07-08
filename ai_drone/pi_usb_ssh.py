@@ -1,4 +1,8 @@
-"""Configure the Pi USB gadget network link and open SSH."""
+"""Configure the Pi USB gadget network link and open SSH.
+
+Legacy network-first options are still accepted for compatibility, but
+transport selection lives in :mod:`ai_drone.connect`.
+"""
 
 from __future__ import annotations
 
@@ -11,16 +15,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ai_drone.pi_targets import (
-    DEFAULT_PI_HOTSPOT_IP,
-    UsbTarget,
+    ConnectionTarget,
     ping_command,
-    resolve_usb_target,
+    resolve_connection_target,
 )
 
 MTU = "1412"
 
 
-def _parser(target: UsbTarget) -> argparse.ArgumentParser:
+def _parser(target: ConnectionTarget) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "SSH into the Pi over Wi-Fi/hotspot when reachable, otherwise bring "
@@ -265,7 +268,9 @@ def plain_ssh_command(target: str) -> list[str]:
 
 
 def _host_from_ssh_target(target: str) -> str:
-    return target.rsplit("@", 1)[-1]
+    from ai_drone import connect
+
+    return connect._host_from_ssh_target(target)
 
 
 def network_ssh_targets(
@@ -274,19 +279,14 @@ def network_ssh_targets(
     pi_usb_ip: str,
     explicit_targets: Sequence[str] | None = None,
 ) -> list[str]:
-    candidates = [
-        *(explicit_targets or ()),
-        f"{pi_user}@{pi_hostname}.local",
-        f"{pi_user}@{pi_hostname}",
-        f"{pi_user}@{DEFAULT_PI_HOTSPOT_IP}",
-        f"{pi_user}@{pi_usb_ip}",
-    ]
+    from ai_drone import connect
 
-    unique: list[str] = []
-    for candidate in candidates:
-        if candidate and candidate not in unique:
-            unique.append(candidate)
-    return unique
+    return connect.network_ssh_targets(
+        pi_user,
+        pi_hostname,
+        pi_usb_ip,
+        explicit_targets,
+    )
 
 
 def _print_command(command: Sequence[str]) -> None:
@@ -345,13 +345,9 @@ def wait_for_ping(
 
 
 def _host_responds(host: str, system: str) -> bool:
-    completed = subprocess.run(
-        ping_command(host, system),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return completed.returncode == 0
+    from ai_drone import connect
+
+    return connect._host_responds(host, system)
 
 
 def find_reachable_network_target(
@@ -360,21 +356,19 @@ def find_reachable_network_target(
     *,
     timeout_seconds: int = 0,
 ) -> str | None:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        for target in targets:
-            if _host_responds(_host_from_ssh_target(target), system):
-                return target
-        if timeout_seconds <= 0 or time.monotonic() >= deadline:
-            return None
-        time.sleep(2)
+    from ai_drone import connect
+
+    return connect.find_reachable_network_target(
+        targets,
+        system,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def print_network_targets(targets: Sequence[str], system: str) -> None:
-    print("Would try existing Wi-Fi/hotspot/network SSH targets first:", flush=True)
-    for target in targets:
-        _print_command(ping_command(_host_from_ssh_target(target), system))
-        _print_command(plain_ssh_command(target))
+    from ai_drone import connect
+
+    connect.print_network_targets(targets, system)
 
 
 def try_network_ssh(
@@ -384,64 +378,21 @@ def try_network_ssh(
     timeout_seconds: int = 0,
     dry_run: bool,
 ) -> bool:
-    if dry_run:
-        print_network_targets(targets, system)
-        return False
+    from ai_drone import connect
 
-    print("Checking existing Wi-Fi/hotspot/network SSH targets...", flush=True)
-    target = find_reachable_network_target(
+    return connect.try_network_ssh(
         targets,
         system,
         timeout_seconds=timeout_seconds,
+        dry_run=dry_run,
     )
-    if target is None:
-        return False
-
-    print(f"Pi is reachable at {_host_from_ssh_target(target)}.", flush=True)
-    _run(plain_ssh_command(target), dry_run=False)
-    return True
 
 
-def run(
-    arguments: Sequence[str] | None = None,
-    *,
-    environ: Mapping[str, str] | None = None,
+def run_usb_transport(
+    args: argparse.Namespace,
+    defaults: ConnectionTarget,
+    system: str,
 ) -> int:
-    defaults = resolve_usb_target(environ)
-    parser = _parser(defaults)
-    args = parser.parse_args(arguments)
-    if args.timeout <= 0:
-        parser.error("--timeout must be greater than zero")
-    if args.network_only and args.usb_only:
-        parser.error("--network-only and --usb-only cannot be used together")
-
-    system = platform.system()
-    targets = network_ssh_targets(
-        args.pi_user,
-        args.pi_hostname,
-        args.pi_ip,
-        args.ssh_target,
-    )
-
-    if not args.usb_only:
-        connected = try_network_ssh(
-            targets,
-            system,
-            timeout_seconds=args.timeout if args.network_only else 0,
-            dry_run=args.dry_run,
-        )
-        if connected:
-            return 0
-        if args.network_only:
-            if args.dry_run:
-                return 0
-            print("No existing Wi-Fi/hotspot/network SSH target responded.", flush=True)
-            return 1
-        if not args.dry_run:
-            print(
-                "No existing network target responded; falling back to USB.", flush=True
-            )
-
     if args.dry_run:
         print("If none of those respond, would configure USB Ethernet:", flush=True)
 
@@ -492,6 +443,28 @@ def run(
     )
     _run(ssh_command(args.pi_user, args.pi_ip), dry_run=args.dry_run)
     return 0
+
+
+def run(
+    arguments: Sequence[str] | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> int:
+    defaults = resolve_connection_target(environ)
+    parser = _parser(defaults)
+    args = parser.parse_args(arguments)
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
+    if args.network_only and args.usb_only:
+        parser.error("--network-only and --usb-only cannot be used together")
+
+    system = platform.system()
+    if args.usb_only:
+        return run_usb_transport(args, defaults, system)
+
+    from ai_drone import connect
+
+    return connect.run_legacy_usb_entrypoint(args, defaults, system)
 
 
 def main() -> None:

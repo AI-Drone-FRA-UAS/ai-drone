@@ -17,6 +17,8 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.mavlink_devices import resolve_mavlink_endpoint
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,30 +66,23 @@ class DroneController:
         Durchsucht bei fehlender Vorgabe standardmäßige Linux-/Pi-Gerätepfade
         (z. B. ``/dev/serial0`` für Pi UART oder USB ArduPilot CDC).
         """
-        if requested:
-            req_str = str(requested)
-            if req_str.startswith(("udp:", "tcp:", "tcpin:", "udpout:", "tcpout:")):
-                return req_str
-            path = Path(req_str)
-            if not path.exists():
-                raise FileNotFoundError(
-                    f"Angegebenes Serial-Gerät existiert nicht: {path}"
-                )
-            return str(path)
+        try:
+            device = resolve_mavlink_endpoint(
+                requested,
+                include_pi_uart=True,
+                missing_message=(
+                    "Kein ArduPilot Serial-Gerät gefunden. Bitte per --device "
+                    "oder Parameter angeben."
+                ),
+            )
+        except FileNotFoundError as error:
+            if requested:
+                raise
+            raise RuntimeError(str(error)) from error
 
-        candidates = [
-            *sorted(Path("/dev/serial/by-id").glob("*ArduPilot*")),
-            *sorted(Path("/dev").glob("ttyACM*")),
-            Path("/dev/serial0"),
-        ]
-        for path in candidates:
-            if path.exists():
-                logger.info("Automatische Schnittstellen-Erkennung: %s gefunden.", path)
-                return str(path)
-
-        raise RuntimeError(
-            "Kein ArduPilot Serial-Gerät gefunden. Bitte per --device oder Parameter angeben."
-        )
+        if requested is None:
+            logger.info("Automatische Schnittstellen-Erkennung: %s gefunden.", device)
+        return device
 
     def __enter__(self) -> DroneController:
         self.connect()
