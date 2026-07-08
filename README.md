@@ -134,6 +134,23 @@ provides MAVLink. The same sensor test can run on the drone:
 The UART wiring is Pi TXD (pin 8) to FC R4, Pi RXD (pin 10) to FC T4, and
 Pi GND (pin 6) to FC GND.
 
+## Servo test
+
+To test the SG90 (9g) servo motor on the Raspberry Pi Zero:
+1. Wire the servo:
+   - **VCC (Red)** -> Pi 5V (e.g., physical Pin 2 or 4). *Warning: For heavy loads, use a separate 5V power supply to avoid brownouts.*
+   - **GND (Brown/Black)** -> Pi GND (e.g., physical Pin 6).
+   - **Signal (Yellow/Orange)** -> Pi BCM GPIO 12 (physical Pin 32).
+2. Deploy and run the test script:
+   ```bash
+   ./deploy.sh --servo
+   ```
+   By default, this will run in **sweep** mode. You can customize the behavior or change the mode by forwarding parameters:
+   ```bash
+   ./deploy.sh --servo --mode manual
+   ./deploy.sh --servo --mode center
+   ```
+
 ## Development checks
 
 ```bash

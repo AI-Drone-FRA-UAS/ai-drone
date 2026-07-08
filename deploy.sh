@@ -6,6 +6,7 @@
 #   ./deploy.sh --picam    # start the IMX500 AI stream on the Pi
 #                          #   (extra args are forwarded)
 #   ./deploy.sh --lidar    # sample MTF-01P data through the Pi's FC serial link
+#   ./deploy.sh --servo    # start the SG90 servo test on the Pi
 #   ./deploy.sh --ssh      # sync + open an interactive shell on the Pi
 #
 # Environment variables (all optional):
@@ -83,16 +84,20 @@ case "${1:-}" in
     echo "▸ Sampling the MTF-01P through the Pi's flight-controller link …"
     "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python test_lidar.py --device /dev/serial0${EXTRA}"
     ;;
+  --servo)
+    echo "▸ Starting the SG90 servo test on the Pi …"
+    "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && .venv/bin/python test_servo.py${EXTRA}"
+    ;;
   --ssh)
     echo "▸ Opening shell on the Pi …"
     exec "${SSH_CMD[@]}" -t "${PI_HOST}" "cd ${PI_DIR} && exec \$SHELL --login"
     ;;
   "")
-    echo "Done. Use --picam, --lidar, or --ssh."
+    echo "Done. Use --picam, --lidar, --servo, or --ssh."
     ;;
   *)
     echo "Unknown flag: $1" >&2
-    echo "Usage: $0 [--picam|--lidar|--ssh] [command options]" >&2
+    echo "Usage: $0 [--picam|--lidar|--servo|--ssh] [command options]" >&2
     exit 1
     ;;
 esac
