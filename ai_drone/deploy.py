@@ -70,6 +70,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lidar", action="store_true", help="sample lidar over Pi UART"
     )
+    parser.add_argument(
+        "--servo", action="store_true", help="start the SG90 servo test"
+    )
     parser.add_argument("--ssh", action="store_true", help="open a shell on the Pi")
     parser.add_argument("--dry-run", action="store_true", help="print commands only")
     return parser
@@ -85,11 +88,11 @@ def build_plan(
 ) -> DeployPlan:
     parser = _parser()
     args, extra_args = parser.parse_known_args(arguments)
-    modes = [name for name in ("picam", "lidar", "ssh") if getattr(args, name)]
+    modes = [name for name in ("picam", "lidar", "servo", "ssh") if getattr(args, name)]
     if len(modes) > 1:
-        parser.error("--picam, --lidar, and --ssh are mutually exclusive")
+        parser.error("--picam, --lidar, --servo, and --ssh are mutually exclusive")
     if not modes and extra_args:
-        parser.error("extra command options require --picam or --lidar")
+        parser.error("extra command options require --picam, --lidar, or --servo")
 
     target = resolve_deploy_target(environ, ping=ping, system=system)
     sync_method = choose_sync_method(
@@ -155,6 +158,9 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
             f"cd {shlex.quote(target.project_dir)} && "
             f".venv/bin/python test_lidar.py --device /dev/serial0{suffix}"
         )
+        return remote_command(target, command, tty=True)
+    if plan.mode == "servo":
+        command = f"cd {shlex.quote(target.project_dir)} && .venv/bin/python test_servo.py{suffix}"
         return remote_command(target, command, tty=True)
     if plan.mode == "ssh":
         command = f"cd {shlex.quote(target.project_dir)} && exec $SHELL --login"
@@ -298,7 +304,7 @@ def run(arguments: Sequence[str] | None = None) -> int:
 
     command = mode_command(plan)
     if command is None:
-        print("Done. Use --picam, --lidar, or --ssh.", flush=True)
+        print("Done. Use --picam, --lidar, --servo, or --ssh.", flush=True)
         return 0
 
     if plan.mode == "picam":
@@ -307,6 +313,8 @@ def run(arguments: Sequence[str] | None = None) -> int:
         print("Press Ctrl-C to stop.", flush=True)
     elif plan.mode == "lidar":
         print("Sampling MTF-01P through the Pi flight-controller link ...", flush=True)
+    elif plan.mode == "servo":
+        print("Starting the SG90 servo test on the Pi ...", flush=True)
     elif plan.mode == "ssh":
         print("Opening shell on the Pi ...", flush=True)
 
