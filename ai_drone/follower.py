@@ -73,7 +73,12 @@ def get_person_target(
         else:
             # Fallback für direkte Indizierung [x1, y1, x2, y2, ...]
             try:
-                x1, y1, x2, y2 = float(det[0]), float(det[1]), float(det[2]), float(det[3])
+                x1, y1, x2, y2 = (
+                    float(det[0]),
+                    float(det[1]),
+                    float(det[2]),
+                    float(det[3]),
+                )
             except (IndexError, TypeError, ValueError):
                 continue
 
@@ -219,7 +224,10 @@ class AutonomousFollower:
 
         Erzeugt synthetische PersonTarget-Daten zur Verifikation des Steuerkreisverhaltens.
         """
-        logger.info("=== Starte simulierten Autonomie-Tracking-Test (Dauer: %.1f s) ===", duration_s)
+        logger.info(
+            "=== Starte simulierten Autonomie-Tracking-Test (Dauer: %.1f s) ===",
+            duration_s,
+        )
         started = time.monotonic()
 
         try:
@@ -289,7 +297,9 @@ class AutonomousFollower:
             with device as stream:
                 for frame in stream:
                     if max_duration_s and (time.monotonic() - started > max_duration_s):
-                        logger.info("Maximale Tracking-Dauer (%.1f s) erreicht.", max_duration_s)
+                        logger.info(
+                            "Maximale Tracking-Dauer (%.1f s) erreicht.", max_duration_s
+                        )
                         break
 
                     self.drone.update_telemetry()

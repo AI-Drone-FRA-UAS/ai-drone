@@ -29,9 +29,10 @@ def test_find_device_paths(tmp_path: Any) -> None:
         DroneController.find_device(str(tmp_path / "non_existent"))
 
     # 4. Automatisches Finden, wenn requested=None
-    with patch("ai_drone.controller.Path.glob") as mock_glob, patch(
-        "ai_drone.controller.Path.exists"
-    ) as mock_exists:
+    with (
+        patch("ai_drone.controller.Path.glob") as mock_glob,
+        patch("ai_drone.controller.Path.exists") as mock_exists,
+    ):
         # Simuliere, dass /dev/serial0 existiert
         mock_glob.return_value = []
         mock_exists.side_effect = lambda: True
@@ -81,6 +82,7 @@ def test_set_mode_verification_and_timeout() -> None:
 
     # 1. Erfolgreicher Moduswechsel
     controller.flight_mode = "STABILIZE"
+
     # Nach dem Aufruf von set_mode_send ändert sich die simulierte Eigenschaft
     def change_mode(*_args: Any, **_kwargs: Any) -> None:
         controller.flight_mode = "GUIDED"
@@ -161,7 +163,9 @@ def test_altitude_guard_triggers_emergency_stop() -> None:
     )
     mock_conn.recv_match.side_effect = [msg_pos, None]
 
-    with patch.object(controller, "emergency_stop", wraps=controller.emergency_stop) as mock_stop:
+    with patch.object(
+        controller, "emergency_stop", wraps=controller.emergency_stop
+    ) as mock_stop:
         controller.update_telemetry()
         mock_stop.assert_called_once()
         assert controller.is_flying is False

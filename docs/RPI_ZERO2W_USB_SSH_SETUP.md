@@ -71,7 +71,7 @@ Now remove the storage from the PC.
 
 ```bash
 cd /home/abaris/ai-drone
-./connect-pi-usb-ssh.sh
+uv run drone-connect
 ```
 
 When SSH asks for a password, enter the Pi password you chose during flashing.
@@ -120,6 +120,27 @@ ping 192.168.7.2
 ssh seb@192.168.7.2
 ```
 
+From a checkout of this repo, the cross-platform helper can auto-detect the
+adapter, configure it, and open SSH from native Windows. Run PowerShell or
+Windows Terminal as Administrator so the adapter IP can be changed:
+
+```powershell
+uv run drone-connect
+```
+
+`drone-connect` first tries normal SSH over Wi-Fi, the Pi hotspot
+(`192.168.4.1`), and the Pi hostname before it configures USB. Use
+`uv run drone-connect --network-only` when the Pi is already on Wi-Fi or you are
+connected to its hotspot and you do not want USB configuration.
+
+Use `uv run drone-connect --dry-run` to preview the direct SSH targets and, if
+needed, the PowerShell and `netsh` USB commands before changing adapter
+settings. If USB auto-detection fails, pass the adapter name explicitly:
+
+```powershell
+uv run drone-connect --usb-iface "Ethernet 4"
+```
+
 If the USB network adapter does not appear, install/select the Microsoft `USB RNDIS Adapter` or `Remote NDIS Compatible Device` driver in Device Manager.
 
 ## macOS: Connect to the Prepared Pi
@@ -145,6 +166,12 @@ ping 192.168.7.2
 ssh seb@192.168.7.2
 ```
 
+Or use the repo helper:
+
+```bash
+uv run drone-connect
+```
+
 ## Notes
 
 - Use a data-capable USB cable. Charge-only cables will not work for SSH.
@@ -156,3 +183,6 @@ ssh seb@192.168.7.2
 ```bash
 ssh-keygen -R 192.168.7.2
 ```
+
+The legacy `./connect-pi-usb-ssh.sh` script remains as a compatibility wrapper
+around `uv run drone-connect`.

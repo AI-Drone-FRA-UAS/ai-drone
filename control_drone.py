@@ -201,9 +201,11 @@ def cmd_follow(args: argparse.Namespace) -> int:
                 follower.run_simulated_tracking(duration_s=args.duration)
             else:
                 drone.arm()
-                drone.takeoff(alt=args.takeoff_alt)
+                drone.takeoff(target_alt=args.takeoff_alt)
                 time.sleep(2.0)
-                follower.run_live_tracking(max_duration_s=args.duration if args.duration > 0 else None)
+                follower.run_live_tracking(
+                    max_duration_s=args.duration if args.duration > 0 else None
+                )
                 drone.land()
     except KeyboardInterrupt:
         logger.warning("Follow-Modus durch Benutzer beendet!")
@@ -244,7 +246,9 @@ def main() -> int:
         help="Sicherheits-Höhenlimit in Metern (löst bei Überschreitung Notlandung aus).",
     )
 
-    subparsers = parser.add_subparsers(dest="subcommand", required=True, help="Aktions-Modus")
+    subparsers = parser.add_subparsers(
+        dest="subcommand", required=True, help="Aktions-Modus"
+    )
 
     # Status
     p_status = subparsers.add_parser(
@@ -269,13 +273,25 @@ def main() -> int:
         "velocity-test", help="Testet Body-Frame-Geschwindigkeitssteuerung im Flug"
     )
     p_vel.add_argument(
-        "--duration", type=float, default=4.0, help="Dauer des Bewegungs-Tests in Sekunden."
+        "--duration",
+        type=float,
+        default=4.0,
+        help="Dauer des Bewegungs-Tests in Sekunden.",
     )
-    p_vel.add_argument("--vx", type=float, default=0.2, help="Vorwärts-Geschwindigkeit in m/s.")
-    p_vel.add_argument("--vy", type=float, default=0.0, help="Seitwärts-Geschwindigkeit in m/s.")
-    p_vel.add_argument("--vz", type=float, default=0.0, help="Vertikal-Geschwindigkeit in m/s.")
     p_vel.add_argument(
-        "--yaw-rate", type=float, default=10.0, help="Gier-Rate (Drehung) in Grad/Sekunde."
+        "--vx", type=float, default=0.2, help="Vorwärts-Geschwindigkeit in m/s."
+    )
+    p_vel.add_argument(
+        "--vy", type=float, default=0.0, help="Seitwärts-Geschwindigkeit in m/s."
+    )
+    p_vel.add_argument(
+        "--vz", type=float, default=0.0, help="Vertikal-Geschwindigkeit in m/s."
+    )
+    p_vel.add_argument(
+        "--yaw-rate",
+        type=float,
+        default=10.0,
+        help="Gier-Rate (Drehung) in Grad/Sekunde.",
     )
     p_vel.set_defaults(func=cmd_velocity_test)
 
@@ -284,16 +300,24 @@ def main() -> int:
         "follow", help="Autonomes Verfolgen von Personen mit AI-Kamera (oder simuliert)"
     )
     p_follow.add_argument(
-        "--duration", type=float, default=15.0, help="Maximale Tracking-Dauer in Sekunden."
+        "--duration",
+        type=float,
+        default=15.0,
+        help="Maximale Tracking-Dauer in Sekunden.",
     )
     p_follow.add_argument(
-        "--target-dist", type=float, default=2.0, help="Gewünschter Halteabstand zur Person in Metern."
+        "--target-dist",
+        type=float,
+        default=2.0,
+        help="Gewünschter Halteabstand zur Person in Metern.",
     )
     p_follow.add_argument(
         "--max-speed", type=float, default=0.3, help="Maximale Geschwindigkeit in m/s."
     )
     p_follow.add_argument(
-        "--sim-target", action="store_true", help="Simulierter Test am Schreibtisch ohne Kamera."
+        "--sim-target",
+        action="store_true",
+        help="Simulierter Test am Schreibtisch ohne Kamera.",
     )
     p_follow.set_defaults(func=cmd_follow)
 

@@ -70,7 +70,9 @@ class DroneController:
                 return req_str
             path = Path(req_str)
             if not path.exists():
-                raise FileNotFoundError(f"Angegebenes Serial-Gerät existiert nicht: {path}")
+                raise FileNotFoundError(
+                    f"Angegebenes Serial-Gerät existiert nicht: {path}"
+                )
             return str(path)
 
         candidates = [
@@ -96,14 +98,20 @@ class DroneController:
             logger.error("Ausnahme im DroneController-Kontext aufgetreten: %s", exc_val)
         try:
             if self.is_flying or self.is_armed:
-                logger.warning("Safety-Trap: Verlasse Kontext im geschärften/fliegenden Zustand.")
+                logger.warning(
+                    "Safety-Trap: Verlasse Kontext im geschärften/fliegenden Zustand."
+                )
                 self.emergency_stop()
         finally:
             self.close()
 
     def connect(self) -> None:
         """Stellt die MAVLink-Verbindung her und fordert Telemetriestreams an."""
-        logger.info("Verbinde mit MAVLink-Schnittstelle %s (Baud: %d)...", self.device, self.baud)
+        logger.info(
+            "Verbinde mit MAVLink-Schnittstelle %s (Baud: %d)...",
+            self.device,
+            self.baud,
+        )
         self.connection = mavutil.mavlink_connection(self.device, baud=self.baud)
 
         logger.info("Warte auf Heartbeat vom Flight Controller...")
@@ -231,7 +239,7 @@ class DroneController:
         logger.info("Sende Anforderung für Moduswechsel auf %s...", mode_name)
         self.connection.mav.set_mode_send(
             self.target_system,
-            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mode_id,
         )
 
@@ -296,7 +304,7 @@ class DroneController:
                 if "LAND" in mode_mapping:
                     self.connection.mav.set_mode_send(
                         self.target_system,
-                        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                        mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
                         mode_mapping["LAND"],
                     )
                 # Wenn am Boden oder Höhe sehr gering, zusätzlich disarmen
@@ -330,7 +338,7 @@ class DroneController:
         self.connection.mav.command_long_send(
             self.target_system,
             self.target_component,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+            mavlink.MAV_CMD_NAV_TAKEOFF,
             0,
             0,
             0,
@@ -351,11 +359,16 @@ class DroneController:
                 self.last_telemetry_time > 0
                 and (time.monotonic() - self.last_telemetry_time) > 2.0
             ):
-                logger.error("Telemetrie-Abbruch während Takeoff! Leite Notlandung ein.")
+                logger.error(
+                    "Telemetrie-Abbruch während Takeoff! Leite Notlandung ein."
+                )
                 self.emergency_stop()
                 raise RuntimeError("Telemetrie-Abbruch während des Starts.")
 
-            if self.current_altitude is not None and self.current_altitude >= target_alt * 0.95:
+            if (
+                self.current_altitude is not None
+                and self.current_altitude >= target_alt * 0.95
+            ):
                 logger.info("Zielhöhe erreicht: %.2f m", self.current_altitude)
                 return
 
@@ -373,13 +386,17 @@ class DroneController:
         started = time.monotonic()
         while time.monotonic() - started < timeout:
             self.update_telemetry()
-            if not self.is_armed or (self.current_altitude is not None and self.current_altitude < 0.15):
+            if not self.is_armed or (
+                self.current_altitude is not None and self.current_altitude < 0.15
+            ):
                 logger.info("Landung abgeschlossen. Drohne ist am Boden.")
                 self.is_flying = False
                 return
             time.sleep(0.2)
 
-        logger.warning("Landung dauerte länger als %d s. Disarme sicherheitshalber.", timeout)
+        logger.warning(
+            "Landung dauerte länger als %d s. Disarme sicherheitshalber.", timeout
+        )
         try:
             self.disarm(timeout=3.0)
         except Exception:
@@ -402,7 +419,9 @@ class DroneController:
         if not self.connection:
             raise RuntimeError("Nicht verbunden.")
         if not self.is_flying or not self.is_armed:
-            logger.warning("Ignoriere Geschwindigkeitsbefehl: Drohne ist nicht im Flug.")
+            logger.warning(
+                "Ignoriere Geschwindigkeitsbefehl: Drohne ist nicht im Flug."
+            )
             return
 
         # Bitmaske 0x05C7 (1479): Ignoriere Position (Bit 0-2), Beschleunigung (Bit 6-8)
@@ -414,7 +433,7 @@ class DroneController:
             0,
             self.target_system,
             self.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_NED,
+            mavlink.MAV_FRAME_BODY_NED,
             type_mask,
             0,
             0,

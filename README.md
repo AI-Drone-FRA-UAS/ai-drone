@@ -3,8 +3,12 @@
 # Install dependencies
 
 ```bash
-# Install uv (if not already installed)
+# Install uv (Linux/MacOS)
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install uv (Windows)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
 
 # Install the project runtime
 uv sync
@@ -100,7 +104,7 @@ The camera test runs NanoDet on the IMX500 and serves annotated MJPEG from the
 Pi. From the laptop, deploy and start it remotely:
 
 ```bash
-./deploy.sh --picam
+uv run drone-deploy --picam
 ```
 
 Open `http://192.168.7.2:8080/` (the Pi Zero 2 USB address).
@@ -115,7 +119,7 @@ uv run test_picam.py
 First deploy the project if the Pi environment has not been prepared:
 
 ```bash
-./deploy.sh
+uv run drone-deploy
 ```
 
 The deploy step creates the Pi virtual environment with system site packages
@@ -128,7 +132,7 @@ The Pi-to-flight-controller UART4 cable is connected and `/dev/serial0`
 provides MAVLink. The same sensor test can run on the drone:
 
 ```bash
-./deploy.sh --lidar
+uv run drone-deploy --lidar
 ```
 
 The UART wiring is Pi TXD (pin 8) to FC R4, Pi RXD (pin 10) to FC T4, and
@@ -159,6 +163,40 @@ uv run --group dev ruff check .
 uv run --group dev ty check .
 uv run --group dev pytest
 ```
+
+## Connect to the Pi
+
+Fresh checkout flow:
+
+```bash
+git clone git@github.com:AI-Drone-FRA-UAS/ai-drone.git
+cd ai-drone
+uv run drone-connect
+```
+
+`drone-connect` first tries normal SSH targets for Wi-Fi or the Pi hotspot:
+`seb-is-pm.local`, `seb-is-pm`, `192.168.4.1`, and `192.168.7.2`.
+If none respond, it falls back to the USB/RNDIS cable path, configures the
+laptop-side `192.168.7.1/24` address, waits for the Pi at `192.168.7.2`, and
+opens SSH. On Windows, run the terminal as Administrator for USB fallback
+because changing the adapter IP requires elevation.
+
+To try only Wi-Fi/hotspot/network SSH and never configure USB:
+
+```bash
+uv run drone-connect --network-only
+```
+
+If adapter auto-detection fails, pass the interface explicitly:
+
+```bash
+uv run drone-connect --usb-iface "Ethernet 4"
+```
+
+The legacy `./connect-pi-usb-ssh.sh` wrapper remains for compatibility.
+
+`drone-deploy` uses `rsync` on Unix when available and otherwise streams a tar
+archive over SSH, so native Windows does not need a local `rsync` install.
 
 Hardware details and the parameter backup are in
 `docs/DRONE_CONFIGURATION.md` and `params/`.

@@ -29,8 +29,8 @@ def main() -> None:
 
     if not _is_raspberry_pi():
         raise SystemExit(
-            "test_picam.py is Pi-only. Run './deploy.sh --picam' from the laptop "
-            "or 'uv run test_picam.py' on the Pi."
+            "test_picam.py is Pi-only. Run 'uv run drone-deploy --picam' "
+            "from the laptop or 'uv run test_picam.py' on the Pi."
         )
 
     from ai_drone.nearest_person import run_nearest_person

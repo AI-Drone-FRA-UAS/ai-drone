@@ -13,8 +13,11 @@ dependencies = [
 ]
 
 [project.scripts]
+drone-connect = "ai_drone.pi_usb_ssh:main"
 drone-console = "ai_drone.console:main"
+drone-deploy = "ai_drone.deploy:main"
 drone-health = "ai_drone.health:main"
+drone-pi-usb-ssh = "ai_drone.pi_usb_ssh:main"
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
@@ -37,6 +40,6 @@ dev = [
 ]
 
 [tool.uv]
-# Runtime commands stay lightweight on the laptop. deploy.sh explicitly adds
+# Runtime commands stay lightweight on the laptop. drone-deploy explicitly adds
 # the raspi group on the Pi; development tools are opt-in with --group dev.
 default-groups = []
