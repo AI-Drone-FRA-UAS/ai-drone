@@ -17,9 +17,17 @@ Internet. Ausserhalb des Campus fällt er weiter auf den eigenen Hotspot
 | Netz (NM-Profil)     | Typ            | Priorität | Wann aktiv                                  |
 | -------------------- | -------------- | --------: | ------------------------------------------- |
 | `Xyz`                | Client (Handy) |       100 | Handy-Hotspot in Reichweite                 |
+| `Espresso Macchiato` | Client (Handy) |       100 | Handy-Hotspot in Reichweite                 |
 | `eduroam`            | Client         |         5 | Auf dem Campus                              |
-| `Espresso Macchiato` | Client         |         0 | Dieses WLAN in Reichweite                   |
 | `Hotspot`            | Access Point   |       -10 | Fallback, wenn kein Client-Netz erreichbar  |
+
+Die Handy-Hotspots (`Xyz`, `Espresso Macchiato`, Priorität `100`) haben Vorrang
+vor `eduroam` – ist ein Handy-Hotspot in Reichweite, nutzt der Pi diesen. Weitere
+Handy-Hotspots ergänzt man analog mit Priorität `100`:
+
+```bash
+sudo nmcli connection modify "<Hotspot-Name>" connection.autoconnect-priority 100
+```
 
 - **Auf dem Campus** verbindet sich der Pi automatisch mit `eduroam`, bekommt
   eine DHCP-Adresse (`10.x.x.x`) und echtes Internet. Er betreibt dann *keinen*
