@@ -198,5 +198,11 @@ The legacy `./connect-pi-usb-ssh.sh` wrapper remains for compatibility.
 `drone-deploy` uses `rsync` on Unix when available and otherwise streams a tar
 archive over SSH, so native Windows does not need a local `rsync` install.
 
+On the Frankfurt UAS campus the Pi joins the `eduroam` Wi-Fi automatically and
+is reachable over Tailscale (`ssh -tt seb@100.84.84.1`); off campus it falls
+back to its own `AI-Drone-Zero` hotspot. See
+[eduroam WLAN auf dem Raspberry Pi](docs/EDUROAM_SETUP.md) and
+[README_HOTSPOT.md](README_HOTSPOT.md).
+
 Hardware details and the parameter backup are in
 `docs/DRONE_CONFIGURATION.md` and `params/`.
