@@ -63,7 +63,7 @@ device path, MAVProxy commands, shutdown procedure, and troubleshooting, see
 
 **Prerequisites on the Pi** (already done):
 ```bash
-sudo apt install -y python3-picamera2 imx500-all
+sudo apt install -y python3-picamera2 imx500-all python3-apriltag
 ```
 `uv` must also be installed on the Pi.
 
@@ -125,6 +125,46 @@ uv run drone-deploy
 The deploy step creates the Pi virtual environment with system site packages
 enabled so it can use apt-installed `picamera2`/libcamera, then installs the
 `raspi` dependency group (`modlib`, NumPy, OpenCV, and Rich).
+
+## AprilTag detection
+
+Safe, detection-only AprilTag processing uses native AprilTag 3 when available
+and OpenCV as a fallback. It never arms, moves, or actuates the servo:
+
+```bash
+uv run drone-deploy --apriltag --backend auto --tag-size 0.160
+```
+
+The default 1280x960 mode prioritizes range. Use `--resolution 640x480` for
+approximately 30 fps on the Pi Zero 2 W. Add `--output stream` to serve an
+annotated stream on port 8081.
+
+Metric distance requires a real camera calibration:
+
+```bash
+uv run drone-deploy --apriltag \
+  --calibration config/imx500-1280x960.json \
+  --tag-size 0.160
+```
+
+Without calibration, the command reports only IDs, corners, and detector
+quality. See [AprilTag mission architecture](docs/APRILTAG_MISSION.md) before
+attempting pose-guided movement or payload release.
+
+## Disarmed all-sensor recording
+
+Record H.264 camera video, frame metadata, AprilTag detections, a raw MAVLink
+telemetry log, and JSONL telemetry for an exact requested interval:
+
+```bash
+uv run drone-deploy --record --duration 15
+```
+
+Recordings remain on the Pi under `~/ai-drone/artifacts/sensor-recordings/` and
+are intentionally excluded from deployment deletion and Git. The recorder
+refuses to start when armed and stops if a vehicle heartbeat becomes armed. It
+never sends arm, disarm, mode, motor, RC override, mission, or servo commands.
+See [sensor recording and wiring](docs/SENSOR_RECORDING.md).
 
 ## Pi lidar link
 

@@ -8,7 +8,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 PORT = "/dev/serial0"
-BAUD = 921600
+BAUD = 115200
 
 TAKEOFF_ALT = 0.4
 MAX_ALTITUDE = 0.5

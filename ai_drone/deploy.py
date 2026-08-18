@@ -68,6 +68,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--picam", action="store_true", help="start the IMX500 stream")
     parser.add_argument(
+        "--apriltag", action="store_true", help="start safe AprilTag detection"
+    )
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="record camera and all available disarmed sensor telemetry",
+    )
+    parser.add_argument(
         "--lidar", action="store_true", help="sample lidar over Pi UART"
     )
     parser.add_argument(
@@ -88,11 +96,21 @@ def build_plan(
 ) -> DeployPlan:
     parser = _parser()
     args, extra_args = parser.parse_known_args(arguments)
-    modes = [name for name in ("picam", "lidar", "servo", "ssh") if getattr(args, name)]
+    modes = [
+        name
+        for name in ("picam", "apriltag", "record", "lidar", "servo", "ssh")
+        if getattr(args, name)
+    ]
     if len(modes) > 1:
-        parser.error("--picam, --lidar, --servo, and --ssh are mutually exclusive")
+        parser.error(
+            "--picam, --apriltag, --record, --lidar, --servo, and --ssh are "
+            "mutually exclusive"
+        )
     if not modes and extra_args:
-        parser.error("extra command options require --picam, --lidar, or --servo")
+        parser.error(
+            "extra command options require --picam, --apriltag, --record, --lidar, "
+            "or --servo"
+        )
 
     target = resolve_deploy_target(environ, ping=ping, system=system)
     sync_method = choose_sync_method(
@@ -156,6 +174,18 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
             f".venv/bin/python -m ai_drone.cli.picam{suffix}"
         )
         return remote_command(target, command, tty=True)
+    if plan.mode == "apriltag":
+        command = (
+            f"cd {shlex.quote(target.project_dir)} && "
+            f".venv/bin/python -m ai_drone.cli.apriltag{suffix}"
+        )
+        return remote_command(target, command, tty=True)
+    if plan.mode == "record":
+        command = (
+            f"cd {shlex.quote(target.project_dir)} && "
+            f".venv/bin/python -m ai_drone.cli.record{suffix}"
+        )
+        return remote_command(target, command, tty=True)
     if plan.mode == "lidar":
         command = (
             f"cd {shlex.quote(target.project_dir)} && "
@@ -167,9 +197,6 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
             f"cd {shlex.quote(target.project_dir)} && "
             f".venv/bin/python -m ai_drone.cli.servo{suffix}"
         )
-        return remote_command(target, command, tty=True)
-    if plan.mode == "servo":
-        command = f"cd {shlex.quote(target.project_dir)} && .venv/bin/python test_servo.py{suffix}"
         return remote_command(target, command, tty=True)
     if plan.mode == "ssh":
         command = f"cd {shlex.quote(target.project_dir)} && exec $SHELL --login"
@@ -313,13 +340,24 @@ def run(arguments: Sequence[str] | None = None) -> int:
 
     command = mode_command(plan)
     if command is None:
-        print("Done. Use --picam, --lidar, --servo, or --ssh.", flush=True)
+        print(
+            "Done. Use --picam, --apriltag, --record, --lidar, --servo, or --ssh.",
+            flush=True,
+        )
         return 0
 
     if plan.mode == "picam":
         print("Starting the IMX500 AI stream on the Pi ...", flush=True)
         print(f"Open http://{plan.target.address}:8080/ in your browser.", flush=True)
         print("Press Ctrl-C to stop.", flush=True)
+    elif plan.mode == "apriltag":
+        print("Starting safe AprilTag detection on the Pi ...", flush=True)
+        print("This mode never arms, moves, or actuates the servo.", flush=True)
+    elif plan.mode == "record":
+        print(
+            "Recording camera and disarmed sensor telemetry on the Pi ...", flush=True
+        )
+        print("This mode never arms, changes mode, or actuates anything.", flush=True)
     elif plan.mode == "lidar":
         print("Sampling MTF-01P through the Pi flight-controller link ...", flush=True)
     elif plan.mode == "servo":

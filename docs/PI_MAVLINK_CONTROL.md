@@ -13,7 +13,7 @@ The system architecture cleanly decouples high-level computer vision sensing fro
 ```text
 +---------------------+        UART (/dev/serial0)        +------------------------+
 |  Raspberry Pi 4 /   | <-------------------------------> |   FlywooF745 (GOKU)    |
-|     Zero 2 W        |        921600 Baud MAVLink 2      |  ArduPilot Copter 4.6  |
+|     Zero 2 W        |        115200 Baud MAVLink 2      |  ArduPilot Copter 4.6  |
 +---------------------+                                   +------------------------+
   |               ^                                         |                  ^
   |               | I2C/CSI                                 | SERIAL5          | Motors
@@ -30,7 +30,7 @@ The system architecture cleanly decouples high-level computer vision sensing fro
    * **MicoAir MTF-01P**: Connected to ArduPilot via `SERIAL5` (`SERIAL5_PROTOCOL=1`, `SERIAL5_BAUD=115`).
    * **EKF3 Fusion**: ArduPilot fuses the downward-facing Optical Flow sensor for horizontal velocity estimation and the integrated LiDAR rangefinder for vertical altitude hold (`FLOW_TYPE=5`, `RNGFND1_TYPE=10`).
 3. **Raspberry Pi MAVLink Link**:
-   * On the physical drone build, MAVLink communication operates over the hardware UART on the Pi GPIO header: `/dev/serial0` (Pin 8/10 TX/RX) at **921600 baud** (`SERIAL1_PROTOCOL=2`, `SERIAL1_BAUD=921600`).
+   * On the physical drone build, MAVLink communication operates over the hardware UART on the Pi GPIO header: `/dev/serial0` (Pin 8/10 TX/RX) at **115200 baud** (`SERIAL4_PROTOCOL=2`, `SERIAL4_BAUD=115`).
    * For bench testing on a developer laptop, the flight controller can be connected via USB (automatically detected under `/dev/ttyACM0` or `/dev/serial/by-id/...`).
 
 ---

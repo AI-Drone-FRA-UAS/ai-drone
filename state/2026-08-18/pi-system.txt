@@ -1,0 +1,73 @@
+captured_at=2026-08-11T14:51:08+01:00
+model=Raspberry Pi Zero 2 W Rev 1.0
+hostname=seb-is-pm
+kernel=Linux 6.18.29+rpt-rpi-v8 #1 SMP PREEMPT Debian 1:6.18.29-1+rpt1 (2026-05-12) GNU/Linux
+architecture=aarch64
+os=Debian GNU/Linux 13 (trixie)
+python=Python 3.13.5
+uv=uv 0.11.17 (aarch64-unknown-linux-gnu)
+serial0=/dev/ttyAMA0
+groups=seb adm dialout cdrom sudo audio video plugdev games users netdev gpio i2c spi render input lpadmin
+throttled=0x0
+
+MEMORY
+               total        used        free      shared  buff/cache   available
+Mem:           415Mi       157Mi       117Mi       3.0Mi       194Mi       257Mi
+Swap:          414Mi        26Mi       388Mi
+
+STORAGE
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p2   29G  4.3G   24G  16% /
+/dev/mmcblk0p2   29G  4.3G   24G  16% /
+
+FAILED_SERVICES
+● NetworkManager-wait-online.service loaded failed failed Network Manager Wait Online
+
+CAMERAS
+Available cameras
+-----------------
+0 : imx500 [4056x3040 10-bit RGGB] (/base/soc/i2c0mux/i2c@1/imx500@1a)
+    Modes: 'SRGGB10_CSI2P' : 2028x1520 [30.02 fps - (0, 0)/4056x3040 crop]
+                             4056x3040 [10.00 fps - (0, 0)/4056x3040 crop]
+
+
+CAMERA_TOOL_VERSION
+rpicam-apps build: v1.12.0 12-05-2026 (11:49:26)
+rpicam-apps capabilites: egl:1 qt:1 drm:1 libav:1
+libcamera build: v0.7.1+rpt20260429
+
+IMX500_MODELS
+imx500_network_deeplabv3plus.rpk
+imx500_network_efficientdet_lite0_pp.rpk
+imx500_network_efficientnet_bo.rpk
+imx500_network_efficientnet_lite0.rpk
+imx500_network_efficientnetv2_b0.rpk
+imx500_network_efficientnetv2_b1.rpk
+imx500_network_efficientnetv2_b2.rpk
+imx500_network_higherhrnet_coco.rpk
+imx500_network_inputtensoronly.rpk
+imx500_network_mnasnet1.0.rpk
+imx500_network_mobilenet_v2.rpk
+imx500_network_mobilevit_xs.rpk
+imx500_network_mobilevit_xxs.rpk
+imx500_network_nanodet_plus_416x416_pp.rpk
+imx500_network_nanodet_plus_416x416.rpk
+imx500_network_posenet.rpk
+imx500_network_regnetx_002.rpk
+imx500_network_regnety_002.rpk
+imx500_network_regnety_004.rpk
+imx500_network_resnet18.rpk
+imx500_network_shufflenet_v2_x1_5.rpk
+imx500_network_squeezenet1.0.rpk
+imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk
+
+RPI_CAMERA_ASSETS
+acoustic_focus.json
+annotate_cv.json
+face_detect_cv.json
+hdr.json
+imx500_mobilenet_ssd.json
+imx500_posenet.json
+motion_detect.json
+negate.json
+sobel_cv.json

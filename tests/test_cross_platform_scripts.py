@@ -142,6 +142,41 @@ def test_deploy_mode_command_uses_module_for_picam(tmp_path: Path) -> None:
     assert ".venv/bin/python -m ai_drone.cli.picam --port 9090" in command[-1]
 
 
+def test_deploy_mode_command_uses_module_for_apriltag(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--apriltag", "--backend", "native", "--duration", "10"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert (
+        ".venv/bin/python -m ai_drone.cli.apriltag "
+        "--backend native --duration 10" in command[-1]
+    )
+
+
+def test_deploy_mode_command_uses_module_for_record(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--record", "--duration", "12.5"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.record --duration 12.5" in command[-1]
+
+
 def test_deploy_mode_command_uses_module_for_servo(tmp_path: Path) -> None:
     plan = deploy.build_plan(
         ["--servo", "--mode", "center"],
@@ -334,6 +369,8 @@ def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
     assert scripts["drone-picam"] == "ai_drone.cli.picam:main"
+    assert scripts["drone-apriltag"] == "ai_drone.cli.apriltag:main"
+    assert scripts["drone-record"] == "ai_drone.cli.record:main"
     assert scripts["drone-lidar"] == "ai_drone.cli.lidar:main"
     assert scripts["drone-control"] == "ai_drone.cli.control:main"
     assert scripts["drone-follow"] == "ai_drone.cli.follow_person:main"

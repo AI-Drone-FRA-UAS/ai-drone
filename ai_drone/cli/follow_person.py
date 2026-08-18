@@ -28,8 +28,8 @@ def main() -> int:
     parser.add_argument(
         "--baud",
         type=int,
-        default=921600,
-        help="Baudrate für serielle Schnittstellen. Standard: 921600.",
+        default=115200,
+        help="Baudrate für serielle Schnittstellen. Standard: 115200.",
     )
     parser.add_argument(
         "--takeoff-alt",

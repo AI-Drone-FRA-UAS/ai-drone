@@ -31,7 +31,7 @@ class DroneController:
     Args:
         device: Pfad zum Serial-/USB-Gerät oder Netzwerk-String (z. B. 'udp:127.0.0.1:14550').
             Falls ``None``, wird automatisch nach einem passenden ArduPilot-Port gesucht.
-        baud: Baudrate für die serielle Schnittstelle (Standard: 921600 für Pi UART).
+        baud: Baudrate für die serielle Schnittstelle (Standard: 115200 für Pi UART4).
         max_altitude: Sicherheits-Höhenlimit in Metern (Standard: 0.8 m).
         target_system: MAVLink Target System ID (Standard: 1).
         target_component: MAVLink Target Component ID (Standard: 1).
@@ -40,7 +40,7 @@ class DroneController:
     def __init__(
         self,
         device: str | Path | None = None,
-        baud: int = 921600,
+        baud: int = 115200,
         max_altitude: float = 0.8,
         target_system: int = 1,
         target_component: int = 1,

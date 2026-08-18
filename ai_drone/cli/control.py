@@ -221,8 +221,8 @@ def main() -> int:
     parser.add_argument(
         "--baud",
         type=int,
-        default=921600,
-        help="Baudrate der seriellen Schnittstelle (Standard: 921600 für Pi UART).",
+        default=115200,
+        help="Baudrate der seriellen Schnittstelle (Standard: 115200 für Pi UART4).",
     )
     parser.add_argument(
         "--takeoff-alt",

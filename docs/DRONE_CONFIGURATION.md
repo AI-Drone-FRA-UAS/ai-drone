@@ -12,6 +12,30 @@ Verified on 2026-06-09.
 - `ARMING_CHECK=0` and `FENCE_ENABLE=0` in that backup; both require review
   before flight.
 
+### Meaning of the disabled safety parameters
+
+`ARMING_CHECK` controls the pre-arm gate. The live value `0` disables optional
+pre-arm checks, so ArduPilot can permit arming despite problems such as an
+uncalibrated/inconsistent IMU, unhealthy compass or GPS, bad battery level,
+invalid parameters, missing rangefinder data, RC failure, or unavailable
+logging. The normal safe value on Copter 4.6 is `1`, meaning perform all checks.
+It should be restored only after each reported failure is diagnosed; the
+individual warnings should not be bypassed to make the vehicle arm.
+
+`FENCE_ENABLE` is independent: it turns the configured geofence behavior on or
+off after the vehicle is operating. With `0`, ArduPilot will not enforce the
+configured maximum-altitude, home-centered radius, or uploaded polygon fence,
+and therefore will not run `FENCE_ACTION` on a breach. It does not prevent
+arming and it is not collision avoidance.
+
+The live values are `FENCE_TYPE=7` (maximum altitude, home circle, and
+polygon/inclusion-exclusion fences), `FENCE_ACTION=1` (RTL, falling back to
+LAND), `FENCE_ALT_MAX=100 m`, `FENCE_RADIUS=300 m`, and `FENCE_TOTAL=0`. Merely
+changing `FENCE_ENABLE` to `1` would not create a useful indoor containment
+area: there is no uploaded polygon, the limits are far larger than the hall,
+and the circle/RTL behavior needs a reliable home position. Define and test the
+intended indoor boundary and fallback action before enabling it.
+
 ## MicoAir MTF-01P
 
 - Connected to ArduPilot `SERIAL5` / board UART5.

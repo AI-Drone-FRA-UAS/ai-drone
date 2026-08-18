@@ -1,0 +1,11 @@
+corrected_at=2026-08-18T16:44:30+02:00
+timezone=Europe/Berlin
+ntp_enabled=yes
+ntp_synchronized=no
+ntp_note=Hotspot has no upstream default route; clock seeded from developer workstation
+systemd_clock_epoch=/var/lib/systemd/timesync/clock
+failed_services_after_restart=0
+serial0=/dev/ttyAMA0
+gpio14=TXD0
+gpio15=RXD0
+deployed_controller_baud=115200
