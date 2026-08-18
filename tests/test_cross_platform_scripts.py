@@ -193,6 +193,31 @@ def test_deploy_mode_command_uses_module_for_servo(tmp_path: Path) -> None:
     assert ".venv/bin/python -m ai_drone.cli.servo --mode center" in command[-1]
 
 
+def test_deploy_mode_command_uses_guarded_motor_test_module(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        [
+            "--motor-test",
+            "--motor",
+            "1",
+            "--confirm-props-removed",
+            "PROPS_REMOVED",
+            "--confirm-vehicle-secured",
+            "VEHICLE_SECURED",
+        ],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.motor_test" in command[-1]
+    assert "PROPS_REMOVED" in command[-1]
+
+
 def test_tar_sync_paths_exclude_local_caches(tmp_path: Path) -> None:
     (tmp_path / "ai_drone").mkdir()
     (tmp_path / "ai_drone" / "tool.py").write_text("print('ok')\n")

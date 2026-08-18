@@ -68,3 +68,8 @@ Der Hotspot ist so konfiguriert, dass er als **Fallback** (Ausweichlösung) dien
 * **Wenn kein bekanntes WLAN gefunden wird** (z. B. wenn du unterwegs bist), startet der Pi automatisch den eigenen Hotspot `AI-Drone-Zero` (Priorität: `-10`).
 
 Du musst also nichts manuell umschalten. Der Pi entscheidet beim Booten selbstständig, welcher Modus gestartet wird.
+
+Auf dem Campus der Frankfurt UAS ist zusätzlich das WLAN `eduroam` als bevorzugtes Client-Netz eingerichtet – der Pi hat dort automatisch Internet und ist über Tailscale erreichbar. Details: [eduroam WLAN auf dem Raspberry Pi](EDUROAM_SETUP.md).
+
+Für gleichzeitiges Internet und den weiterhin aktiven Hotspot siehe
+[Dual-Interface-Uplink](NETWORK_UPLINK.md).

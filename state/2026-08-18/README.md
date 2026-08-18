@@ -69,6 +69,25 @@ the preview showed that a laptop blocked most of the camera view. See
 `all-sensor-test-summary.json`; the full video and telemetry dataset remains in
 the ignored `artifacts/sensor-recordings/` directory.
 
+## Later configuration and network verification
+
+The new read-only configuration exporter completed a second full download at
+16:12 UTC: 1152/1152 parameters, vehicle disarmed, parameter SHA-256
+`0ae9aafd15802fb52a5cd7be1e4b03935a8480ee31fc49deb52611e24e05ee93`.
+Compared with the earlier capture, the only parameter value change was the
+expected `STAT_RUNTIME` increase. See `drone-config.json` and the dated file in
+`params/`.
+
+NetworkManager still has `wlan0` connected as `Hotspot`; there is no default
+route and no second Wi-Fi interface. The `eduroam` and phone-hotspot profiles
+remain installed with their original priorities. The dual-network setup tool
+was run only in read-only preflight mode and correctly stopped because `wlan1`
+is not attached. See `pi-network-state.txt`.
+
+No motor-test, arm, throttle, mode-change, parameter-write, or servo command was
+sent during these checks. The new motor-test program was not run against the
+hardware because propeller removal was not confirmed and `ARMING_CHECK=0`.
+
 ## Files
 
 - `drone-live-state.json`: firmware identity and latest range/flow messages
@@ -81,3 +100,5 @@ the ignored `artifacts/sensor-recordings/` directory.
 - `pi-opencv-build.txt`: OpenCV modules, threading, and ARM/NEON build details
 - `pi-remediation.txt`: corrected time, service, serial, and deployed baud state
 - `all-sensor-test-summary.json`: disarmed integrated recorder result
+- `drone-config.json`: checksummed metadata for the second complete parameter snapshot
+- `pi-network-state.txt`: safe NetworkManager topology and dual-uplink preflight result

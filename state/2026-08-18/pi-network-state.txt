@@ -1,0 +1,33 @@
+Captured through seb@192.168.4.1 while AI-Drone-Zero remained active.
+
+Hardware/driver:
+- onboard interface: wlan0
+- device: Broadcom BCM43438
+- driver: brcmfmac 7.45.96
+- supported band reported by NetworkManager: 2.4 GHz
+- second Wi-Fi interface (wlan1): absent
+
+Active connection:
+- wlan0: connected to NetworkManager profile Hotspot
+- Hotspot mode: access point
+- Hotspot IPv4 method: shared
+- address/subnet: 192.168.4.1/24
+- no default route; internet connectivity limited
+
+Installed safe profile metadata:
+- Espresso Macchiato: autoconnect yes, priority 100, bound to wlan0
+- Xyz: autoconnect yes, priority 100, bound to wlan0
+- eduroam: autoconnect yes, priority 5, bound to wlan0
+- Hotspot: autoconnect yes, priority -10, bound to wlan0
+
+eduroam CA verification:
+- subject/issuer: eduroam Service Root CA (DFN)
+- expires: 2042-01-21
+- SHA-256: 8A:06:11:E8:96:A6:48:B0:9F:0E:46:F0:EF:DB:D8:D6:9C:8B:18:8D:B3:80:91:58:62:6F:11:32:75:96:2D:C9
+
+USB/Tailscale state:
+- usb0 exists but carrier is down and NetworkManager reports it unmanaged
+- tailscale0 exists, but Tailscale is logged out/offline without an internet route
+
+Read-only dual-uplink preflight result:
+Error: wlan1 is not an available Wi-Fi interface; attach a USB Wi-Fi adapter

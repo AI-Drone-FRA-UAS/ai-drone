@@ -241,6 +241,30 @@ The legacy `./connect-pi-usb-ssh.sh` wrapper still works and now calls
 `drone-deploy` uses `rsync` on Unix when available and otherwise streams a tar
 archive over SSH, so native Windows does not need a local `rsync` install.
 
+On the Frankfurt UAS campus the Pi joins the `eduroam` Wi-Fi automatically and
+is reachable over Tailscale (`ssh -tt seb@100.84.84.1`); off campus it falls
+back to its own `AI-Drone-Zero` hotspot. See
+[eduroam WLAN on the Raspberry Pi](docs/EDUROAM_SETUP.md), the
+[hotspot guide](docs/HOTSPOT.md), and the
+[simultaneous internet/AP design](docs/NETWORK_UPLINK.md).
+
+## Configuration snapshots and bench motor test
+
+Fetch all current ArduPilot parameters through the Pi and optionally publish
+exactly the generated snapshot files to the current GitHub branch:
+
+```bash
+uv run drone-config-sync
+uv run drone-config-sync --publish
+```
+
+See [configuration snapshots](docs/CONFIG_SNAPSHOT.md) for completeness and
+Git safety guarantees.
+
+The guarded motor-test program is intentionally blocked while
+`ARMING_CHECK=0`. After restoring all pre-arm checks, removing every propeller,
+and securing the frame, follow the [bench motor-test procedure](docs/BENCH_MOTOR_TEST.md).
+
 Hardware details and the parameter backup are in
 `docs/DRONE_CONFIGURATION.md` and `params/`.
 

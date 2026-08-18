@@ -81,6 +81,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--servo", action="store_true", help="start the SG90 servo test"
     )
+    parser.add_argument(
+        "--motor-test",
+        action="store_true",
+        help="run the guarded, propeller-free ArduPilot bench motor test",
+    )
     parser.add_argument("--ssh", action="store_true", help="open a shell on the Pi")
     parser.add_argument("--dry-run", action="store_true", help="print commands only")
     return parser
@@ -98,18 +103,26 @@ def build_plan(
     args, extra_args = parser.parse_known_args(arguments)
     modes = [
         name
-        for name in ("picam", "apriltag", "record", "lidar", "servo", "ssh")
+        for name in (
+            "picam",
+            "apriltag",
+            "record",
+            "lidar",
+            "servo",
+            "motor_test",
+            "ssh",
+        )
         if getattr(args, name)
     ]
     if len(modes) > 1:
         parser.error(
-            "--picam, --apriltag, --record, --lidar, --servo, and --ssh are "
-            "mutually exclusive"
+            "--picam, --apriltag, --record, --lidar, --servo, --motor-test, "
+            "and --ssh are mutually exclusive"
         )
     if not modes and extra_args:
         parser.error(
             "extra command options require --picam, --apriltag, --record, --lidar, "
-            "or --servo"
+            "--servo, or --motor-test"
         )
 
     target = resolve_deploy_target(environ, ping=ping, system=system)
@@ -196,6 +209,12 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
         command = (
             f"cd {shlex.quote(target.project_dir)} && "
             f".venv/bin/python -m ai_drone.cli.servo{suffix}"
+        )
+        return remote_command(target, command, tty=True)
+    if plan.mode == "motor_test":
+        command = (
+            f"cd {shlex.quote(target.project_dir)} && "
+            f".venv/bin/python -m ai_drone.cli.motor_test{suffix}"
         )
         return remote_command(target, command, tty=True)
     if plan.mode == "ssh":
@@ -341,7 +360,8 @@ def run(arguments: Sequence[str] | None = None) -> int:
     command = mode_command(plan)
     if command is None:
         print(
-            "Done. Use --picam, --apriltag, --record, --lidar, --servo, or --ssh.",
+            "Done. Use --picam, --apriltag, --record, --lidar, --servo, "
+            "--motor-test, or --ssh.",
             flush=True,
         )
         return 0
@@ -362,6 +382,9 @@ def run(arguments: Sequence[str] | None = None) -> int:
         print("Sampling MTF-01P through the Pi flight-controller link ...", flush=True)
     elif plan.mode == "servo":
         print("Starting the SG90 servo test on the Pi ...", flush=True)
+    elif plan.mode == "motor_test":
+        print("Starting the guarded ArduPilot bench motor test ...", flush=True)
+        print("PROPELLERS MUST BE REMOVED and the vehicle secured.", flush=True)
     elif plan.mode == "ssh":
         print("Opening shell on the Pi ...", flush=True)
 
