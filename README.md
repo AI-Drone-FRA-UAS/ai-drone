@@ -1,5 +1,8 @@
 # AI Drone Professor Baun
 
+Before continuing live-hardware work, read the current
+[project handoff and verified state](docs/HANDOFF.md).
+
 # Install dependencies
 
 ```bash
