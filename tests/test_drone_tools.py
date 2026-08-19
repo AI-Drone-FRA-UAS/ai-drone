@@ -2,29 +2,33 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from types import SimpleNamespace
 
-from ai_drone import console, health
-import test_lidar
-import test_picam
+import pytest
+
+from ai_drone import console, health, mavlink_devices
+from ai_drone.cli import lidar, picam, servo
+from ai_drone.platform import is_raspberry_pi
 
 
 def test_requested_serial_device_is_used(tmp_path) -> None:
     device = tmp_path / "tty-test"
     device.touch()
 
-    assert test_lidar._find_device(str(device)) == device
+    assert lidar._find_device(str(device)) == device
 
 
 def test_rangefinder_message_becomes_csv_row(monkeypatch) -> None:
-    monkeypatch.setattr(test_lidar.time, "monotonic", lambda: 12.5)
+    monkeypatch.setattr(lidar.time, "monotonic", lambda: 12.5)
     message = SimpleNamespace(
         get_type=lambda: "RANGEFINDER",
         distance=0.75,
         voltage=4.9,
     )
 
-    row = test_lidar._row(message, started=10.0)
+    row = lidar._row(message, started=10.0)
 
     assert row["elapsed_s"] == 2.5
     assert row["message"] == "RANGEFINDER"
@@ -32,10 +36,159 @@ def test_rangefinder_message_becomes_csv_row(monkeypatch) -> None:
     assert row["voltage_v"] == 4.9
 
 
-def test_picam_is_disabled_off_pi(monkeypatch) -> None:
-    monkeypatch.setattr(test_picam.Path, "read_text", lambda _path: "Desktop PC")
+def test_picam_is_disabled_off_pi(tmp_path) -> None:
+    model = tmp_path / "model"
+    model.write_text("Desktop PC")
 
-    assert test_picam._is_raspberry_pi() is False
+    assert is_raspberry_pi(model) is False
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--port", "0"],
+        ["--port", "65536"],
+        ["--confidence", "nan"],
+        ["--threshold", "inf"],
+        ["--altitude", "-1"],
+        ["--altitude", "1"],
+        ["--fov", "180"],
+    ],
+)
+def test_picam_rejects_invalid_numbers_before_platform_check(
+    monkeypatch, arguments
+) -> None:
+    monkeypatch.setattr(
+        picam,
+        "is_raspberry_pi",
+        lambda: pytest.fail("numeric validation must happen before platform access"),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        picam.main(arguments)
+
+    assert error.value.code == 2
+
+
+def test_picam_altitude_requires_exact_nadir_confirmation(monkeypatch) -> None:
+    monkeypatch.setattr(picam, "is_raspberry_pi", lambda: False)
+
+    with pytest.raises(SystemExit, match="Pi-only"):
+        picam.main(
+            [
+                "--altitude",
+                "1.0",
+                "--confirm-nadir-geometry",
+                "NADIR_CALIBRATED",
+            ]
+        )
+
+
+def test_servo_input_parsing() -> None:
+    assert servo._target_value_from_input("1500us", min_us=900, max_us=2100) == 0.0
+    assert servo._target_value_from_input("30deg", min_us=900, max_us=2100) == 0.5
+    assert servo._target_value_from_input("-0.25", min_us=900, max_us=2100) == -0.25
+
+    with pytest.raises(ValueError, match=r"between -1\.0 and 1\.0"):
+        servo._target_value_from_input("nan", min_us=900, max_us=2100)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--confirm-actuation", "SERVO_CLEAR"],
+        ["--mode", "manual"],
+        ["--mode", "manual", "--confirm-actuation", "servo_clear"],
+        [
+            "--mode",
+            "manual",
+            "--confirm-actuation",
+            "SERVO_CLEAR",
+            "--min-us",
+            "1500",
+        ],
+        [
+            "--mode",
+            "sweep",
+            "--confirm-actuation",
+            "SERVO_CLEAR",
+            "--sweep-step",
+            "nan",
+        ],
+        [
+            "--mode",
+            "manual",
+            "--confirm-actuation",
+            "SERVO_CLEAR",
+            "--pin",
+            "13",
+        ],
+        [
+            "--mode",
+            "manual",
+            "--confirm-actuation",
+            "SERVO_CLEAR",
+            "--min-us",
+            "500",
+        ],
+        [
+            "--mode",
+            "manual",
+            "--confirm-actuation",
+            "SERVO_CLEAR",
+            "--max-us",
+            "2500",
+        ],
+    ],
+)
+def test_servo_rejects_unsafe_arguments_before_platform_or_gpio(
+    monkeypatch,
+    arguments,
+) -> None:
+    def unexpected_platform_check() -> bool:
+        raise AssertionError("platform and GPIO checks must follow argument validation")
+
+    monkeypatch.setattr(servo, "is_raspberry_pi", unexpected_platform_check)
+
+    with pytest.raises(SystemExit) as error:
+        servo.main(arguments)
+
+    assert error.value.code == 2
+
+
+def test_servo_initializes_only_after_exact_confirmation(monkeypatch) -> None:
+    instances = []
+
+    class FakeServo:
+        def __init__(
+            self,
+            pin,
+            *,
+            min_pulse_width,
+            max_pulse_width,
+            initial_value,
+        ):
+            self.pin = pin
+            self.min_pulse_width = min_pulse_width
+            self.max_pulse_width = max_pulse_width
+            self.initial_value = initial_value
+            self.closed = False
+            instances.append(self)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(servo, "is_raspberry_pi", lambda: True)
+    monkeypatch.setitem(sys.modules, "gpiozero", SimpleNamespace(Servo=FakeServo))
+    monkeypatch.setattr("builtins.input", lambda _prompt: "q")
+
+    result = servo.main(["--mode", "manual", "--confirm-actuation", "SERVO_CLEAR"])
+
+    assert result == 0
+    assert len(instances) == 1
+    assert instances[0].pin == 12
+    assert instances[0].initial_value is None
+    assert instances[0].closed is True
 
 
 def test_drone_console_uses_requested_device(tmp_path, monkeypatch) -> None:
@@ -59,6 +212,7 @@ def test_drone_console_prefers_stable_device(tmp_path, monkeypatch) -> None:
     stable_device = tmp_path / "flywoo"
     stable_device.touch()
     monkeypatch.setattr(console, "STABLE_DEVICE", stable_device)
+    monkeypatch.setattr(mavlink_devices.Path, "glob", lambda _path, _pattern: [])
     monkeypatch.setattr(console.shutil, "which", lambda _name: "/venv/bin/mavproxy.py")
 
     command = console._command([])
@@ -69,8 +223,171 @@ def test_drone_console_prefers_stable_device(tmp_path, monkeypatch) -> None:
 def test_drone_health_remote_command_contains_requested_connection() -> None:
     command = health._remote_command("/dev/serial0", 115200, 12.0)
 
-    assert command.startswith(".venv/bin/python -c ")
-    assert command.endswith("/dev/serial0 115200 12.0")
+    assert command.startswith(".venv/bin/python -m ai_drone.health --usb-only")
+    assert "--usb-device /dev/serial0" in command
+    assert "--baud 115200 --timeout 12.0" in command
+    assert "--local-label 'Pi UART'" in command
+
+
+def test_drone_health_ignores_parameter_from_other_mavlink_source(
+    monkeypatch, tmp_path
+) -> None:
+    requested: list[tuple[int, int, bytes, int]] = []
+    messages = iter(
+        [
+            SimpleNamespace(
+                param_id="SYSID_THISMAV",
+                param_value=99,
+                get_type=lambda: "PARAM_VALUE",
+                get_srcSystem=lambda: 2,
+                get_srcComponent=lambda: 1,
+            ),
+            SimpleNamespace(
+                param_id="SYSID_THISMAV",
+                param_value=1,
+                get_type=lambda: "PARAM_VALUE",
+                get_srcSystem=lambda: 1,
+                get_srcComponent=lambda: 1,
+            ),
+        ]
+    )
+
+    class FakeConnection:
+        target_system = 1
+        target_component = 1
+        mav = SimpleNamespace(
+            param_request_read_send=lambda *args: requested.append(args)
+        )
+        closed = False
+
+        def wait_heartbeat(self, *, timeout):
+            return SimpleNamespace(base_mode=0)
+
+        def recv_match(self, **_kwargs):
+            return next(messages, None)
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        health.mavutil,
+        "mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+    monkeypatch.setattr(
+        health,
+        "require_fresh_disarmed_heartbeat",
+        lambda *_args, **_kwargs: SimpleNamespace(base_mode=0),
+    )
+
+    result = health.check_local_link(tmp_path / "serial", timeout=0.1)
+
+    assert result.system_id == 1
+    assert requested == [(1, 1, b"SYSID_THISMAV", -1)]
+    assert connection.closed is True
+
+
+def test_drone_health_rejects_an_initially_armed_vehicle(monkeypatch, tmp_path) -> None:
+    connection = SimpleNamespace(
+        wait_heartbeat=lambda *, timeout: SimpleNamespace(base_mode=128),
+        close=lambda: setattr(connection, "closed", True),
+        closed=False,
+    )
+    monkeypatch.setattr(
+        health.mavutil,
+        "mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(RuntimeError, match="vehicle is ARMED"):
+        health.check_local_link(tmp_path / "serial", timeout=0.1)
+
+    assert connection.closed is True
+
+
+def test_drone_health_rejects_vehicle_arming_while_waiting_for_parameter(
+    monkeypatch, tmp_path
+) -> None:
+    armed_heartbeat = SimpleNamespace(
+        base_mode=128,
+        get_type=lambda: "HEARTBEAT",
+        get_srcSystem=lambda: 1,
+        get_srcComponent=lambda: 1,
+    )
+
+    class FakeConnection:
+        target_system = 1
+        target_component = 1
+        mav = SimpleNamespace(param_request_read_send=lambda *_args: None)
+        closed = False
+
+        def wait_heartbeat(self, *, timeout):
+            return SimpleNamespace(base_mode=0)
+
+        def recv_match(self, **_kwargs):
+            return armed_heartbeat
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        health.mavutil,
+        "mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(RuntimeError, match="vehicle became ARMED"):
+        health.check_local_link(tmp_path / "serial", timeout=0.1)
+
+    assert connection.closed is True
+
+
+def test_drone_health_requires_final_fresh_disarmed_state_after_parameter(
+    monkeypatch, tmp_path
+) -> None:
+    parameter = SimpleNamespace(
+        param_id="SYSID_THISMAV",
+        param_value=1,
+        get_type=lambda: "PARAM_VALUE",
+        get_srcSystem=lambda: 1,
+        get_srcComponent=lambda: 1,
+    )
+
+    class FakeConnection:
+        target_system = 1
+        target_component = 1
+        mav = SimpleNamespace(param_request_read_send=lambda *_args: None)
+        closed = False
+
+        def wait_heartbeat(self, *, timeout):
+            return SimpleNamespace(base_mode=0)
+
+        def recv_match(self, **_kwargs):
+            return parameter
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        health.mavutil,
+        "mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+    monkeypatch.setattr(
+        health,
+        "require_fresh_disarmed_heartbeat",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("Vehicle reported ARMED")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="ARMED"):
+        health.check_local_link(tmp_path / "serial", timeout=0.1)
+
+    assert connection.closed
 
 
 def test_drone_health_pi_check_uses_ssh(monkeypatch) -> None:
@@ -83,9 +400,49 @@ def test_drone_health_pi_check_uses_ssh(monkeypatch) -> None:
     monkeypatch.setattr(health.subprocess, "run", fake_run)
 
     assert health.check_pi_link("seb@seb-is-pm") is True
-    assert calls[0][0][:4] == [
+    assert calls[0][0][:6] == [
         "ssh",
+        "-F",
+        os.devnull,
         "-o",
         "ConnectTimeout=8",
         "seb@seb-is-pm",
+    ]
+
+
+def test_drone_health_threads_explicit_ssh_config_from_environment(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_check(
+        host,
+        device,
+        baud,
+        timeout,
+        *,
+        ssh_config,
+    ):
+        calls.append((host, device, baud, timeout, ssh_config))
+        return True
+
+    monkeypatch.setattr(health, "check_pi_link", fake_check)
+
+    result = health.run(
+        ["--pi-only"],
+        environ={
+            "PI_HOST": "seb@192.168.4.1",
+            "SSH_CONFIG": "/tmp/custom-ssh-config",
+        },
+    )
+
+    assert result == 0
+    assert calls == [
+        (
+            "seb@192.168.4.1",
+            "/dev/serial0",
+            115200,
+            10.0,
+            "/tmp/custom-ssh-config",
+        )
     ]

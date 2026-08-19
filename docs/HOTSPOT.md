@@ -9,9 +9,34 @@ Dieses Dokument beschreibt, wie du dich mit dem Wi-Fi-Hotspot des Raspberry Pi v
 Der Hotspot wird beim Booten des Pi automatisch gestartet.
 
 * **Netzwerkname (SSID):** `AI-Drone-Zero`
-* **Passwort:** `aidrone123`
+* **Passwort:** nur auf dem Pi bzw. den verbundenen Geräten gespeichert; nicht
+  im Repository
 * **IP-Adresse des Pi (Gateway):** `192.168.4.1`
 * **IP-Bereich für Clients:** `192.168.4.10` bis `192.168.4.254`
+
+Konfiguration aus diesem Repository:
+
+```bash
+sudo scripts/setup-pi-hotspot.sh
+```
+
+Das Skript fragt das WPA2-Passwort verdeckt ab. Für eine nicht-interaktive
+Einrichtung kann eine nur für `root` lesbare Datei verwendet werden:
+
+```bash
+sudo scripts/setup-pi-hotspot.sh --password-file /root/hotspot-passphrase
+```
+
+Die Option `--password` wird absichtlich abgelehnt, damit das Passwort nicht in
+der aufrufenden Shell-History landet. Die Passwortdatei muss `root` (UID 0)
+gehören; Gruppe und andere Benutzer dürfen keinerlei Rechte daran haben (zum
+Beispiel Modus `0600`). Sie darf nicht in das Repository kopiert werden.
+
+Das Skript selbst gibt die Passphrase nicht aus und akzeptiert sie nicht als
+eigenes Kommandozeilenargument. Beim NetworkManager-Pfad wird sie jedoch intern
+als Argument an den Kindprozess `nmcli` übergeben und kann dort kurzzeitig für
+privilegierte lokale Prozessinspektion sichtbar sein. Führe die Einrichtung
+daher nur auf einem vertrauenswürdigen Pi aus.
 
 ---
 
@@ -21,11 +46,12 @@ Da das WLAN des Pi standardmäßig **kein Internet** hat, versuchen moderne Smar
 
 ### Schritt-für-Schritt-Anleitung:
 1. **Mobile Daten ausschalten:** Deaktiviere vorübergehend die mobilen Daten (LTE/5G) auf deinem Smartphone.
-2. **Mit WLAN verbinden:** Wähle das WLAN `AI-Drone-Zero` aus und gib das Passwort `aidrone123` ein.
+2. **Mit WLAN verbinden:** Wähle das WLAN `AI-Drone-Zero` aus und gib das auf
+   dem Gerät gespeicherte bzw. von der Projektleitung bereitgestellte Passwort ein.
 3. **Hinweis bestätigen:** Nach dem Verbinden erscheint meist eine Meldung wie *"Dieses WLAN hat keine Internetverbindung. Trotzdem verbinden?"*. Bestätige dies unbedingt mit **"Ja" / "Verbunden bleiben"**.
 4. **Testen:** Öffne eine Terminal-App auf dem Smartphone (z. B. *Termux* auf Android oder *iNetTools* auf iOS) und teste die Verbindung:
    * **Ping:** `ping 192.168.4.1`
-   * **SSH:** `ssh seb@192.168.4.1` (Passwort: `1234`)
+   * **SSH:** `ssh -F /dev/null seb@192.168.4.1` (Passwort interaktiv eingeben)
 
 ---
 
@@ -61,4 +87,7 @@ Der Hotspot ist so konfiguriert, dass er als **Fallback** (Ausweichlösung) dien
 
 Du musst also nichts manuell umschalten. Der Pi entscheidet beim Booten selbstständig, welcher Modus gestartet wird.
 
-Auf dem Campus der Frankfurt UAS ist zusätzlich das WLAN `eduroam` als bevorzugtes Client-Netz eingerichtet – der Pi hat dort automatisch Internet und ist über Tailscale erreichbar. Details: [eduroam WLAN auf dem Raspberry Pi](docs/EDUROAM_SETUP.md).
+Auf dem Campus der Frankfurt UAS ist zusätzlich das WLAN `eduroam` als bevorzugtes Client-Netz eingerichtet – der Pi hat dort automatisch Internet und ist über Tailscale erreichbar. Details: [eduroam WLAN auf dem Raspberry Pi](EDUROAM_SETUP.md).
+
+Für gleichzeitiges Internet und den weiterhin aktiven Hotspot siehe
+[Dual-Interface-Uplink](NETWORK_UPLINK.md).

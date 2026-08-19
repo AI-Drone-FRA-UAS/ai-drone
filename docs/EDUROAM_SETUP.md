@@ -5,7 +5,7 @@ Eingerichtet und verifiziert am 2026-07-15.
 Der Raspberry Pi (`seb-is-pm`) verbindet sich auf dem Campus der Frankfurt UAS
 automatisch mit dem WLAN `eduroam` und hat dadurch überall auf dem Campus
 Internet. Ausserhalb des Campus fällt er weiter auf den eigenen Hotspot
-`AI-Drone-Zero` zurück (siehe [README_HOTSPOT.md](../README_HOTSPOT.md)).
+`AI-Drone-Zero` zurück (siehe [Hotspot-Dokumentation](HOTSPOT.md)).
 
 ---
 
@@ -16,12 +16,12 @@ Internet. Ausserhalb des Campus fällt er weiter auf den eigenen Hotspot
 
 | Netz (NM-Profil)     | Typ            | Priorität | Wann aktiv                                  |
 | -------------------- | -------------- | --------: | ------------------------------------------- |
-| `Xyz`                | Client (Handy) |       100 | Handy-Hotspot in Reichweite                 |
-| `Espresso Macchiato` | Client (Handy) |       100 | Handy-Hotspot in Reichweite                 |
+| `<PHONE-HOTSPOT>`    | Client (Handy) |       100 | Handy-Hotspot in Reichweite                 |
+| `<PHONE-HOTSPOT-2>`  | Client (Handy) |       100 | Handy-Hotspot in Reichweite                 |
 | `eduroam`            | Client         |         5 | Auf dem Campus                              |
 | `Hotspot`            | Access Point   |       -10 | Fallback, wenn kein Client-Netz erreichbar  |
 
-Die Handy-Hotspots (`Xyz`, `Espresso Macchiato`, Priorität `100`) haben Vorrang
+Die gespeicherten Handy-Hotspots (Namen nicht im Repository, Priorität `100`) haben Vorrang
 vor `eduroam` – ist ein Handy-Hotspot in Reichweite, nutzt der Pi diesen. Weitere
 Handy-Hotspots ergänzt man analog mit Priorität `100`:
 
@@ -36,8 +36,10 @@ sudo nmcli connection modify "<Hotspot-Name>" connection.autoconnect-priority 10
   Fallback-Hotspot `AI-Drone-Zero` (`192.168.4.1`). Dieser hat selbst **kein**
   Internet.
 
-Wichtig: Der **Tailscale-Knoten des Pi ist nur online, wenn der Pi Internet
-hat** – also auf `eduroam`, nicht am Hotspot. Siehe Abschnitt 4.
+Wichtig: Internetzugang allein genügt nicht: Tailscale muss auf dem Pi außerdem
+angemeldet und verbunden sein. Beim letzten Check war es ausgeloggt/offline.
+Nach einer autorisierten Neuanmeldung kann der Knoten auf `eduroam`, aber nicht
+am internetlosen Fallback-Hotspot online sein. Siehe Abschnitt 4.
 
 ---
 
@@ -52,7 +54,7 @@ das eduroam Configuration Assistant Tool). Angelegt als NetworkManager-Profil
 | -------------------- | ----------------------------------------------------------- |
 | SSID                 | `eduroam`                                                   |
 | EAP / Phase 2        | `PEAP` / `MSCHAPV2`                                         |
-| Identität            | `wlangast1@frankfurt-university.de` (WLAN-Gast-Account)     |
+| Identität            | `<ACCOUNT>@frankfurt-university.de` (WLAN-Gast-Account)     |
 | Anonyme Identität    | `anonymous@frankfurt-university.de`                        |
 | CA-Zertifikat        | `/etc/ssl/certs/eduroam-fra-uas-ca.pem`                    |
 | Server (Domain-Match)| `cit.frankfurt-university.de` (`rad-srv-01/02...`)         |
@@ -101,7 +103,7 @@ sudo nmcli connection modify eduroam \
   802-11-wireless-security.key-mgmt wpa-eap \
   802-1x.eap peap \
   802-1x.phase2-auth mschapv2 \
-  802-1x.identity "wlangast1@frankfurt-university.de" \
+  802-1x.identity "<ACCOUNT>@frankfurt-university.de" \
   802-1x.anonymous-identity "anonymous@frankfurt-university.de" \
   802-1x.password "<GAST_PASSWORT>" \
   802-1x.ca-cert /etc/ssl/certs/eduroam-fra-uas-ca.pem \
@@ -131,16 +133,16 @@ sudo nmcli connection up Hotspot        # zurück zum Fallback-AP
 
 ## 4. Fernzugriff über Tailscale
 
-Sobald der Pi auf `eduroam` (oder einem anderen Netz mit Internet) ist, geht
-sein Tailscale-Knoten online und ist erreichbar – unabhängig davon, in welchem
-WLAN sich der Laptop befindet (der Laptop braucht nur *irgendeine*
-Internetverbindung).
+Wenn der Pi auf `eduroam` (oder einem anderen Netz mit Internet) **und bei
+Tailscale angemeldet** ist, kann sein Tailscale-Knoten online und unabhängig vom
+Laptop-WLAN erreichbar sein. Beim letzten verifizierten Stand war Tailscale auf
+dem Pi ausgeloggt; erst Status prüfen und bei Bedarf autorisiert neu anmelden.
 
-- Pi im Tailnet: `seb-is-pm`, erreichbar unter **`100.84.84.1`**.
+- Pi im Tailnet: `seb-is-pm`; die private Tailnet-IP wird nicht dokumentiert.
 - SSH über Tailscale:
 
   ```bash
-  ssh -tt seb@100.84.84.1
+  ssh -tt seb@seb-is-pm
   ```
 
   `-tt` (Pseudo-Terminal erzwingen) ist nötig: Pi und Laptop sind in
@@ -152,7 +154,7 @@ Internetverbindung).
 
   ```bash
   tailscale status | grep seb-is-pm
-  tailscale ping 100.84.84.1
+  tailscale ping seb-is-pm
   ```
 
 ---
@@ -161,8 +163,8 @@ Internetverbindung).
 
 **„Tailscale connected, aber keine Verbindung zu anderen Geräten."**
 Fast immer, weil der Pi gerade am Hotspot-AP hängt und dort **kein Internet**
-hat → sein Tailscale-Knoten ist offline. Sobald der Pi auf `eduroam` ist
-(Campus), kommt er innerhalb ~15 s online. Prüfen:
+hat → sein Tailscale-Knoten ist offline. Auf `eduroam` wird er nur online, wenn
+Tailscale weiterhin angemeldet ist. Prüfen:
 
 ```bash
 # auf dem Pi:
@@ -190,3 +192,7 @@ Das ist so gewollt: auf dem Campus nutzt der Pi `eduroam` und betreibt keinen
 eigenen AP. Zugriff dort über Tailscale (Abschnitt 4). Der Hotspot
 `AI-Drone-Zero` erscheint erst wieder, wenn kein bekanntes Client-Netz in
 Reichweite ist.
+
+Soll `AI-Drone-Zero` gleichzeitig mit eduroam aktiv bleiben, wird eine zweite
+Netzwerkschnittstelle benötigt. Siehe
+[Internet access while retaining AI-Drone-Zero](NETWORK_UPLINK.md).

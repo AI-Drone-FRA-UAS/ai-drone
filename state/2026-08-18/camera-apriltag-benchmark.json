@@ -1,0 +1,41 @@
+{
+  "camera_mount_state": "connected but loose; uncontrolled scene and focus",
+  "opencv": {
+    "backend": "OpenCV 4.11.0 ArucoDetector DICT_APRILTAG_36h11",
+    "results": [
+      {
+        "capture_plus_detection_fps": 29.054566432424263,
+        "detections": 0,
+        "detector_only_fps": 76.17871664726859,
+        "resolution": "640x480"
+      },
+      {
+        "capture_plus_detection_fps": 14.899033190380319,
+        "detections": 0,
+        "detector_only_fps": 20.40411000967987,
+        "resolution": "1280x960"
+      }
+    ]
+  },
+  "native_apriltag": {
+    "backend": "AprilTag 3.4.2, 4 threads, quad_decimate 1.0",
+    "results": [
+      {
+        "capture_plus_detection_fps": 29.733646932347746,
+        "detections": 0,
+        "detector_only_fps": 36.502309892541625,
+        "resolution": "640x480"
+      },
+      {
+        "capture_plus_detection_fps": 13.246755771778203,
+        "detections": 0,
+        "detector_only_fps": 15.110697671975236,
+        "resolution": "1280x960"
+      }
+    ]
+  },
+  "notes": [
+    "No physical tag was placed in view, so these are throughput tests only.",
+    "Laplacian variance was approximately 2.4 at 640x480 and 3.4 at 1280x960; focus and scene detail must be checked after rigid mounting."
+  ]
+}

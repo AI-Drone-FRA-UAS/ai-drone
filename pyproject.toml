@@ -13,14 +13,23 @@ dependencies = [
 ]
 
 [project.scripts]
-drone-connect = "ai_drone.pi_usb_ssh:main"
+autoconnect = "ai_drone.connect:auto_main"
+drone-apriltag = "ai_drone.cli.apriltag:main"
+drone-config-export = "ai_drone.cli.config_export:main"
+drone-config-sync = "ai_drone.config_sync:main"
 drone-console = "ai_drone.console:main"
+drone-control = "ai_drone.cli.control:main"
 drone-deploy = "ai_drone.deploy:main"
 drone-health = "ai_drone.health:main"
-drone-pi-usb-ssh = "ai_drone.pi_usb_ssh:main"
+drone-lidar = "ai_drone.cli.lidar:main"
+drone-motor-test = "ai_drone.cli.motor_test:main"
+drone-picam = "ai_drone.cli.picam:main"
+drone-record = "ai_drone.cli.record:main"
+drone-servo = "ai_drone.cli.servo:main"
+manuconnect = "ai_drone.connect:manual_main"
 
 [build-system]
-requires = ["uv_build>=0.11.17,<0.12.0"]
+requires = ["uv_build>=0.12.5,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -43,3 +52,16 @@ dev = [
 # Runtime commands stay lightweight on the laptop. drone-deploy explicitly adds
 # the raspi group on the Pi; development tools are opt-in with --group dev.
 default-groups = []
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "C90", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+testpaths = ["tests"]

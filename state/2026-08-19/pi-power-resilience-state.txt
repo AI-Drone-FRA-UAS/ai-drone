@@ -1,0 +1,53 @@
+Captured 2026-08-19 through Tailscale (seb@seb-is-pm) after applying
+scripts/setup-pi-power-resilience.sh. Read-only except where noted.
+
+== Identity ==
+model: Raspberry Pi Zero 2 W Rev 1.0
+os: Debian GNU/Linux 13 (trixie)
+kernel: 6.18.39+rpt-rpi-v8
+uptime: rebooted 13:57 for verification
+
+== Uplink ==
+wlan0 mode: client (NetworkManager profile active)
+wlan0 address: 10.189.46.25/24
+default route: present via wlan0
+tailscale: 100.84.84.2 (online)
+usb0: DOWN (gadget fallback, idle)
+hotspot profile: installed, autoconnect fallback, not active
+
+== Power-loss hardening ==
+apt-daily.timer: masked
+apt-daily-upgrade.timer: masked
+journald storage: persistent
+journald cap: 64M
+journal on disk: 20M (migrated with journalctl --flush)
+journal survives reboot: VERIFIED 13:57 -- list-boots shows boots -1 and 0
+runtime watchdog: 1min
+reboot watchdog: 2min
+root errors behavior (superblock): Remount read-only
+root errors behavior (live mount): VERIFIED after the 13:57 reboot
+  /proc/mounts reads 'rw,noatime' with no errors= option. ext4 prints
+  errors= only when live behavior differs from the superblock default, so
+  its absence confirms the mount adopted remount-ro. Before the reboot the
+  same command printed errors=continue.
+root mount options: rw,noatime
+cmdline fsck: fsck.repair=yes
+swap: zram only (/dev/zram0), no SD swapfile
+recovery unit: disabled (armed only by pi-safe-upgrade.sh)
+
+== Safety invariant ==
+vehicle-control units enabled at boot: none
+user crontab: no crontab for seb
+
+== Hardware ==
+camera: 0 : imx500 [4056x3040 10-bit RGGB] (/base/soc/i2c0mux/i2c@1/imx500@1a)
+fc link: /dev/serial0 -> ttyAMA0
+temp: 42.9'C
+throttled: 0x0
+disk: 5.0G used of 29G (18%)
+memory: 415Mi total, 222Mi available
+
+== Deployed runtime ==
+path: /home/seb/ai-drone (file sync; git is not installed on the Pi)
+venv python: Python 3.13.5
+picamera2 import: ok

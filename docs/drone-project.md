@@ -1,7 +1,12 @@
-# AI Drone — Implementation Reference
+# AI Drone — Original Requirements and Hardware Inventory
 
-> This document describes what must be implemented and what hardware and software is available.
-> It is intended as a concise technical reference.
+> This is a historical procurement/requirements brief, not the authoritative
+> live state or an operating procedure. Read [HANDOFF.md](HANDOFF.md) before
+> hardware, configuration, motor, or flight work. The current vehicle runs
+> ArduPilot, its Pi and downward sensor links have been verified, the payload
+> servo and forward rangefinder are disconnected, and the camera is loosely
+> held facing forward. Radio credentials have deliberately been removed; rotate
+> any binding phrase that was previously committed before relying on it.
 
 ---
 
@@ -18,8 +23,10 @@
 
 ### 1.1 — Autopilot Integration
 
-Flash and configure **ArduPilot** as the flight controller firmware to replace the default
-Betaflight installation. Set up mission planning and ground control via **QGroundControl**.
+**ArduPilot Copter 4.6.3** is already installed on the flight controller and
+its disarmed MAVLink links have been verified. Configuration validation,
+pre-arm remediation, and later mission planning through **QGroundControl**
+remain staged work; no armed or autonomous flight has been validated.
 
 ### 1.2 — Position Hold and Altitude Hold (Indoor / GPS-Denied)
 
@@ -29,15 +36,18 @@ provides both:
 - **LiDAR** — downward-facing distance measurement for altitude hold
 - **Optical Flow** — horizontal velocity estimation for position hold without GPS
 
-The MTF-01P cable is already soldered to the flight controller. The sensor end must be connected
-and the sensor must be permanently mounted (requires frame work — see 1.4).
+The MTF-01P is connected to flight-controller UART5 and its telemetry transport
+has been verified. Permanent mounting, calibration, orientation, and power
+reliability still require validation (see 1.4).
 
 ### 1.3 — Delivery / Payload Drop Mechanism
 
 Design, build, and integrate a mechanism that can release a payload on command.
 
 - Use one of the provided **Micro Servo 9g** units as the actuator.
-- The servo is controlled via the flight controller (ArduPilot servo output).
+- The current repository's guarded servo utility drives Raspberry Pi BCM12
+  directly. The servo is physically disconnected and its power, common ground,
+  limits, linkage, and fail-safe position have not been bench-validated.
 - 3D printing is available for custom brackets or mounts.
 
 ### 1.4 — Frame Extension
@@ -55,10 +65,16 @@ M3 standoffs and screws (M3×9 mm, M3×12 mm) are provided for mounting.
 
 Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 
-- The RPi cable is already soldered to the flight controller. The RPi end must be connected.
-- Mount the **Raspberry Pi AI Camera Module** on the drone (frame extension from 1.4).
-- Run AI inference (e.g. object detection with **TensorFlow Lite** or **YOLO**) on the RPi to
-  support autonomous delivery targeting.
+- The RPi is connected to flight-controller UART4 and `/dev/serial0` MAVLink
+  has been verified while disarmed.
+- Rigidly mount the **Raspberry Pi AI Camera Module** facing downward. It is
+  currently held by a small cable and faces forward, so metric floor-tag
+  geometry must not be trusted.
+- Run AI inference on the Pi. The current code uses the IMX500/modlib path for
+  person detection and CPU AprilTag detection. Guarded person-follow integration
+  remains available through `drone-control follow`, but live use is blocked
+  until its camera, calibration, preflight, and staged-flight gates pass;
+  AprilTag detection does not yet command a flight mission.
 - The **USB A/V Grabber (MacroSilicon MS210x)** can be used to capture the analog FPV camera
   feed on the RPi as an additional video source.
 
@@ -94,7 +110,7 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 |------|---------|
 | Radiomaster GX12 Remote Controller | ELRS Dual-Band Gemini-X, 868 MHz / 2.4 GHz |
 | Firmware | EdgeTX v2.11.5 |
-| Binding Phrase | `drone[1-3]ffm` (pre-configured to match the receiver) |
+| Binding Phrase | Not stored in the repository; provision and rotate securely |
 
 ### Computing & Sensing
 
@@ -169,7 +185,7 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 | **Model** | Flywoo GOKU GN745 AIO |
 | **MCU** | STM32F745, 216 MHz, 1 MB Flash |
 | **ESC** | 45 A, 2–6S, AM32 |
-| **Target firmware** | ArduPilot (currently ships with Betaflight v2025.12.2) |
+| **Current firmware** | ArduPilot Copter 4.6.3 (custom build) |
 
 ### Radio Link
 
@@ -178,7 +194,7 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 | **Receiver** | Radiomaster XR4 Gemini Xrossband Dual-Band ELRS |
 | **Protocol** | ExpressLRS (ELRS) |
 | **Firmware** | ExpressLRS 4.0.0 |
-| **Binding Phrase** | `drone1ffm` |
+| **Binding Phrase** | Not stored in the repository; provision and rotate securely |
 
 ### FPV Video System
 
@@ -201,13 +217,15 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 |----------|-------|
 | **GPS / Compass** | HGLRC M100 with integrated compass |
 
-### Pending Physical Integration
+### Current Physical Integration
 
-> These cables are **already soldered to the flight controller** but are not yet connected at
-> the other end. Connecting, configuring, and permanently mounting these components is part of
-> the implementation work.
+> The links below have been verified while disarmed. This does not validate
+> mounting, calibration, power reliability, altitude hold, or flight readiness.
 
 | Component | Status |
 |-----------|--------|
 | MicroAir MTF-01P (LiDAR / Optical Flow) | Connected on UART5; permanent mounting/power reliability still to verify |
 | Raspberry Pi Zero 2 WH | Connected on UART4; Pi `/dev/serial0` MAVLink verified |
+| Raspberry Pi AI Camera | Connected to Pi CSI; loosely cable-held and facing forward, not a calibrated nadir mount |
+| Payload servo | Disconnected; no actuation test is currently permitted |
+| Forward MT-15 rangefinder | Disconnected and untested; available mounting/wiring space is unconfirmed |

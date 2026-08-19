@@ -3,51 +3,44 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import platform
+import re
 import shlex
 import subprocess
-import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ai_drone.pi_targets import (
-    DEFAULT_PI_HOTSPOT_IP,
-    UsbTarget,
+    DEFAULT_DIRECT_SSH_CONFIG,
+    ConnectionTarget,
     ping_command,
-    resolve_usb_target,
+    resolve_connection_target,
+    ssh_base_command,
+    wait_for_ping,
 )
 
 MTU = "1412"
+_SAFE_INTERFACE = re.compile(r"[^\x00-\x1f\x7f]{1,128}\Z")
 
 
-def _parser(target: UsbTarget) -> argparse.ArgumentParser:
+def _parser(target: ConnectionTarget) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "SSH into the Pi over Wi-Fi/hotspot when reachable, otherwise bring "
-            "up the USB Ethernet link."
-        )
+        description="Configure the Pi USB Ethernet link and open SSH."
     )
     parser.add_argument("--pi-ip", default=target.pi_ip)
     parser.add_argument("--host-ip", default=target.host_ip)
     parser.add_argument("--pi-user", default=target.pi_user)
-    parser.add_argument("--pi-hostname", default=target.pi_hostname)
-    parser.add_argument("--usb-iface", default=target.usb_iface)
+    parser.add_argument(
+        "--usb-iface",
+        default=target.usb_iface,
+        help=(
+            "explicit USB gadget interface to configure; required for live setup "
+            "to avoid modifying an unrelated USB network adapter"
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=target.timeout_seconds)
-    parser.add_argument(
-        "--ssh-target",
-        action="append",
-        help="explicit SSH target to try before auto-detected targets; can repeat",
-    )
-    parser.add_argument(
-        "--network-only",
-        action="store_true",
-        help="only try existing Wi-Fi/hotspot/network SSH targets",
-    )
-    parser.add_argument(
-        "--usb-only",
-        action="store_true",
-        help="skip Wi-Fi/hotspot checks and configure the USB link immediately",
-    )
+    parser.add_argument("--ssh-config", default=target.ssh_config)
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -251,42 +244,17 @@ def config_commands(iface: str, host_ip: str, system: str) -> list[list[str]]:
     return linux_config_commands(iface, host_ip)
 
 
-def ssh_command(pi_user: str, pi_ip: str) -> list[str]:
+def ssh_command(
+    pi_user: str,
+    pi_ip: str,
+    ssh_config: str | None = DEFAULT_DIRECT_SSH_CONFIG,
+) -> list[str]:
     remote = (
         "sudo ip link set dev usb0 mtu 1412 2>/dev/null || "
         "sudo ifconfig usb0 mtu 1412 2>/dev/null || true; "
         "exec $SHELL --login"
     )
-    return ["ssh", "-t", f"{pi_user}@{pi_ip}", remote]
-
-
-def plain_ssh_command(target: str) -> list[str]:
-    return ["ssh", "-t", target]
-
-
-def _host_from_ssh_target(target: str) -> str:
-    return target.rsplit("@", 1)[-1]
-
-
-def network_ssh_targets(
-    pi_user: str,
-    pi_hostname: str,
-    pi_usb_ip: str,
-    explicit_targets: Sequence[str] | None = None,
-) -> list[str]:
-    candidates = [
-        *(explicit_targets or ()),
-        f"{pi_user}@{pi_hostname}.local",
-        f"{pi_user}@{pi_hostname}",
-        f"{pi_user}@{DEFAULT_PI_HOTSPOT_IP}",
-        f"{pi_user}@{pi_usb_ip}",
-    ]
-
-    unique: list[str] = []
-    for candidate in candidates:
-        if candidate and candidate not in unique:
-            unique.append(candidate)
-    return unique
+    return [*ssh_base_command(ssh_config), "-t", f"{pi_user}@{pi_ip}", remote]
 
 
 def _print_command(command: Sequence[str]) -> None:
@@ -299,179 +267,36 @@ def _run(command: Sequence[str], *, dry_run: bool) -> None:
         subprocess.run(command, check=True)
 
 
-def wait_for_iface(
-    timeout_seconds: int,
+def run_usb_transport(
+    args: argparse.Namespace,
+    defaults: ConnectionTarget,
     system: str,
-    *,
-    dry_run: bool,
-) -> str | None:
-    if dry_run:
-        print("  would auto-detect a USB/RNDIS Ethernet interface", flush=True)
-        return None
-
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        iface = find_usb_iface(system)
-        if iface:
-            return iface
-        time.sleep(2)
-    return None
-
-
-def wait_for_ping(
-    pi_ip: str,
-    timeout_seconds: int,
-    system: str,
-    *,
-    dry_run: bool,
-) -> bool:
-    command = ping_command(pi_ip, system)
-    if dry_run:
-        _print_command(command)
-        return True
-
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        completed = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if completed.returncode == 0:
-            return True
-        time.sleep(3)
-    return False
-
-
-def _host_responds(host: str, system: str) -> bool:
-    completed = subprocess.run(
-        ping_command(host, system),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return completed.returncode == 0
-
-
-def find_reachable_network_target(
-    targets: Sequence[str],
-    system: str,
-    *,
-    timeout_seconds: int = 0,
-) -> str | None:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        for target in targets:
-            if _host_responds(_host_from_ssh_target(target), system):
-                return target
-        if timeout_seconds <= 0 or time.monotonic() >= deadline:
-            return None
-        time.sleep(2)
-
-
-def print_network_targets(targets: Sequence[str], system: str) -> None:
-    print("Would try existing Wi-Fi/hotspot/network SSH targets first:", flush=True)
-    for target in targets:
-        _print_command(ping_command(_host_from_ssh_target(target), system))
-        _print_command(plain_ssh_command(target))
-
-
-def try_network_ssh(
-    targets: Sequence[str],
-    system: str,
-    *,
-    timeout_seconds: int = 0,
-    dry_run: bool,
-) -> bool:
-    if dry_run:
-        print_network_targets(targets, system)
-        return False
-
-    print("Checking existing Wi-Fi/hotspot/network SSH targets...", flush=True)
-    target = find_reachable_network_target(
-        targets,
-        system,
-        timeout_seconds=timeout_seconds,
-    )
-    if target is None:
-        return False
-
-    print(f"Pi is reachable at {_host_from_ssh_target(target)}.", flush=True)
-    _run(plain_ssh_command(target), dry_run=False)
-    return True
-
-
-def run(
-    arguments: Sequence[str] | None = None,
-    *,
-    environ: Mapping[str, str] | None = None,
 ) -> int:
-    defaults = resolve_usb_target(environ)
-    parser = _parser(defaults)
-    args = parser.parse_args(arguments)
-    if args.timeout <= 0:
-        parser.error("--timeout must be greater than zero")
-    if args.network_only and args.usb_only:
-        parser.error("--network-only and --usb-only cannot be used together")
-
-    system = platform.system()
-    targets = network_ssh_targets(
-        args.pi_user,
-        args.pi_hostname,
-        args.pi_ip,
-        args.ssh_target,
-    )
-
-    if not args.usb_only:
-        connected = try_network_ssh(
-            targets,
-            system,
-            timeout_seconds=args.timeout if args.network_only else 0,
-            dry_run=args.dry_run,
-        )
-        if connected:
-            return 0
-        if args.network_only:
-            if args.dry_run:
-                return 0
-            print("No existing Wi-Fi/hotspot/network SSH target responded.", flush=True)
-            return 1
-        if not args.dry_run:
-            print(
-                "No existing network target responded; falling back to USB.", flush=True
-            )
-
-    if args.dry_run:
-        print("If none of those respond, would configure USB Ethernet:", flush=True)
-
     print("Waiting for Pi USB Ethernet interface...", flush=True)
-    print(f"Target: {args.pi_hostname}", flush=True)
+    print(f"Target: {args.pi_user}@{args.pi_ip}", flush=True)
     print(
         f"Use a data-capable USB cable from the laptop to the {defaults.port_hint}.",
         flush=True,
     )
 
-    if args.usb_iface:
-        if not args.dry_run and not iface_exists(args.usb_iface, system):
-            print(f"USB interface does not exist: {args.usb_iface}", flush=True)
-            return 1
-        iface = args.usb_iface
-    else:
-        iface = wait_for_iface(args.timeout, system, dry_run=args.dry_run)
-        if iface is None and args.dry_run:
-            iface = "<auto-detected-interface>"
-
-    if not iface:
-        print("Timed out waiting for a USB Ethernet interface.", flush=True)
-        print("Check the cable, Pi USB port, and Pi boot status.", flush=True)
-        if system == "Windows":
+    if not args.usb_iface:
+        candidate = None if args.dry_run else find_usb_iface(system)
+        print(
+            "Refusing to reconfigure an auto-detected network adapter. Pass "
+            "--usb-iface after verifying the Pi USB gadget interface.",
+            flush=True,
+        )
+        if candidate:
             print(
-                "If Windows found the adapter under a custom name, rerun with "
-                '--usb-iface "Adapter Name".',
+                f"Unverified candidate: {candidate}. Inspect it, then rerun with "
+                f"--usb-iface {shlex.quote(candidate)}.",
                 flush=True,
             )
         return 1
+    if not args.dry_run and not iface_exists(args.usb_iface, system):
+        print(f"USB interface does not exist: {args.usb_iface}", flush=True)
+        return 1
+    iface = args.usb_iface
 
     print(f"Found USB network interface: {iface}", flush=True)
     print(f"Configuring laptop side as {args.host_ip}/24...", flush=True)
@@ -480,18 +305,58 @@ def run(
             _run(command, dry_run=args.dry_run)
 
     print(f"Waiting for Pi at {args.pi_ip}...", flush=True)
-    if not wait_for_ping(args.pi_ip, args.timeout, system, dry_run=args.dry_run):
+    reachable = True
+    if args.dry_run:
+        _print_command(ping_command(args.pi_ip, system))
+    else:
+        reachable = wait_for_ping(args.pi_ip, args.timeout, system)
+    if not reachable:
         print(f"Timed out waiting for {args.pi_ip}.", flush=True)
         print(f"Try: ping {args.pi_ip}", flush=True)
-        print(f"Try: ssh {args.pi_user}@{args.pi_ip}", flush=True)
+        retry = ssh_command(args.pi_user, args.pi_ip, args.ssh_config)
+        print(f"Try: {shlex.join(retry[:-1])}", flush=True)
         return 1
 
     print("Pi answers ping.", flush=True)
     print(
         "Connecting with SSH. Use the Pi password you set while flashing.", flush=True
     )
-    _run(ssh_command(args.pi_user, args.pi_ip), dry_run=args.dry_run)
+    _run(
+        ssh_command(args.pi_user, args.pi_ip, args.ssh_config),
+        dry_run=args.dry_run,
+    )
     return 0
+
+
+def run(
+    arguments: Sequence[str] | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> int:
+    defaults = resolve_connection_target(environ)
+    parser = _parser(defaults)
+    args = parser.parse_args(arguments)
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
+    try:
+        pi_ip = ipaddress.IPv4Address(args.pi_ip)
+        host_ip = ipaddress.IPv4Address(args.host_ip)
+    except ipaddress.AddressValueError as error:
+        parser.error(f"--pi-ip and --host-ip must be valid IPv4 addresses: {error}")
+    if pi_ip == host_ip:
+        parser.error("--pi-ip and --host-ip must be distinct")
+    if not pi_ip.is_private or not host_ip.is_private:
+        parser.error("--pi-ip and --host-ip must be private addresses")
+    if ipaddress.IPv4Network(f"{pi_ip}/24", strict=False) != ipaddress.IPv4Network(
+        f"{host_ip}/24", strict=False
+    ):
+        parser.error("--pi-ip and --host-ip must be in the same /24 subnet")
+    if args.usb_iface is not None and (
+        _SAFE_INTERFACE.fullmatch(args.usb_iface) is None
+        or args.usb_iface.startswith("-")
+    ):
+        parser.error("--usb-iface contains unsafe characters or is too long")
+    return run_usb_transport(args, defaults, platform.system())
 
 
 def main() -> None:

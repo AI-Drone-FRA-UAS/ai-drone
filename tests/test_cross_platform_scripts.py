@@ -1,45 +1,84 @@
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
-from ai_drone import deploy, pi_usb_ssh
+import pytest
+
+from ai_drone import connect, deploy, pi_usb_ssh, pi_wifi
 from ai_drone.pi_targets import (
+    DEFAULT_PI_AP_SSID,
     DEFAULT_PI_HOSTNAME,
+    DEFAULT_PI_HOTSPOT_IP,
     DEFAULT_PI_USB_IP,
+    ConnectionTarget,
     ping_command,
+    resolve_connection_target,
     resolve_deploy_target,
-    resolve_usb_target,
 )
 
 
-def test_deploy_target_prefers_reachable_usb_ip(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("environment", "reachable", "expected_address", "expected_probes"),
+    [
+        (
+            {"USB_IFACE": "usb0"},
+            {DEFAULT_PI_HOSTNAME, DEFAULT_PI_HOTSPOT_IP, DEFAULT_PI_USB_IP},
+            DEFAULT_PI_HOSTNAME,
+            [DEFAULT_PI_HOSTNAME],
+        ),
+        (
+            {},
+            {DEFAULT_PI_HOTSPOT_IP, DEFAULT_PI_USB_IP},
+            DEFAULT_PI_HOTSPOT_IP,
+            [DEFAULT_PI_HOSTNAME, DEFAULT_PI_HOTSPOT_IP],
+        ),
+        (
+            {"USB_IFACE": "usb0"},
+            {DEFAULT_PI_USB_IP},
+            DEFAULT_PI_USB_IP,
+            [DEFAULT_PI_HOSTNAME, DEFAULT_PI_HOTSPOT_IP, DEFAULT_PI_USB_IP],
+        ),
+        (
+            {},
+            {DEFAULT_PI_USB_IP},
+            DEFAULT_PI_HOSTNAME,
+            [DEFAULT_PI_HOSTNAME, DEFAULT_PI_HOTSPOT_IP],
+        ),
+    ],
+)
+def test_deploy_target_uses_common_safe_connection_priority(
+    tmp_path: Path,
+    environment: dict[str, str],
+    reachable: set[str],
+    expected_address: str,
+    expected_probes: list[str],
+) -> None:
+    probes: list[str] = []
+
+    def ping(host: str) -> bool:
+        probes.append(host)
+        return host in reachable
+
     target = resolve_deploy_target(
-        {"HOME": str(tmp_path)},
-        ping=lambda host: host == DEFAULT_PI_USB_IP,
+        {"HOME": str(tmp_path), **environment},
+        ping=ping,
     )
 
-    assert target.ssh_target == "seb@192.168.7.2"
+    assert target.ssh_target == f"seb@{expected_address}"
     assert target.user == "seb"
-    assert target.address == "192.168.7.2"
+    assert target.address == expected_address
     assert target.project_dir == "/home/seb/ai-drone"
-
-
-def test_deploy_target_falls_back_to_hostname(tmp_path: Path) -> None:
-    target = resolve_deploy_target(
-        {"HOME": str(tmp_path)},
-        ping=lambda host: host == DEFAULT_PI_HOSTNAME,
-    )
-
-    assert target.ssh_target == "seb@seb-is-pm"
-    assert target.address == "seb-is-pm"
+    assert probes == expected_probes
 
 
 def test_deploy_target_uses_explicit_host_user_and_dir(tmp_path: Path) -> None:
     target = resolve_deploy_target(
         {
             "HOME": str(tmp_path),
-            "PI_HOST": "pilot@drone.local",
+            "PI_HOST": "drone.local",
+            "PI_USER": "pilot",
             "PI_DIR": "/srv/ai-drone",
         },
         ping=lambda _host: False,
@@ -117,7 +156,109 @@ def test_deploy_mode_command_forwards_lidar_arguments(tmp_path: Path) -> None:
 
     assert command is not None
     assert command[:2] == ["ssh", "-t"]
-    assert "test_lidar.py --device /dev/serial0 --duration 10" in command[-1]
+    assert (
+        ".venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0 --duration 10"
+        in command[-1]
+    )
+
+
+def test_deploy_mode_command_uses_module_for_picam(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--picam", "--port", "9090"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.picam --port 9090" in command[-1]
+
+
+def test_deploy_mode_command_uses_module_for_apriltag(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--apriltag", "--backend", "native", "--duration", "10"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert (
+        ".venv/bin/python -m ai_drone.cli.apriltag "
+        "--backend native --duration 10" in command[-1]
+    )
+
+
+def test_deploy_mode_command_uses_module_for_record(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        ["--record", "--duration", "12.5"],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.record --duration 12.5" in command[-1]
+
+
+def test_deploy_mode_command_uses_module_for_servo(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        [
+            "--servo",
+            "--mode",
+            "center",
+            "--confirm-actuation",
+            "SERVO_CLEAR",
+        ],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.servo --mode center" in command[-1]
+    assert "--confirm-actuation SERVO_CLEAR" in command[-1]
+
+
+def test_deploy_mode_command_uses_guarded_motor_test_module(tmp_path: Path) -> None:
+    plan = deploy.build_plan(
+        [
+            "--motor-test",
+            "--motor",
+            "1",
+            "--confirm-props-removed",
+            "PROPS_REMOVED",
+            "--confirm-vehicle-secured",
+            "VEHICLE_SECURED",
+        ],
+        environ={"HOME": str(tmp_path)},
+        system="Linux",
+        ping=lambda _host: False,
+        rsync_path=None,
+    )
+
+    command = deploy.mode_command(plan)
+
+    assert command is not None
+    assert command[:2] == ["ssh", "-t"]
+    assert ".venv/bin/python -m ai_drone.cli.motor_test" in command[-1]
+    assert "PROPS_REMOVED" in command[-1]
 
 
 def test_tar_sync_paths_exclude_local_caches(tmp_path: Path) -> None:
@@ -139,23 +280,37 @@ def test_tar_sync_paths_exclude_local_caches(tmp_path: Path) -> None:
     assert "tests/__pycache__/ignored.pyc" not in paths
 
 
-def test_usb_target_reads_environment() -> None:
-    target = resolve_usb_target(
-        {
-            "PI_IP": "10.0.0.2",
-            "HOST_IP": "10.0.0.1",
-            "PI_USER": "pilot",
-            "PI_HOSTNAME": "drone-pi",
-            "USB_IFACE": "Ethernet 4",
-            "TIMEOUT_SECONDS": "7",
-        }
-    )
+def test_connection_target_reads_environment() -> None:
+    environ = {
+        "PI_IP": "10.0.0.2",
+        "HOST_IP": "10.0.0.1",
+        "PI_USER": "pilot",
+        "PI_HOSTNAME": "drone-pi",
+        "USB_IFACE": "Ethernet 4",
+        "TIMEOUT_SECONDS": "7",
+        "SSH_CONFIG": "/tmp/ai-drone-ssh-config",
+    }
+    target = resolve_connection_target(environ)
 
+    assert isinstance(target, ConnectionTarget)
     assert target.pi_ip == "10.0.0.2"
     assert target.host_ip == "10.0.0.1"
     assert target.pi_user == "pilot"
     assert target.usb_iface == "Ethernet 4"
     assert target.timeout_seconds == 7
+    assert target.ssh_config == "/tmp/ai-drone-ssh-config"
+
+
+def test_connection_target_bypasses_user_ssh_config_by_default() -> None:
+    target = resolve_connection_target({})
+
+    assert target.ssh_config == os.devnull
+
+
+def test_connection_target_allows_explicit_default_ssh_config_opt_in() -> None:
+    target = resolve_connection_target({"SSH_CONFIG": ""})
+
+    assert target.ssh_config is None
 
 
 def test_ping_command_is_platform_specific() -> None:
@@ -208,57 +363,6 @@ def test_usb_windows_config_commands() -> None:
     ]
 
 
-def test_network_ssh_targets_try_hostname_hotspot_and_usb_ip() -> None:
-    assert pi_usb_ssh.network_ssh_targets(
-        "seb",
-        "seb-is-pm",
-        "192.168.7.2",
-        ["seb@custom.local"],
-    ) == [
-        "seb@custom.local",
-        "seb@seb-is-pm.local",
-        "seb@seb-is-pm",
-        "seb@192.168.4.1",
-        "seb@192.168.7.2",
-    ]
-
-
-def test_network_only_dry_run_prints_plain_ssh_targets(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
-
-    result = pi_usb_ssh.run(
-        ["--network-only", "--dry-run", "--ssh-target", "seb@drone.local"],
-        environ={"TIMEOUT_SECONDS": "1"},
-    )
-
-    output = capsys.readouterr().out
-    assert result == 0
-    assert "Would try existing Wi-Fi/hotspot/network SSH targets first" in output
-    assert "ssh -t seb@drone.local" in output
-    assert "Configuring laptop side" not in output
-
-
-def test_network_only_uses_reachable_target(monkeypatch) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:1] == ["ping"] and command[-1] == "192.168.4.1":
-            return _Completed(0)
-        if command[:1] == ["ping"]:
-            return _Completed(1)
-        return _Completed(0)
-
-    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(pi_usb_ssh.subprocess, "run", fake_run)
-
-    result = pi_usb_ssh.run(["--network-only"], environ={"TIMEOUT_SECONDS": "1"})
-
-    assert result == 0
-    assert ["ssh", "-t", "seb@192.168.4.1"] in calls
-    assert not any(command[:2] == ["sudo", "ip"] for command in calls)
-
-
 def test_windows_find_script_prefers_active_usb_adapter() -> None:
     script = pi_usb_ssh.windows_find_script()
 
@@ -279,18 +383,237 @@ def test_usb_dry_run_uses_windows_commands(monkeypatch, capsys) -> None:
     assert result == 0
     assert "Set-NetIPInterface" in output
     assert "netsh interface ipv4 set subinterface" in output
-    assert "ssh -t seb@192.168.7.2" in output
+    assert f"ssh -F {os.devnull} -t seb@192.168.7.2" in output
 
 
-def test_drone_connect_entrypoint_is_primary_alias() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
-
-    assert pyproject["project"]["scripts"]["drone-connect"] == (
-        "ai_drone.pi_usb_ssh:main"
+def test_usb_ssh_command_uses_configured_ssh_config() -> None:
+    command = pi_usb_ssh.ssh_command(
+        "pilot",
+        "192.168.7.2",
+        "/tmp/custom-ssh-config",
     )
-    assert pyproject["project"]["scripts"]["drone-pi-usb-ssh"] == (
-        "ai_drone.pi_usb_ssh:main"
+
+    assert command[:5] == [
+        "ssh",
+        "-F",
+        "/tmp/custom-ssh-config",
+        "-t",
+        "pilot@192.168.7.2",
+    ]
+
+
+def test_usb_live_setup_refuses_guessed_interface(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(pi_usb_ssh, "find_usb_iface", lambda _system: "usb-dock0")
+    monkeypatch.setattr(
+        pi_usb_ssh,
+        "config_commands",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("guessed interfaces must never be configured")
+        ),
     )
+
+    result = pi_usb_ssh.run([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 1
+    assert "Refusing to reconfigure" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"PI_IP": "not-an-ip", "HOST_IP": "192.168.7.1"},
+        {"PI_IP": "192.168.7.1", "HOST_IP": "192.168.7.1"},
+        {"PI_IP": "192.168.8.2", "HOST_IP": "192.168.7.1"},
+        {"PI_IP": "192.168.7.2", "HOST_IP": "192.168.7.1", "USB_IFACE": "-bad"},
+    ],
+)
+def test_usb_rejects_unsafe_network_arguments_before_mutation(
+    monkeypatch, environment
+) -> None:
+    monkeypatch.setattr(
+        pi_usb_ssh,
+        "run_usb_transport",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid arguments must be rejected before mutation")
+        ),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        pi_usb_ssh.run([], environ=environment)
+
+    assert error.value.code == 2
+
+
+def test_connect_entrypoints_replace_drone_connect() -> None:
+    scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
+
+    assert scripts["autoconnect"] == "ai_drone.connect:auto_main"
+    assert scripts["manuconnect"] == "ai_drone.connect:manual_main"
+    assert "drone-connect" not in scripts
+    assert "drone-pi-usb-ssh" not in scripts
+
+
+def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
+    scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
+
+    assert scripts["drone-picam"] == "ai_drone.cli.picam:main"
+    assert scripts["drone-apriltag"] == "ai_drone.cli.apriltag:main"
+    assert scripts["drone-record"] == "ai_drone.cli.record:main"
+    assert scripts["drone-lidar"] == "ai_drone.cli.lidar:main"
+    assert scripts["drone-servo"] == "ai_drone.cli.servo:main"
+
+    # Flight functionality is consolidated behind one guarded command; the
+    # former duplicate wrappers are intentionally not installed.
+    assert scripts["drone-control"] == "ai_drone.cli.control:main"
+    assert "drone-follow" not in scripts
+    assert "drone-fly-and-land" not in scripts
+
+
+def test_wifi_join_command_per_platform() -> None:
+    assert pi_wifi.join_command("AI-Drone-Zero", "Linux") == [
+        "nmcli",
+        "con",
+        "up",
+        "AI-Drone-Zero",
+    ]
+    assert pi_wifi.join_command("AI-Drone-Zero", "Darwin", "en0") == [
+        "networksetup",
+        "-setairportnetwork",
+        "en0",
+        "AI-Drone-Zero",
+    ]
+    assert pi_wifi.join_command("AI-Drone-Zero", "Windows") == [
+        "netsh",
+        "wlan",
+        "connect",
+        "name=AI-Drone-Zero",
+        "ssid=AI-Drone-Zero",
+    ]
+
+
+def test_wifi_scan_detects_ssid_per_platform() -> None:
+    linux_scan = "Espresso Macchiato\nAI-Drone-Zero\nXyz\n"
+    assert pi_wifi.ssid_in_scan_output("AI-Drone-Zero", linux_scan, "Linux")
+    assert not pi_wifi.ssid_in_scan_output("Nope", linux_scan, "Linux")
+
+    windows_scan = "SSID 1 : Xyz\nSSID 2 : AI-Drone-Zero\n"
+    assert pi_wifi.ssid_in_scan_output("AI-Drone-Zero", windows_scan, "Windows")
+    assert not pi_wifi.ssid_in_scan_output("Nope", windows_scan, "Windows")
+
+
+def test_auto_dry_run_lists_transports_in_priority_order(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+
+    result = connect.run_auto(["--dry-run"], environ={"TIMEOUT_SECONDS": "1"})
+
+    output = capsys.readouterr().out
+    assert result == 0
+    tailscale_at = output.index("1. Tailscale")
+    wifi_at = output.index("2. Pi Wi-Fi AP")
+    usb_at = output.index("3. USB cable")
+    assert tailscale_at < wifi_at < usb_at
+    assert f"ssh -F {os.devnull} -t seb@seb-is-pm" in output
+    assert f"ssh -F {os.devnull} -t seb@192.168.4.1" in output
+    assert f"ssh -F {os.devnull} -t seb@192.168.7.2" not in output
+    assert "Pass --usb-iface" in output
+    assert f"nmcli con up {DEFAULT_PI_AP_SSID}" in output
+
+
+def test_auto_connects_over_tailscale_first(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return _Completed(0)
+
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(connect.subprocess, "run", fake_run)
+
+    result = connect.run_auto([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert ["ssh", "-F", os.devnull, "-t", "seb@seb-is-pm"] in calls
+    # Tailscale won, so no Wi-Fi join and no USB configuration happened.
+    assert not any(cmd[:1] == ["nmcli"] for cmd in calls)
+    assert not any(cmd[:2] == ["sudo", "ip"] for cmd in calls)
+
+
+def test_auto_falls_through_to_usb_when_others_fail(monkeypatch) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    # Tailscale probe fails; AP is not broadcasting.
+    monkeypatch.setattr(
+        connect.subprocess, "run", lambda command, **kwargs: _Completed(1)
+    )
+    monkeypatch.setattr(connect.pi_wifi, "ap_available", lambda ssid, system: False)
+
+    usb_calls: list[object] = []
+
+    def fake_usb(*, environ=None, dry_run=False):
+        usb_calls.append(environ)
+        return True
+
+    monkeypatch.setattr(connect, "connect_usb", fake_usb)
+
+    result = connect.run_auto([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert usb_calls  # USB was reached as the last resort
+
+
+def test_manual_choice_dispatches_wifi(monkeypatch) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        connect,
+        "connect_wifi_ap",
+        lambda target, system, *, dry_run: dispatched.append("wifi") or True,
+    )
+    monkeypatch.setattr(
+        connect,
+        "connect_tailscale",
+        lambda ssh_target, *, ssh_config, dry_run: (
+            dispatched.append("tailscale") or True
+        ),
+    )
+
+    result = connect.run_manual([], environ={"TIMEOUT_SECONDS": "1"})
+
+    assert result == 0
+    assert dispatched == ["wifi"]
+
+
+@pytest.mark.parametrize("choice", ["1", "2", "3"])
+def test_manual_dry_run_is_successful_for_every_transport(
+    monkeypatch, choice: str
+) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+    monkeypatch.setattr("builtins.input", lambda _prompt="": choice)
+    monkeypatch.setattr(connect, "connect_tailscale", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(connect, "connect_wifi_ap", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(connect, "connect_usb", lambda *_args, **_kwargs: False)
+
+    assert connect.run_manual(["--dry-run"], environ={}) == 0
+
+
+def test_auto_dry_run_threads_explicit_ssh_config_to_every_transport(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
+
+    result = connect.run_auto(
+        ["--dry-run"],
+        environ={
+            "SSH_CONFIG": "/tmp/custom-ssh-config",
+            "TIMEOUT_SECONDS": "1",
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert output.count("ssh -F /tmp/custom-ssh-config") == 3
 
 
 class _Completed:

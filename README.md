@@ -1,159 +1,194 @@
-# AI Drone Professor Baun
+# AI Drone
 
-# Install dependencies
+Software and bench tools for a Raspberry Pi Zero 2 W, ArduPilot flight
+controller, IMX500 camera, downward MTF-01P range/optical-flow sensor, planned
+forward MT-15 rangefinder, motors, and payload servo.
+
+Read [the current handoff](docs/HANDOFF.md) before touching hardware. It is the
+source of truth for the verified live state. In particular, the controller
+currently reports `ARMING_CHECK=0`, the camera is loosely held and faces
+forward, and the servo and forward MT-15 are disconnected. Keep the aircraft
+disarmed unless a documented actuator or flight test has been explicitly
+authorized and all of its physical prerequisites are satisfied.
+
+## Setup
+
+Install [uv](https://docs.astral.sh/uv/) and the locked project environment:
 
 ```bash
-# Install uv (Linux/MacOS)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install uv (Windows)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-
-# Install the project runtime
 uv sync
+```
 
-# Optional development tools
+Development tools are optional:
+
+```bash
 uv sync --group dev
-
-# Smoke test
-uv run python -c "from pymavlink import mavutil; print('pymavlink ready')"
 ```
 
-## Connect the flight controller from a developer machine
+The supported runtime is Python 3.11–3.13. The Pi uses Debian Python 3.13 so it
+can share the apt-installed Picamera2 and libcamera bindings.
 
-The project includes MAVProxy plus the compatibility packages required by its
-default console modules. With the flight controller connected over USB:
+## Command toolbox
+
+Each behavior has one package entry point; the old root wrappers and duplicate
+flight commands are intentionally not maintained.
+
+| Command | Purpose |
+| --- | --- |
+| `autoconnect` / `manuconnect` | Open Pi SSH over Tailscale, the Pi hotspot, or USB |
+| `drone-deploy` | Synchronize the runtime to the Pi and optionally start one Pi task |
+| `drone-health` | Read-only heartbeat and parameter round-trip over USB and Pi UART |
+| `drone-console` | Interactive MAVProxy console for expert inspection |
+| `drone-lidar` | Record rangefinder and optical-flow MAVLink telemetry while disarmed |
+| `drone-picam` | Stream IMX500 person detections without controlling the aircraft |
+| `drone-apriltag` | Detect AprilTags; metric pose requires camera calibration |
+| `drone-record` | Record synchronized camera, AprilTag, and MAVLink data while disarmed |
+| `drone-servo` | Guarded direct-BCM12 payload-servo bench test |
+| `drone-motor-test` | Guarded, low-power, propeller-off ArduPilot motor check |
+| `drone-control` | Canonical status, takeoff/hover, velocity, and person-follow CLI; flight sequences arm and land |
+| `drone-config-export` / `drone-config-sync` | Capture the complete ArduPilot configuration |
+
+Use `uv run <command> --help` for the authoritative options. Pi-only commands
+are normally started through `drone-deploy` or after opening a Pi shell.
+
+## Connect and deploy
+
+The preferred endpoint is the Tailscale MagicDNS name:
 
 ```bash
-uv run drone-console
+ssh -F /dev/null seb@seb-is-pm
 ```
 
-`drone-console` prefers the stable ArduPilot `/dev/serial/by-id/...` path,
-falls back to `/dev/ttyACM*`, and uses 115200 baud. To override those defaults:
+If Tailscale is offline, join `AI-Drone-Zero` and use the hotspot address:
 
 ```bash
-uv run drone-console --device /dev/ttyACM0 --baud 115200
+ssh -F /dev/null seb@192.168.4.1
 ```
 
-Check both working MAVLink paths from the developer machine:
+The helpers try Tailscale, hotspot, then USB in that order:
+
+```bash
+uv run autoconnect
+uv run manuconnect
+```
+
+USB setup requires `USB_IFACE` to name the adapter that you verified appeared
+when the Pi was connected. Use `--dry-run` to inspect the commands first.
+See [Raspberry Pi USB SSH](docs/RPI_ZERO2W_USB_SSH_SETUP.md) for Linux, macOS,
+and Windows instructions.
+
+Deploy without starting a task:
+
+```bash
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy
+```
+
+Replace `seb-is-pm` with `192.168.4.1` only when using the Pi hotspot. The
+deployment includes the package, lock/build metadata, and maintained network
+scripts; it excludes credentials, Git data, virtual environments, and
+recordings.
+
+## Tests possible in the current hardware state
+
+The following checks are read-only/disarmed. Support the loose camera and keep
+the aircraft stationary.
+
+Check the developer-USB and Pi-UART MAVLink paths:
 
 ```bash
 uv run drone-health
-```
-
-This checks:
-
-1. developer machine -> flight controller over USB; and
-2. `seb@seb-is-pm` -> `/dev/serial0` -> flight controller over UART4.
-
-Both checks require a heartbeat and a read-only `SYSID_THISMAV` response. Enter
-the Pi SSH password when prompted. To check only one path:
-
-```bash
 uv run drone-health --usb-only
 uv run drone-health --pi-only
 ```
 
-For the complete physical connection sequence, safety constraints, stable
-device path, MAVProxy commands, shutdown procedure, and troubleshooting, see
-[Developer Machine Drone Connection](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md).
-
-## Quick Start — Raspberry Pi
-
-**Prerequisites on the Pi** (already done):
-```bash
-sudo apt install -y python3-picamera2 imx500-all
-```
-`uv` must also be installed on the Pi.
-
-For:
-
-- streaming the Raspberry Pi IMX500 AI-camera output; and
-- checking the MicoAir MTF-01P range/optical-flow telemetry through ArduPilot.
-
-## MTF-01P test
-
-Connect the flight controller over USB and power the drone so the MTF-01P has
-power. Keep the vehicle disarmed.
+Record the connected downward MTF-01P range and optical-flow telemetry:
 
 ```bash
-uv run test_lidar.py
+uv run drone-lidar --duration 10
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy --lidar --duration 10
 ```
 
-The script:
+The flight battery must power the MTF-01P; the command itself never powers,
+arms, or moves the aircraft.
 
-- auto-detects the ArduPilot `/dev/ttyACM*` device;
-- aborts if the vehicle is armed;
-- requests range and optical-flow telemetry for five seconds; and
-- saves a timestamped CSV under `artifacts/`.
-
-Useful options:
+Run the forward-facing camera diagnostics:
 
 ```bash
-uv run test_lidar.py --duration 10
-uv run test_lidar.py --device /dev/ttyACM0 --output artifacts/lidar.csv
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy --picam
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+  uv run drone-deploy --apriltag --backend auto --tag-size 0.160
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+  uv run drone-deploy --record --duration 15
 ```
 
-It does not arm the drone, start motors, change flight mode, or write
-parameters. It cannot power the sensor; the flight battery must do that.
+The current camera can test image quality, frame rate, person detection, and
+AprilTag pixel detection. It cannot validate floor-relative metric pose,
+altitude geometry, or person-follow flight until it is rigidly mounted and
+calibrated for the intended orientation.
 
-## IMX500 AI stream
+## Hardware tests that require preparation
 
-The camera test runs NanoDet on the IMX500 and serves annotated MJPEG from the
-Pi. From the laptop, deploy and start it remotely:
+### Servo
+
+The servo utility is ready, but the servo is disconnected. It drives Pi BCM12
+(physical pin 32), not a flight-controller output. Before using it, remove the
+propellers, secure the frame, connect signal and common ground, use a suitable
+regulated external 5 V supply, and verify the linkage and pulse limits. Then
+follow the guarded modes shown by:
 
 ```bash
-uv run drone-deploy --picam
+uv run drone-servo --help
 ```
 
-Open `http://192.168.7.2:8080/` (the Pi Zero 2 USB address).
+### Forward MT-15
 
-When already logged into the Pi:
+The MT-15 is disconnected and untested. The proposed connection is
+flight-controller UART7, so it does not consume another Pi UART/header signal;
+physical mounting, FC connector availability, wiring, and regulated power
+still need verification. Once installed and configured as `RNGFND2`, use
+`drone-lidar` and `drone-record` to verify that its sensor ID, forward
+orientation, limits, validity, and measurements remain distinct from the
+downward MTF-01P. A single forward beam is not full obstacle avoidance.
+
+### Motor check
+
+The low-power motor utility is present, capped at 10% and one second per motor,
+and defaults to 7% for 0.5 seconds. It deliberately refuses the live controller
+while `ARMING_CHECK` is not exactly `1`. Remove every propeller, secure the
+frame, resolve all pre-arm failures, and follow the exact confirmations in the
+[bench motor procedure](docs/BENCH_MOTOR_TEST.md).
+
+### Altitude hold and flight control
+
+`drone-control` keeps the former arming, takeoff/hover, body-frame velocity,
+landing, and person-follow capabilities in one CLI. Arming and landing are
+managed inside its guarded flight sequences rather than duplicated as raw
+standalone commands. These paths have not been validated on this aircraft. Run
+the command on the Pi after deploying:
 
 ```bash
+uv run drone-deploy --ssh
+# On the Pi:
 cd ~/ai-drone
-uv run test_picam.py
+uv run drone-control --help
 ```
 
-First deploy the project if the Pi environment has not been prepared:
+Validate in stages: SITL first; then correct all pre-arm failures; verify the
+downward range/flow data and calibration; perform the propeller-off motor test;
+and only then conduct a restrained, low-altitude hover/altitude-hold test under
+the flight procedure. Person follow additionally requires a secure camera
+mount, measured geometry, bounded tracking behavior, and an unobstructed test
+area. See [MAVLink control](docs/PI_MAVLINK_CONTROL.md) and the
+[AprilTag mission plan](docs/APRILTAG_MISSION.md).
 
-```bash
-uv run drone-deploy
-```
+## What `ARMING_CHECK=1` means
 
-The deploy step creates the Pi virtual environment with system site packages
-enabled so it can use apt-installed `picamera2`/libcamera, then installs the
-`raspi` dependency group (`modlib`, NumPy, OpenCV, and Rich).
-
-## Pi lidar link
-
-The Pi-to-flight-controller UART4 cable is connected and `/dev/serial0`
-provides MAVLink. The same sensor test can run on the drone:
-
-```bash
-uv run drone-deploy --lidar
-```
-
-The UART wiring is Pi TXD (pin 8) to FC R4, Pi RXD (pin 10) to FC T4, and
-Pi GND (pin 6) to FC GND.
-
-## Servo test
-
-To test the SG90 (9g) servo motor on the Raspberry Pi Zero:
-1. Wire the servo:
-   - **VCC (Red)** -> Pi 5V (e.g., physical Pin 2 or 4). *Warning: For heavy loads, use a separate 5V power supply to avoid brownouts.*
-   - **GND (Brown/Black)** -> Pi GND (e.g., physical Pin 6).
-   - **Signal (Yellow/Orange)** -> Pi BCM GPIO 12 (physical Pin 32).
-2. Deploy and run the test script:
-   ```bash
-   ./deploy.sh --servo
-   ```
-   By default, this will run in **sweep** mode. You can customize the behavior or change the mode by forwarding parameters:
-   ```bash
-   ./deploy.sh --servo --mode manual
-   ./deploy.sh --servo --mode center
-   ```
+ArduPilot treats the special value `1` as “run all available configurable
+pre-arm checks.” `0` skips those configurable categories, although some
+mandatory checks can still remain. It does not arm the vehicle or spin a motor;
+it makes an arm request fail until reported `PreArm:` problems are resolved.
+It also cannot detect physical problems such as the loose camera, disconnected
+servo, or missing MT-15. See [flight-controller configuration](docs/DRONE_CONFIGURATION.md).
 
 ## Development checks
 
@@ -161,48 +196,17 @@ To test the SG90 (9g) servo motor on the Raspberry Pi Zero:
 uv run --group dev ruff format --check .
 uv run --group dev ruff check .
 uv run --group dev ty check .
-uv run --group dev pytest
+uv run --group dev pytest -q
 ```
 
-## Connect to the Pi
+## Documentation map
 
-Fresh checkout flow:
-
-```bash
-git clone git@github.com:AI-Drone-FRA-UAS/ai-drone.git
-cd ai-drone
-uv run drone-connect
-```
-
-`drone-connect` first tries normal SSH targets for Wi-Fi or the Pi hotspot:
-`seb-is-pm.local`, `seb-is-pm`, `192.168.4.1`, and `192.168.7.2`.
-If none respond, it falls back to the USB/RNDIS cable path, configures the
-laptop-side `192.168.7.1/24` address, waits for the Pi at `192.168.7.2`, and
-opens SSH. On Windows, run the terminal as Administrator for USB fallback
-because changing the adapter IP requires elevation.
-
-To try only Wi-Fi/hotspot/network SSH and never configure USB:
-
-```bash
-uv run drone-connect --network-only
-```
-
-If adapter auto-detection fails, pass the interface explicitly:
-
-```bash
-uv run drone-connect --usb-iface "Ethernet 4"
-```
-
-The legacy `./connect-pi-usb-ssh.sh` wrapper remains for compatibility.
-
-`drone-deploy` uses `rsync` on Unix when available and otherwise streams a tar
-archive over SSH, so native Windows does not need a local `rsync` install.
-
-On the Frankfurt UAS campus the Pi joins the `eduroam` Wi-Fi automatically and
-is reachable over Tailscale (`ssh -tt seb@100.84.84.1`); off campus it falls
-back to its own `AI-Drone-Zero` hotspot. See
-[eduroam WLAN auf dem Raspberry Pi](docs/EDUROAM_SETUP.md) and
-[README_HOTSPOT.md](README_HOTSPOT.md).
-
-Hardware details and the parameter backup are in
-`docs/DRONE_CONFIGURATION.md` and `params/`.
+- [Current handoff](docs/HANDOFF.md): verified live state and next actions.
+- [MAVLink control](docs/PI_MAVLINK_CONTROL.md): staged control and flight tests.
+- [Sensor recording and wiring](docs/SENSOR_RECORDING.md): MTF-01P, MT-15, camera, and datasets.
+- [AprilTag mission](docs/APRILTAG_MISSION.md): mounting, calibration, and approach architecture.
+- [Pi power resilience](docs/PI_POWER_RESILIENCE.md): surviving sudden power loss and upgrading safely.
+- [Motor test](docs/BENCH_MOTOR_TEST.md): propeller-off guarded procedure.
+- [Configuration](docs/DRONE_CONFIGURATION.md): controller parameters and `ARMING_CHECK`.
+- [Connection](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md): direct flight-controller USB workflow.
+- [Network setup](docs/EDUROAM_SETUP.md), [hotspot](docs/HOTSPOT.md), and [dual-network design](docs/NETWORK_UPLINK.md).

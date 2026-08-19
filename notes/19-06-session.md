@@ -822,7 +822,7 @@ The existing passive sensor test was run remotely:
 ```bash
 ssh seb@seb-is-pm
 cd ~/ai-drone
-.venv/bin/python test_lidar.py \
+.venv/bin/python -m ai_drone.cli.lidar \
   --device /dev/serial0 \
   --duration 10 \
   --output /tmp/mtf-01p-pi-check.csv
@@ -981,7 +981,7 @@ Before attempting Pi-controlled flight:
 - `docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md`
   - Detailed developer-machine connection and troubleshooting workflow.
 
-- `19-06-session.md`
+- `notes/19-06-session.md`
   - This complete session report.
 
 ### Updated files
@@ -1104,7 +1104,7 @@ Or directly on the Pi:
 
 ```bash
 cd ~/ai-drone
-.venv/bin/python test_lidar.py --device /dev/serial0
+.venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0
 ```
 
 ## 15. Troubleshooting summary

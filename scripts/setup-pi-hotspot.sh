@@ -2,13 +2,17 @@
 # setup-pi-hotspot.sh — Configure the Raspberry Pi to act as a Wi-Fi Access Point (Hotspot) on startup.
 #
 # Run this script ON THE RASPBERRY PI as root or with sudo:
-#   sudo ./setup-pi-hotspot.sh [--ssid MY_SSID] [--password MY_PASSWORD]
+#   sudo scripts/setup-pi-hotspot.sh [--ssid MY_SSID]
+# The passphrase is never accepted as this script's CLI argument, printed, or
+# stored in this repository. NetworkManager's nmcli does receive it briefly as
+# a child-process argument while applying the connection profile.
 #
 # This script automatically detects whether the Pi uses NetworkManager (standard on Pi OS Bookworm/12+)
 # or the older dhcpcd/hostapd configuration (standard on Pi OS Bullseye/11 and older) and applies
 # the correct hotspot configuration.
 
 set -euo pipefail
+umask 077
 
 die() {
     echo "Error: $*" >&2
@@ -31,7 +35,8 @@ require_raspberry_pi_linux() {
 
 # Default settings
 SSID="AI-Drone-Zero"
-PASSWORD="aidrone123"
+PASSWORD=""
+PASSWORD_FILE=""
 IFACE="wlan0"
 IP_ADDR="192.168.4.1/24"
 CON_NAME="Hotspot"
@@ -44,10 +49,13 @@ while [[ $# -gt 0 ]]; do
       SSID="$2"
       shift 2
       ;;
-    --password)
+    --password-file)
       require_value "$1" "${2:-}"
-      PASSWORD="$2"
+      PASSWORD_FILE="$2"
       shift 2
+      ;;
+    --password)
+      die "--password exposes the passphrase in shell history; use the secure prompt or --password-file"
       ;;
     --interface)
       require_value "$1" "${2:-}"
@@ -60,7 +68,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      echo "Usage: sudo $0 [--ssid SSID] [--password PASSWORD] [--interface IFACE] [--ip IP/CIDR]"
+      echo "Usage: sudo $0 [--ssid SSID] [--password-file PATH] [--interface IFACE] [--ip IP/CIDR]"
       exit 0
       ;;
     *)
@@ -76,15 +84,35 @@ if [[ $EUID -ne 0 ]]; then
    die "This script must be run as root (using sudo)."
 fi
 
-# Check if Password is at least 8 characters
-if [[ ${#PASSWORD} -lt 8 ]]; then
-    die "Password must be at least 8 characters long for WPA2 security."
+if [[ -n "$PASSWORD_FILE" ]]; then
+    [[ -f "$PASSWORD_FILE" && -r "$PASSWORD_FILE" && ! -L "$PASSWORD_FILE" ]] \
+        || die "Password file must be a readable regular file, not a symlink: $PASSWORD_FILE"
+    PASSWORD_FILE_UID="$(stat -c '%u' -- "$PASSWORD_FILE")" \
+        || die "Could not inspect password-file ownership: $PASSWORD_FILE"
+    [[ "$PASSWORD_FILE_UID" == "0" ]] \
+        || die "Password file must be owned by root (UID 0)"
+    PASSWORD_FILE_MODE="$(stat -c '%a' -- "$PASSWORD_FILE")" \
+        || die "Could not inspect password-file permissions: $PASSWORD_FILE"
+    (( (8#$PASSWORD_FILE_MODE & 077) == 0 )) \
+        || die "Password file must not be readable or writable by group/others"
+    IFS= read -r PASSWORD < "$PASSWORD_FILE" \
+        || [[ -n "$PASSWORD" ]] \
+        || die "Could not read the hotspot passphrase from $PASSWORD_FILE"
+elif [[ -t 0 ]]; then
+    read -r -s -p "Hotspot WPA2 passphrase: " PASSWORD
+    echo
+else
+    die "No interactive terminal; provide the passphrase with --password-file"
+fi
+
+if [[ ${#PASSWORD} -lt 8 || ${#PASSWORD} -gt 63 ]]; then
+    die "WPA2 passphrase must contain between 8 and 63 characters."
 fi
 
 echo "=================================================="
 echo " Configuring Wi-Fi Hotspot on Raspberry Pi"
 echo " SSID:      $SSID"
-echo " Password:  $PASSWORD"
+echo " Password:  (configured; not displayed)"
 echo " Interface: $IFACE"
 echo " IP Address:$IP_ADDR"
 echo "=================================================="
@@ -108,6 +136,8 @@ if systemctl is-active --quiet NetworkManager || command -v nmcli >/dev/null 2>&
     
     # Configure the parameters
     echo "▸ Configuring hotspot parameters..."
+    # This script does not print the passphrase or accept it on its own CLI, but
+    # nmcli necessarily receives it as a process argument for this invocation.
     nmcli connection modify "$CON_NAME" \
         802-11-wireless.mode ap \
         802-11-wireless.band bg \
@@ -171,6 +201,7 @@ wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 wpa_passphrase=$PASSWORD
 EOF
+    chmod 600 /etc/hostapd/hostapd.conf
 
     # Point hostapd daemon to configuration file
     if [[ -f /etc/default/hostapd ]]; then
@@ -221,7 +252,7 @@ fi
 echo "=================================================="
 echo " Hotspot details for connecting:"
 echo " SSID:     $SSID"
-echo " Password: $PASSWORD"
+echo " Password: (not displayed)"
 echo " IP range: ${IP_ADDR%.*}.10 - ${IP_ADDR%.*}.200"
 echo " Gateway:  ${IP_ADDR%/*}"
 echo "=================================================="

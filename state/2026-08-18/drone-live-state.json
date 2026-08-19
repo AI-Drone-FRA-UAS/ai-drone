@@ -1,0 +1,89 @@
+{
+  "armed": false,
+  "autopilot": 3,
+  "autopilot_version": {
+    "board_version": 67305472,
+    "capabilities": 63983,
+    "flight_custom_version": [
+      57,
+      50,
+      98,
+      48,
+      99,
+      100,
+      55,
+      56
+    ],
+    "flight_sw_version": 67503103,
+    "middleware_custom_version": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "middleware_sw_version": 0,
+    "os_custom_version": [
+      56,
+      56,
+      98,
+      56,
+      52,
+      54,
+      48,
+      48
+    ],
+    "os_sw_version": 0,
+    "product_id": 22337,
+    "vendor_id": 4617
+  },
+  "baud": 115200,
+  "captured_at": "2026-08-11T13:38:50.495293+00:00",
+  "component_id": 0,
+  "device": "/dev/serial0",
+  "latest_telemetry": {
+    "DISTANCE_SENSOR": {
+      "covariance": 0,
+      "current_distance": 220,
+      "horizontal_fov": 0.0,
+      "id": 0,
+      "max_distance": 800,
+      "min_distance": 2,
+      "orientation": 25,
+      "quaternion": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "signal_quality": 0,
+      "time_boot_ms": 1649236,
+      "type": 0,
+      "vertical_fov": 0.0
+    },
+    "OPTICAL_FLOW": {
+      "flow_comp_m_x": -0.19880890846252441,
+      "flow_comp_m_y": 0.01177266426384449,
+      "flow_rate_x": -0.19646000862121582,
+      "flow_rate_y": 0.0,
+      "flow_x": 0,
+      "flow_y": 0,
+      "ground_distance": 0.0,
+      "quality": 39,
+      "sensor_id": 0,
+      "time_usec": 1649237
+    },
+    "RANGEFINDER": {
+      "distance": 2.200000047683716,
+      "voltage": 0.0
+    }
+  },
+  "mode": "STABILIZE",
+  "parameter_count_expected": 1152,
+  "parameter_count_received": 1152,
+  "system_id": 1,
+  "vehicle_type": 2
+}

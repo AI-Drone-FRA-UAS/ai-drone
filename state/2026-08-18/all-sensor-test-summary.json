@@ -1,0 +1,36 @@
+{
+  "actual_duration_s": 8.074712,
+  "armed_abort": false,
+  "camera": {
+    "analysis_frames": 94,
+    "analysis_resolution": "640x480",
+    "encoded_frames": 230,
+    "encoded_resolution": "1280x960",
+    "encoded_span_s": 7.962403,
+    "tag_detections": 0
+  },
+  "completed": true,
+  "downward_distance_cm": {
+    "maximum": 3,
+    "mean": 2.06,
+    "median": 2,
+    "minimum": 2,
+    "samples": 196
+  },
+  "note": "The preview showed a laptop blocking most of the view; no AprilTag was visible in the recorded frame.",
+  "optical_flow_quality": {
+    "maximum": 153,
+    "mean": 147.19,
+    "median": 147,
+    "minimum": 140,
+    "samples": 196
+  },
+  "requested_duration_s": 8.0,
+  "timing_validation": {
+    "encoded_duration_s": 2.998417,
+    "encoded_frames": 87,
+    "requested_duration_s": 3.0
+  },
+  "telemetry_messages": 1332,
+  "vehicle_state": "disarmed"
+}
