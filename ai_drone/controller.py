@@ -53,9 +53,12 @@ class DroneController:
 
         self.connection: Any | None = None
         self.current_altitude: float | None = None
+        self.rangefinder_distance: float | None = None
+        self.ekf_altitude: float | None = None
         self.forward_distance: float | None = None
         self.battery_voltage: float | None = None
         self.flight_mode: str | None = None
+        self.last_status_text: str | None = None
         self.is_armed: bool = False
         self.is_flying: bool = False
         self.last_telemetry_time: float = 0.0
@@ -186,11 +189,15 @@ class DroneController:
                     self.flight_mode = self.connection.flightmode
             elif msg_type == "LOCAL_POSITION_NED":
                 # In NED ist z nach unten gerichtet -> -z entspricht der Höhe über Startpunkt
-                self.current_altitude = -float(msg.z)
+                self.ekf_altitude = -float(msg.z)
+                if self.rangefinder_distance is None:
+                    self.current_altitude = self.ekf_altitude
                 self.last_telemetry_time = now
             elif msg_type == "RANGEFINDER":
-                if self.current_altitude is None:
-                    self.current_altitude = float(msg.distance)
+                dist = float(msg.distance)
+                if dist > 0.0:
+                    self.rangefinder_distance = dist
+                    self.current_altitude = dist
                 self.last_telemetry_time = now
             elif msg_type == "DISTANCE_SENSOR":
                 orientation = getattr(msg, "orientation", 25)
@@ -198,18 +205,26 @@ class DroneController:
                 if orientation == 0:  # MAV_SENSOR_ROTATION_NONE = Forward (0)
                     self.forward_distance = dist_m
                 elif orientation == 25:  # MAV_SENSOR_ROTATION_PITCH_270 = Downward (25)
-                    if self.current_altitude is None:
+                    if dist_m > 0.0:
+                        self.rangefinder_distance = dist_m
                         self.current_altitude = dist_m
                 else:
-                    if self.current_altitude is None:
+                    if dist_m > 0.0:
+                        self.rangefinder_distance = dist_m
                         self.current_altitude = dist_m
                 self.last_telemetry_time = now
-            elif msg_type == "OBSTACLE_DISTANCE":
-                if hasattr(msg, "distances") and len(msg.distances) > 0:
-                    front_dist = msg.distances[0]
-                    max_dist = getattr(msg, "max_distance", 1500)
-                    if 0 < front_dist < max_dist:
-                        self.forward_distance = float(front_dist) / 100.0
+            elif msg_type == "STATUSTEXT":
+                text = getattr(msg, "text", "")
+                if isinstance(text, bytes):
+                    text = text.decode("utf-8", errors="replace")
+                text = text.strip()
+                logger.warning("[Flight Controller] %s", text)
+                self.last_status_text = text
+                self.last_telemetry_time = now
+            elif msg_type == "COMMAND_ACK":
+                cmd = getattr(msg, "command", 0)
+                result = getattr(msg, "result", 0)
+                logger.info("[Flight Controller ACK] Command %d -> Result %d", cmd, result)
                 self.last_telemetry_time = now
             elif msg_type == "SYS_STATUS":
                 self.battery_voltage = float(msg.voltage_battery) / 1000.0
@@ -264,7 +279,7 @@ class DroneController:
 
         raise RuntimeError(f"Timeout beim Wechsel in Flugmodus '{mode_name}'.")
 
-    def arm(self, timeout: float = 10.0) -> None:
+    def arm(self, timeout: float = 10.0, force: bool = False) -> None:
         """Schärft die Motoren der Drohne im GUIDED-Modus."""
         if not self.connection:
             raise RuntimeError("Nicht verbunden.")
@@ -272,8 +287,23 @@ class DroneController:
         if self.flight_mode != "GUIDED":
             self.set_mode("GUIDED")
 
-        logger.info("Sende Arming-Befehl...")
-        self.connection.arducopter_arm()
+        logger.info("Sende Arming-Befehl (force=%s)...", force)
+        if force:
+            self.connection.mav.command_long_send(
+                self.target_system,
+                self.target_component,
+                mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                0,
+                1,  # 1 = Arm
+                21196,  # 21196 = Force Arming (Bypass PreArm)
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+        else:
+            self.connection.arducopter_arm()
 
         started = time.monotonic()
         while time.monotonic() - started < timeout:
@@ -283,7 +313,8 @@ class DroneController:
                 return
             time.sleep(0.2)
 
-        raise RuntimeError("Timeout beim Arming der Drohne.")
+        reason = f" (Meldung vom FC: '{self.last_status_text}')" if self.last_status_text else ""
+        raise RuntimeError(f"Timeout beim Arming der Drohne{reason}.")
 
     def disarm(self, timeout: float = 10.0) -> None:
         """Entschärft die Motoren (DISARM)."""

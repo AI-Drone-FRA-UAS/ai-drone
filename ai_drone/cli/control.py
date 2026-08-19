@@ -42,16 +42,28 @@ def cmd_status(args: argparse.Namespace) -> int:
                         if drone.current_altitude is not None
                         else "Keine Daten"
                     )
+                    lidar_str = (
+                        f"{drone.rangefinder_distance:.2f} m"
+                        if drone.rangefinder_distance is not None
+                        else "N/A"
+                    )
+                    ekf_str = (
+                        f"{drone.ekf_altitude:.2f} m"
+                        if drone.ekf_altitude is not None
+                        else "N/A"
+                    )
                     bat_str = (
                         f"{drone.battery_voltage:.2f} V"
                         if drone.battery_voltage is not None
                         else "Keine Daten"
                     )
                     logger.info(
-                        "Status: Modus=%s | Armed=%s | Höhe=%s | Batterie=%s",
+                        "Status: Modus=%s | Armed=%s | Höhe=%s (LiDAR: %s, EKF: %s) | Batterie=%s",
                         drone.flight_mode or "Unbekannt",
                         "JA" if drone.is_armed else "NEIN",
                         alt_str,
+                        lidar_str,
+                        ekf_str,
                         bat_str,
                     )
                     last_print = now
