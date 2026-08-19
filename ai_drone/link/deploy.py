@@ -20,9 +20,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from ai_drone.pi_targets import DeployTarget, resolve_deploy_target
+from ai_drone.link.targets import DeployTarget, resolve_deploy_target
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# ai_drone/link/deploy.py -> ai_drone/link -> ai_drone -> the repository root.
+# tests/test_deploy.py pins this so moving the module cannot silently break it.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_NAME = ".__ai_drone_manifest"
 SENTINEL_NAME = ".__ai_drone_deploy_sentinel"
 MANIFEST_FORMAT = "ai-drone-runtime-v1"
@@ -176,7 +178,6 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Sync ai-drone to the Raspberry Pi and optionally run a task."
     )
-    parser.add_argument("--picam", action="store_true", help="start the IMX500 stream")
     parser.add_argument(
         "--apriltag", action="store_true", help="start safe AprilTag detection"
     )
@@ -214,7 +215,6 @@ def build_plan(
     modes = [
         name
         for name in (
-            "picam",
             "apriltag",
             "record",
             "lidar",
@@ -226,12 +226,12 @@ def build_plan(
     ]
     if len(modes) > 1:
         parser.error(
-            "--picam, --apriltag, --record, --lidar, --servo, --motor-test, "
+            "--apriltag, --record, --lidar, --servo, --motor-test, "
             "and --ssh are mutually exclusive"
         )
     if not modes and extra_args:
         parser.error(
-            "extra command options require --picam, --apriltag, --record, --lidar, "
+            "extra command options require --apriltag, --record, --lidar, "
             "--servo, or --motor-test"
         )
 
@@ -384,12 +384,6 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
     extra = " ".join(shlex.quote(argument) for argument in plan.extra_args)
     suffix = f" {extra}" if extra else ""
 
-    if plan.mode == "picam":
-        command = (
-            f"cd {shlex.quote(project_dir)} && "
-            f".venv/bin/python -m ai_drone.cli.picam{suffix}"
-        )
-        return remote_command(target, command, tty=True)
     if plan.mode == "apriltag":
         command = (
             f"cd {shlex.quote(project_dir)} && "
@@ -641,7 +635,7 @@ def _cleanup_entry(deployment_id: str, root: Path | None = None) -> int:
 def _cleanup_script(deployment_id: str) -> str:
     deployment_id = _validated_deployment_id(deployment_id)
     payload = (
-        "from ai_drone.deploy import _cleanup_entry;"
+        "from ai_drone.link.deploy import _cleanup_entry;"
         f"raise SystemExit(_cleanup_entry({deployment_id!r}))"
     )
     return f"python3 -c {shlex.quote(payload)}"
@@ -725,17 +719,12 @@ def run(arguments: Sequence[str] | None = None) -> int:
     command = mode_command(plan)
     if command is None:
         print(
-            "Done. Use --picam, --apriltag, --record, --lidar, --servo, "
-            "--motor-test, or --ssh.",
+            "Done. Use --apriltag, --record, --lidar, --servo, --motor-test, or --ssh.",
             flush=True,
         )
         return 0
 
-    if plan.mode == "picam":
-        print("Starting the IMX500 AI stream on the Pi ...", flush=True)
-        print(f"Open http://{plan.target.address}:8080/ in your browser.", flush=True)
-        print("Press Ctrl-C to stop.", flush=True)
-    elif plan.mode == "apriltag":
+    if plan.mode == "apriltag":
         print("Starting safe AprilTag detection on the Pi ...", flush=True)
         print("This mode never arms, moves, or actuates the servo.", flush=True)
     elif plan.mode == "record":

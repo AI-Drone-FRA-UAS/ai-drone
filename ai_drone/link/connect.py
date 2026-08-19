@@ -11,7 +11,7 @@ Two entry points share the same three transports and priority order:
   the one the user picks.
 
 This module owns transport selection. The Wi-Fi command builders live in
-``pi_wifi`` and the USB link setup lives in ``pi_usb_ssh``.
+``link.wifi`` and the USB link setup lives in ``link.usb_ssh``.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 
-from ai_drone import pi_usb_ssh, pi_wifi
-from ai_drone.pi_targets import (
+from ai_drone.link import usb_ssh, wifi
+from ai_drone.link.targets import (
     DEFAULT_DIRECT_SSH_CONFIG,
     ConnectionTarget,
     ping_command,
@@ -112,14 +112,14 @@ def _restore_wifi(previous: str | None, system: str, device: str | None) -> None
     if not previous:
         return
     print(f"  Restoring previous Wi-Fi network ({previous})...", flush=True)
-    subprocess.run(pi_wifi.join_command(previous, system, device), check=False)
+    subprocess.run(wifi.join_command(previous, system, device), check=False)
 
 
 def connect_wifi_ap(target: ConnectionTarget, system: str, *, dry_run: bool) -> bool:
     ssid = target.ap_ssid
     ap_target = f"{target.pi_user}@{target.ap_ip}"
-    device = None if dry_run else pi_wifi.wifi_device(system)
-    join = pi_wifi.join_command(ssid, system, device)
+    device = None if dry_run else wifi.wifi_device(system)
+    join = wifi.join_command(ssid, system, device)
     interactive = interactive_ssh_command(ap_target, target.ssh_config)
 
     if dry_run:
@@ -130,11 +130,11 @@ def connect_wifi_ap(target: ConnectionTarget, system: str, *, dry_run: bool) -> 
         return False
 
     print(f"Trying the Pi's Wi-Fi AP ({ssid})...", flush=True)
-    if not pi_wifi.ap_available(ssid, system):
+    if not wifi.ap_available(ssid, system):
         print(f"  {ssid} is not broadcasting.", flush=True)
         return False
 
-    previous = pi_wifi.current_ssid(system, device)
+    previous = wifi.current_ssid(system, device)
     print(f"  Joining {ssid}...", flush=True)
     if subprocess.run(join, check=False).returncode != 0:
         print(
@@ -168,7 +168,7 @@ def connect_usb(
     argv: list[str] = []
     if dry_run:
         argv.append("--dry-run")
-    return pi_usb_ssh.run(argv, environ=environ) == 0
+    return usb_ssh.run(argv, environ=environ) == 0
 
 
 # --- Orchestration ------------------------------------------------------------
@@ -197,7 +197,7 @@ def run_auto(
         )
         connect_wifi_ap(target, system, dry_run=True)
         print("3. USB cable:", flush=True)
-        pi_usb_ssh.run(["--dry-run"], environ=environ)
+        usb_ssh.run(["--dry-run"], environ=environ)
         return 0
 
     if connect_tailscale(
