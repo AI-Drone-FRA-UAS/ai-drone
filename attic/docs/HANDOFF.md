@@ -92,6 +92,18 @@ Pi.
 
 - Treat the connected drone as disarmed/read-only unless the user explicitly
   authorizes an actuator test and confirms the physical safety prerequisites.
+### 2026-08-19 hardware update (user statement)
+
+- The camera is now fully connected and mounted to the Pi. The user has not
+  stated its orientation, rigidity, or that intrinsics were calibrated, so the
+  nadir-mount and calibration prerequisites below are still open.
+- The payload servo is now connected. Its power path, mechanical limits, and
+  fail-safe behaviour have not been restated, so `drone-servo` keeps its
+  explicit mode and clearance confirmation.
+- Controller parameters were not re-captured on this date. The newest dump is
+  still `params/flywoo-f745-live-2026-08-18.param`, in which `ARMING_CHECK=0`
+  and `FENCE_ENABLE=0`. Re-run `drone-config-export` before relying on either.
+
 - The live controller has `ARMING_CHECK=0`. This disables important optional
   pre-arm checks. Do not perform flight or motor testing in this state.
 - The live controller has `FENCE_ENABLE=0`. The configured 100 m altitude and
