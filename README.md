@@ -193,6 +193,21 @@ uv run drone-deploy --servo --mode manual
 uv run drone-deploy --servo --mode center
 ```
 
+## Autonomous AprilTag payload drop mission
+
+The full autonomous pipeline (`mission_drop.py`) flies a 360° expanding square
+search pattern from any starting location in a hall, avoids walls using the forward
+MT-15 ToF rangefinder, centers precisely over a detected AprilTag (tag36h11),
+actuates the payload release servo, and lands safely:
+
+```bash
+# On the Pi:
+./mission_drop.py --min-wall-dist 1.0 --max-search-time 90.0
+```
+
+See [docs/MISSION_DROP.md](docs/MISSION_DROP.md) for the complete state-machine
+flowchart, mathematical search pattern, ArduPilot collision parameters, and safety guidelines.
+
 ## Development checks
 
 ```bash
