@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from ai_drone import connect, deploy, pi_usb_ssh, pi_wifi
-from ai_drone.pi_targets import (
+from ai_drone.link import connect, deploy, usb_ssh, wifi
+from ai_drone.link.targets import (
     DEFAULT_PI_AP_SSID,
     DEFAULT_PI_HOSTNAME,
     DEFAULT_PI_HOTSPOT_IP,
@@ -92,14 +92,14 @@ def test_deploy_target_uses_explicit_host_user_and_dir(tmp_path: Path) -> None:
 
 def test_deploy_plan_uses_tar_fallback_on_windows(tmp_path: Path) -> None:
     plan = deploy.build_plan(
-        ["--picam", "--dry-run", "--port", "9090"],
+        ["--apriltag", "--dry-run", "--port", "9090"],
         environ={"HOME": str(tmp_path)},
         system="Windows",
         ping=lambda _host: False,
         rsync_path="/usr/bin/rsync",
     )
 
-    assert plan.mode == "picam"
+    assert plan.mode == "apriltag"
     assert plan.extra_args == ("--port", "9090")
     assert plan.dry_run is True
     assert plan.sync_method == "tar"
@@ -160,22 +160,6 @@ def test_deploy_mode_command_forwards_lidar_arguments(tmp_path: Path) -> None:
         ".venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0 --duration 10"
         in command[-1]
     )
-
-
-def test_deploy_mode_command_uses_module_for_picam(tmp_path: Path) -> None:
-    plan = deploy.build_plan(
-        ["--picam", "--port", "9090"],
-        environ={"HOME": str(tmp_path)},
-        system="Linux",
-        ping=lambda _host: False,
-        rsync_path=None,
-    )
-
-    command = deploy.mode_command(plan)
-
-    assert command is not None
-    assert command[:2] == ["ssh", "-t"]
-    assert ".venv/bin/python -m ai_drone.cli.picam --port 9090" in command[-1]
 
 
 def test_deploy_mode_command_uses_module_for_apriltag(tmp_path: Path) -> None:
@@ -333,7 +317,7 @@ def test_ping_command_is_platform_specific() -> None:
 
 
 def test_usb_linux_config_commands() -> None:
-    assert pi_usb_ssh.linux_config_commands("usb0", "192.168.7.1") == [
+    assert usb_ssh.linux_config_commands("usb0", "192.168.7.1") == [
         ["sudo", "ip", "link", "set", "usb0", "up"],
         ["sudo", "ip", "link", "set", "dev", "usb0", "mtu", "1412"],
         ["sudo", "ip", "addr", "add", "192.168.7.1/24", "dev", "usb0"],
@@ -341,7 +325,7 @@ def test_usb_linux_config_commands() -> None:
 
 
 def test_usb_windows_config_commands() -> None:
-    commands = pi_usb_ssh.windows_config_commands("Ethernet 4", "192.168.7.1")
+    commands = usb_ssh.windows_config_commands("Ethernet 4", "192.168.7.1")
 
     assert commands[0][:5] == [
         "powershell",
@@ -364,7 +348,7 @@ def test_usb_windows_config_commands() -> None:
 
 
 def test_windows_find_script_prefers_active_usb_adapter() -> None:
-    script = pi_usb_ssh.windows_find_script()
+    script = usb_ssh.windows_find_script()
 
     assert "RNDIS|Remote NDIS|USB Ethernet|Ethernet Gadget|CDC" in script
     assert "$_.Status -eq 'Up'" in script
@@ -372,9 +356,9 @@ def test_windows_find_script_prefers_active_usb_adapter() -> None:
 
 
 def test_usb_dry_run_uses_windows_commands(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(usb_ssh.platform, "system", lambda: "Windows")
 
-    result = pi_usb_ssh.run(
+    result = usb_ssh.run(
         ["--dry-run"],
         environ={"USB_IFACE": "Ethernet 4", "TIMEOUT_SECONDS": "1"},
     )
@@ -387,7 +371,7 @@ def test_usb_dry_run_uses_windows_commands(monkeypatch, capsys) -> None:
 
 
 def test_usb_ssh_command_uses_configured_ssh_config() -> None:
-    command = pi_usb_ssh.ssh_command(
+    command = usb_ssh.ssh_command(
         "pilot",
         "192.168.7.2",
         "/tmp/custom-ssh-config",
@@ -403,17 +387,17 @@ def test_usb_ssh_command_uses_configured_ssh_config() -> None:
 
 
 def test_usb_live_setup_refuses_guessed_interface(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(pi_usb_ssh.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(pi_usb_ssh, "find_usb_iface", lambda _system: "usb-dock0")
+    monkeypatch.setattr(usb_ssh.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(usb_ssh, "find_usb_iface", lambda _system: "usb-dock0")
     monkeypatch.setattr(
-        pi_usb_ssh,
+        usb_ssh,
         "config_commands",
         lambda *_args: (_ for _ in ()).throw(
             AssertionError("guessed interfaces must never be configured")
         ),
     )
 
-    result = pi_usb_ssh.run([], environ={"TIMEOUT_SECONDS": "1"})
+    result = usb_ssh.run([], environ={"TIMEOUT_SECONDS": "1"})
 
     assert result == 1
     assert "Refusing to reconfigure" in capsys.readouterr().out
@@ -432,7 +416,7 @@ def test_usb_rejects_unsafe_network_arguments_before_mutation(
     monkeypatch, environment
 ) -> None:
     monkeypatch.setattr(
-        pi_usb_ssh,
+        usb_ssh,
         "run_usb_transport",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("invalid arguments must be rejected before mutation")
@@ -440,7 +424,7 @@ def test_usb_rejects_unsafe_network_arguments_before_mutation(
     )
 
     with pytest.raises(SystemExit) as error:
-        pi_usb_ssh.run([], environ=environment)
+        usb_ssh.run([], environ=environment)
 
     assert error.value.code == 2
 
@@ -448,8 +432,8 @@ def test_usb_rejects_unsafe_network_arguments_before_mutation(
 def test_connect_entrypoints_replace_drone_connect() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
-    assert scripts["autoconnect"] == "ai_drone.connect:auto_main"
-    assert scripts["manuconnect"] == "ai_drone.connect:manual_main"
+    assert scripts["autoconnect"] == "ai_drone.link.connect:auto_main"
+    assert scripts["manuconnect"] == "ai_drone.link.connect:manual_main"
     assert "drone-connect" not in scripts
     assert "drone-pi-usb-ssh" not in scripts
 
@@ -457,7 +441,6 @@ def test_connect_entrypoints_replace_drone_connect() -> None:
 def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
-    assert scripts["drone-picam"] == "ai_drone.cli.picam:main"
     assert scripts["drone-apriltag"] == "ai_drone.cli.apriltag:main"
     assert scripts["drone-record"] == "ai_drone.cli.record:main"
     assert scripts["drone-lidar"] == "ai_drone.cli.lidar:main"
@@ -471,19 +454,19 @@ def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
 
 
 def test_wifi_join_command_per_platform() -> None:
-    assert pi_wifi.join_command("AI-Drone-Zero", "Linux") == [
+    assert wifi.join_command("AI-Drone-Zero", "Linux") == [
         "nmcli",
         "con",
         "up",
         "AI-Drone-Zero",
     ]
-    assert pi_wifi.join_command("AI-Drone-Zero", "Darwin", "en0") == [
+    assert wifi.join_command("AI-Drone-Zero", "Darwin", "en0") == [
         "networksetup",
         "-setairportnetwork",
         "en0",
         "AI-Drone-Zero",
     ]
-    assert pi_wifi.join_command("AI-Drone-Zero", "Windows") == [
+    assert wifi.join_command("AI-Drone-Zero", "Windows") == [
         "netsh",
         "wlan",
         "connect",
@@ -494,12 +477,12 @@ def test_wifi_join_command_per_platform() -> None:
 
 def test_wifi_scan_detects_ssid_per_platform() -> None:
     linux_scan = "Espresso Macchiato\nAI-Drone-Zero\nXyz\n"
-    assert pi_wifi.ssid_in_scan_output("AI-Drone-Zero", linux_scan, "Linux")
-    assert not pi_wifi.ssid_in_scan_output("Nope", linux_scan, "Linux")
+    assert wifi.ssid_in_scan_output("AI-Drone-Zero", linux_scan, "Linux")
+    assert not wifi.ssid_in_scan_output("Nope", linux_scan, "Linux")
 
     windows_scan = "SSID 1 : Xyz\nSSID 2 : AI-Drone-Zero\n"
-    assert pi_wifi.ssid_in_scan_output("AI-Drone-Zero", windows_scan, "Windows")
-    assert not pi_wifi.ssid_in_scan_output("Nope", windows_scan, "Windows")
+    assert wifi.ssid_in_scan_output("AI-Drone-Zero", windows_scan, "Windows")
+    assert not wifi.ssid_in_scan_output("Nope", windows_scan, "Windows")
 
 
 def test_auto_dry_run_lists_transports_in_priority_order(monkeypatch, capsys) -> None:
@@ -545,7 +528,7 @@ def test_auto_falls_through_to_usb_when_others_fail(monkeypatch) -> None:
     monkeypatch.setattr(
         connect.subprocess, "run", lambda command, **kwargs: _Completed(1)
     )
-    monkeypatch.setattr(connect.pi_wifi, "ap_available", lambda ssid, system: False)
+    monkeypatch.setattr(connect.wifi, "ap_available", lambda ssid, system: False)
 
     usb_calls: list[object] = []
 
