@@ -11,9 +11,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from ai_drone.apriltags import CameraCalibration, create_detector, estimate_pose
 from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.platform import is_raspberry_pi
+from ai_drone.vision.apriltags import CameraCalibration, create_detector, estimate_pose
 
 _TAG36H11_MAX_ID = 586
 
@@ -170,7 +170,7 @@ def run(arguments: list[str] | None = None) -> int:
         )
 
         if args.output == "stream":
-            from ai_drone.stream import start_server
+            from ai_drone.vision.stream import start_server
 
             server = start_server(port=args.port)
             print(f"AprilTag stream: http://0.0.0.0:{args.port}/", flush=True)
@@ -245,7 +245,7 @@ def run(arguments: list[str] | None = None) -> int:
                 last_status = now
 
             if args.output == "stream":
-                from ai_drone.stream import push_frame
+                from ai_drone.vision.stream import push_frame
 
                 annotated = cv2.cvtColor(luma, cv2.COLOR_GRAY2BGR)
                 for detection, payload in zip(detections, payloads, strict=True):

@@ -328,7 +328,7 @@ for wall tags or navigation. See [AprilTag mission architecture](APRILTAG_MISSIO
 
 ### AprilTag detector
 
-- Core: `ai_drone/apriltags.py`
+- Core: `ai_drone/vision/apriltags.py`
 - CLI: `ai_drone/cli/apriltag.py`
 - Entry point: `drone-apriltag`
 - Native AprilTag 3 is preferred; OpenCV AprilTag/Aruco is the fallback and is
@@ -376,7 +376,7 @@ detector's physical range.
 
 ### Consolidated flight control
 
-- Core: `ai_drone/controller.py` and `ai_drone/follower.py`
+- Core: `ai_drone/flight/controller.py` and `ai_drone/flight/follower.py`
 - CLI: `ai_drone/cli/control.py`
 - Entry point: `drone-control`
 
@@ -391,7 +391,7 @@ above.
 ### Complete configuration snapshot
 
 - Read-only Pi exporter: `ai_drone/cli/config_export.py`
-- Host sync/publish command: `ai_drone/config_sync.py`
+- Host sync/publish command: `ai_drone/config/sync.py`
 - Entry points: `drone-config-export` and `drone-config-sync`
 
 Capture all current parameters through the Pi:

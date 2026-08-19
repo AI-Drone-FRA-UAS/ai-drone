@@ -13,20 +13,19 @@ dependencies = [
 ]
 
 [project.scripts]
-autoconnect = "ai_drone.connect:auto_main"
+autoconnect = "ai_drone.link.connect:auto_main"
 drone-apriltag = "ai_drone.cli.apriltag:main"
 drone-config-export = "ai_drone.cli.config_export:main"
-drone-config-sync = "ai_drone.config_sync:main"
-drone-console = "ai_drone.console:main"
+drone-config-sync = "ai_drone.config.sync:main"
+drone-console = "ai_drone.mavlink.console:main"
 drone-control = "ai_drone.cli.control:main"
-drone-deploy = "ai_drone.deploy:main"
-drone-health = "ai_drone.health:main"
+drone-deploy = "ai_drone.link.deploy:main"
+drone-health = "ai_drone.mavlink.health:main"
 drone-lidar = "ai_drone.cli.lidar:main"
 drone-motor-test = "ai_drone.cli.motor_test:main"
-drone-picam = "ai_drone.cli.picam:main"
 drone-record = "ai_drone.cli.record:main"
 drone-servo = "ai_drone.cli.servo:main"
-manuconnect = "ai_drone.connect:manual_main"
+manuconnect = "ai_drone.link.connect:manual_main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13"]
@@ -40,9 +39,10 @@ raspi = [
     "modlib==1.3.1",
     "numpy>=2.3.5",
     "opencv-python>=4.11.0.86",
-    "rich>=15.0.0",
 ]
 dev = [
+    "deptry>=0.25.1",
+    "import-linter>=2.13",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
     "ty>=0.0.35",
@@ -55,12 +55,43 @@ default-groups = []
 
 [tool.ruff]
 target-version = "py311"
+# attic/ holds retired code kept for reference only; it is not maintained,
+# linted, type-checked, tested, or deployed.
+extend-exclude = ["attic"]
 
 [tool.ruff.lint]
 select = ["B", "C90", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 20
+
+[tool.ty.src]
+exclude = ["attic"]
+
+[tool.deptry]
+# attic/ is retired reference code: excluded from ruff and ty, so exclude it here
+# too.  The raspi group ships real runtime dependencies to the Pi, so it must not
+# be treated as a development-only group.
+# aitrios-rpi-sample-apps/ is a vendored third-party sample tree (already in
+# deploy.EXCLUDE_NAMES); tests/ legitimately import the dev group.
+exclude = ["attic", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
+non_dev_dependency_groups = ["raspi"]
+
+[tool.deptry.per_rule_ignores]
+# DEP002: declared on purpose, never imported by name.
+#   mavproxy - invoked as a subprocess CLI by drone-console.
+#   pyserial, future - runtime requirements of pymavlink's serial transport.
+#   pillow - required by the Pi camera/JPEG path via Picamera2.
+DEP002 = ["mavproxy", "pyserial", "future", "pillow"]
+# DEP001: Pi-native packages installed from Debian apt, not from PyPI, and
+# imported lazily inside Pi-only execution paths.  The Pi venv is created with
+# --system-site-packages so these resolve at runtime; see CLAUDE.md.
+DEP001 = ["picamera2", "gpiozero", "apriltag"]
+
+[tool.deptry.package_module_name_map]
+# opencv-python is only installed in the raspi group, so deptry cannot read
+# its module name from installed metadata on a laptop.
+opencv-python = ["cv2"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]

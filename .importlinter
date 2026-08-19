@@ -1,0 +1,54 @@
+# Architectural contracts for ai_drone.  These encode the layering documented in
+# CLAUDE.md so a future change cannot quietly reintroduce a cycle or let a
+# shared leaf reach back into a concern package.
+[importlinter]
+root_package = ai_drone
+include_external_packages = False
+
+[importlinter:contract:acyclic]
+name = ai_drone has no import cycles
+type = independence
+modules =
+    ai_drone.config
+    ai_drone.flight
+    ai_drone.vision
+
+[importlinter:contract:layers]
+name = Command adapters sit above shared MAVLink and link logic
+type = layers
+layers =
+    ai_drone.cli
+    ai_drone.mavlink
+    ai_drone.link
+
+[importlinter:contract:cli-is-a-leaf]
+name = Nothing outside ai_drone.cli may import from it
+type = forbidden
+source_modules =
+    ai_drone.config
+    ai_drone.flight
+    ai_drone.link
+    ai_drone.mavlink
+    ai_drone.vision
+    ai_drone.durability
+    ai_drone.platform
+    ai_drone.cli_parsing
+    ai_drone.recording
+forbidden_modules =
+    ai_drone.cli
+
+[importlinter:contract:shared-leaves]
+name = Shared leaves must not import a concern package
+type = forbidden
+source_modules =
+    ai_drone.durability
+    ai_drone.platform
+    ai_drone.cli_parsing
+    ai_drone.recording
+forbidden_modules =
+    ai_drone.cli
+    ai_drone.config
+    ai_drone.flight
+    ai_drone.link
+    ai_drone.mavlink
+    ai_drone.vision
