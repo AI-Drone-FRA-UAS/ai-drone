@@ -92,6 +92,9 @@ class DummyDrone:
     ) -> None:
         pass
 
+    def hard_emergency_kill(self) -> None:
+        pass
+
 
 class BoundedSearchPattern:
     """Verwaltet eine expandierende Suchspirale mit strikter 2-Meter-Grenze."""

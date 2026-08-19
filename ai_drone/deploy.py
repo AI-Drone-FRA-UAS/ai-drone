@@ -27,6 +27,7 @@ EXCLUDE_NAMES = frozenset(
         ".ruff_cache",
         ".pytest_cache",
         "artifacts",
+        "logs",
         "__pycache__",
         "aitrios-rpi-sample-apps",
         "Drone-Handbook.pdf",
