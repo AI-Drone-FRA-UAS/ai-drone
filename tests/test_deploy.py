@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from ai_drone import deploy
-from ai_drone.pi_targets import DeployTarget
+from ai_drone.link import deploy
+from ai_drone.link.targets import DeployTarget
 
 DEPLOYMENT_ID = "0123456789abcdef0123456789abcdef"
 
@@ -379,10 +379,11 @@ def test_tar_cleanup_command_runs_from_the_uploaded_runtime(tmp_path: Path) -> N
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     _write_runtime_source(source)
-    shutil.copy2(Path(deploy.__file__), source / "ai_drone/deploy.py")
+    _write_file(source, "ai_drone/link/__init__.py", "")
+    shutil.copy2(Path(deploy.__file__), source / "ai_drone" / "link" / "deploy.py")
     shutil.copy2(
-        Path(deploy.__file__).with_name("pi_targets.py"),
-        source / "ai_drone/pi_targets.py",
+        Path(deploy.__file__).with_name("targets.py"),
+        source / "ai_drone" / "link" / "targets.py",
     )
     archive = deploy._create_sync_archive(source, DEPLOYMENT_ID)
     try:
@@ -502,3 +503,10 @@ def test_tar_cleanup_rejects_unsafe_manifest_path_before_deleting(
     assert completed == 2
     assert "unsafe path" in captured.err
     assert stale.is_file()
+
+
+def test_repo_root_points_at_the_actual_repository() -> None:
+    """REPO_ROOT is derived from module depth, so moving deploy.py must fail here."""
+    assert (deploy.REPO_ROOT / "pyproject.toml").is_file()
+    assert (deploy.REPO_ROOT / "ai_drone" / "__init__.py").is_file()
+    assert Path(deploy.__file__).resolve().parents[1] == deploy.REPO_ROOT / "ai_drone"
