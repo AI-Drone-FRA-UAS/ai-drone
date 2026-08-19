@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>AI-Drohne — Projektplakat</title>
+<style>
+/* ============================================================
+   A1 Hochformat (594 x 841 mm) — Druck: Browser -> Drucken ->
+   Ziel "Als PDF sichern", Papierformat A1, Ränder: keine,
+   "Hintergrundgrafiken" aktivieren.
+   ============================================================ */
+@page { size: 594mm 841mm; margin: 0; }
+
+:root{
+  --blau:        #0b3d67;
+  --blau-hell:   #1573b8;
+  --akzent:      #e8710a;
+  --tuerkis:     #0d9488;
+  --text:        #16212b;
+  --grau:        #5b6a78;
+  --linie:       #d3dce4;
+  --flaeche:     #f4f7fa;
+  --weiss:       #ffffff;
+}
+
+*{ box-sizing: border-box; }
+
+html, body{
+  margin:0; padding:0;
+  background:#8a97a3;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--text);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.plakat{
+  width:594mm; height:841mm;
+  margin:0 auto;
+  background:var(--weiss);
+  display:flex; flex-direction:column;
+  overflow:hidden;
+}
+
+/* ---------------- Kopfbereich ---------------- */
+header{
+  background:linear-gradient(105deg, var(--blau) 0%, #12558c 55%, var(--blau-hell) 100%);
+  color:#fff;
+  padding:16mm 18mm 13mm 18mm;
+  position:relative;
+}
+header::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:3mm;
+  background:linear-gradient(90deg, var(--akzent) 0%, var(--akzent) 33%, var(--tuerkis) 33%, var(--tuerkis) 66%, #ffffff 66%);
+}
+.hochschule{
+  font-size:6.2mm; letter-spacing:.35mm; text-transform:uppercase;
+  font-weight:600; opacity:.92; margin-bottom:5mm;
+}
+.hochschule span{ opacity:.6; font-weight:400; }
+h1{
+  font-size:23mm; line-height:1.02; margin:0 0 4mm 0; font-weight:800;
+  letter-spacing:-.4mm;
+}
+.untertitel{
+  font-size:8.6mm; font-weight:400; line-height:1.25; opacity:.95;
+  max-width:430mm;
+}
+.kopf-meta{
+  margin-top:9mm; display:flex; gap:14mm; align-items:flex-end;
+  border-top:.4mm solid rgba(255,255,255,.3); padding-top:6mm;
+  font-size:5.4mm;
+}
+.kopf-meta div span{ display:block; opacity:.65; font-size:4.2mm;
+  text-transform:uppercase; letter-spacing:.3mm; margin-bottom:1.5mm; }
+.kopf-meta b{ font-weight:600; }
+
+/* ---------------- Spalten ---------------- */
+.spalten{
+  flex:1;
+  display:grid; grid-template-columns:1fr 1fr 1fr;
+  gap:10mm; padding:11mm 18mm 0 18mm;
+  min-height:0;
+}
+.spalte{ display:flex; flex-direction:column; gap:8mm; }
+
+section{ break-inside:avoid; }
+h2{
+  font-size:8.2mm; margin:0 0 4mm 0; color:var(--blau); font-weight:800;
+  letter-spacing:-.15mm; display:flex; align-items:center; gap:3mm;
+}
+h2::before{
+  content:""; width:3mm; height:8mm; background:var(--akzent);
+  border-radius:.8mm; flex:none;
+}
+h3{
+  font-size:5.6mm; margin:0 0 2mm 0; color:var(--blau-hell);
+  text-transform:uppercase; letter-spacing:.35mm; font-weight:700;
+}
+p{ font-size:5mm; line-height:1.45; margin:0 0 3mm 0; }
+ul{ margin:0; padding-left:6mm; }
+li{ font-size:5mm; line-height:1.42; margin-bottom:2.2mm; }
+li::marker{ color:var(--akzent); }
+b, strong{ font-weight:700; }
+code{
+  font-family:"SF Mono", Menlo, Consolas, monospace;
+  font-size:4.3mm; background:var(--flaeche); padding:.4mm 1.2mm;
+  border-radius:1mm; color:var(--blau);
+}
+
+.karte{
+  background:var(--flaeche); border:.35mm solid var(--linie);
+  border-radius:2.5mm; padding:6mm;
+}
+.karte-akzent{ background:#fff7f0; border-color:#f6d3b0; }
+
+/* ---------------- Tabelle ---------------- */
+table{ width:100%; border-collapse:collapse; font-size:4.7mm; }
+td{ padding:2mm 0; border-bottom:.3mm solid var(--linie); vertical-align:top; }
+tr:last-child td{ border-bottom:none; }
+td:first-child{ color:var(--grau); width:38%; padding-right:3mm; }
+td:last-child{ font-weight:600; }
+
+/* ---------------- Kennzahlen ---------------- */
+.kennzahlen{ display:grid; grid-template-columns:1fr 1fr; gap:4mm; }
+.kennzahl{
+  background:var(--blau); color:#fff; border-radius:2.5mm;
+  padding:4.5mm 5mm;
+}
+.kennzahl:nth-child(2){ background:var(--blau-hell); }
+.kennzahl:nth-child(3){ background:var(--tuerkis); }
+.kennzahl:nth-child(4){ background:#334a5e; }
+.kennzahl b{ display:block; font-size:10mm; line-height:1; margin-bottom:1.8mm; }
+.kennzahl span{ font-size:4.3mm; opacity:.85; line-height:1.25; display:block; }
+
+/* ---------------- Ablauf / Meilensteine ---------------- */
+.ablauf{ list-style:none; margin:0; padding:0; position:relative; }
+.ablauf::before{
+  content:""; position:absolute; left:3.1mm; top:2mm; bottom:2mm;
+  width:.7mm; background:var(--linie); border-radius:.5mm;
+}
+.ablauf li{
+  position:relative; padding-left:11mm; margin-bottom:4.2mm; font-size:4.9mm;
+  line-height:1.35;
+}
+.ablauf li::before{
+  content:""; position:absolute; left:1.3mm; top:1.3mm;
+  width:4.3mm; height:4.3mm; border-radius:50%;
+  background:var(--blau-hell); border:.9mm solid #fff;
+  box-shadow:0 0 0 .35mm var(--blau-hell);
+}
+.ablauf li.offen::before{ background:#fff; box-shadow:0 0 0 .35mm var(--akzent); border-color:#fff; }
+.ablauf li b{ color:var(--blau); }
+.ablauf li span{ display:block; color:var(--grau); font-size:4.4mm; }
+
+/* ---------------- Fotoplatzhalter ---------------- */
+/* Foto einsetzen: <div class="foto"><img src="fotos/foto1.jpg" alt=""></div>
+   Der gestrichelte Rahmen verschwindet dann automatisch.              */
+.foto{
+  border:.8mm dashed var(--linie); border-radius:2.5mm;
+  background:var(--flaeche);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; color:var(--grau); overflow:hidden; position:relative;
+}
+.foto-gross{ flex:1; min-height:118mm; }
+.foto-mittel{ height:96mm; }
+.foto img{ width:100%; height:100%; object-fit:cover; display:block; }
+.foto:has(img){ border-style:solid; border-color:var(--linie); }
+.foto-icon{ font-size:16mm; opacity:.35; margin-bottom:3mm; }
+.foto-text{ font-size:5.2mm; font-weight:700; }
+.foto-hinweis{ font-size:4.2mm; margin-top:1.5mm; opacity:.8; }
+.bildunterschrift{
+  font-size:4.4mm; color:var(--grau); margin-top:2mm; line-height:1.3;
+}
+
+/* ---------------- Platzhalter autonomer Flug ---------------- */
+.platzhalter{
+  border:.8mm dashed var(--akzent);
+  background:#fffaf5;
+  border-radius:2.5mm;
+  padding:6mm;
+  flex:1; min-height:135mm;
+  display:flex; flex-direction:column;
+}
+.platzhalter .fuellhinweis{
+  font-size:4.4mm; color:#a8662a; font-style:italic; margin-top:auto;
+  border-top:.35mm dashed #e7c19a; padding-top:3mm;
+}
+.linien{ margin:3mm 0 4mm 0; }
+.linien div{
+  border-bottom:.3mm dashed #e0c3a3; height:8mm;
+}
+
+/* ---------------- Diagramm ---------------- */
+.diagramm{ width:100%; height:auto; display:block; }
+.dg-label{ font-size:4.6px; font-weight:700; fill:#fff; }
+.dg-sub{ font-size:3.5px; fill:#fff; opacity:.8; }
+.dg-kante{ font-size:3.6px; fill:#5b6a78; }
+
+/* ---------------- Fußzeile ---------------- */
+footer{
+  margin-top:9mm;
+  background:var(--blau); color:#fff;
+  padding:7mm 18mm;
+  display:flex; justify-content:space-between; align-items:center;
+  font-size:4.8mm;
+}
+footer .qr{
+  display:flex; align-items:center; gap:4mm;
+}
+footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
+</style>
+</head>
+<body>
+<div class="plakat">
+
+  <!-- ============================ KOPF ============================ -->
+  <header>
+    <div class="hochschule">Frankfurt University of Applied Sciences <span>&nbsp;·&nbsp; Fachbereich 2 &nbsp;·&nbsp; Projektarbeit</span></div>
+    <h1>KI-Drohne mit Personen&shy;erkennung</h1>
+    <div class="untertitel">
+      Von der FPV-Renndrohne zur autonomen Indoor-Plattform: ArduPilot-Autopilot,
+      Raspberry&nbsp;Pi als Companion-Computer, On-Sensor-KI der IMX500-Kamera und
+      ein servogesteuerter Lastenabwurf.
+    </div>
+    <div class="kopf-meta">
+      <div><span>Team (4 Personen)</span><b>Jannik&nbsp;H. &nbsp;·&nbsp; Julian&nbsp;Veerkamp &nbsp;·&nbsp; Sebastian&nbsp;Urmann &nbsp;·&nbsp; Serkan&nbsp;Savranoglu</b></div>
+      <div><span>Betreuung</span><b>Prof. Dr. Baun</b></div>
+    </div>
+  </header>
+
+  <div class="spalten">
+
+    <!-- ======================= SPALTE 1 ======================= -->
+    <div class="spalte">
+
+      <section>
+        <h2>Ziel des Projekts</h2>
+        <p>
+          Ausgangspunkt ist eine flugfertige 3,5"-CineWhoop-FPV-Drohne, die ausschließlich
+          manuell per Fernsteuerung geflogen wird. Ziel ist der Umbau zu einer
+          <b>teilautonomen Plattform</b>, die auch <b>ohne GPS in Innenräumen</b> stabil
+          fliegt, ihre Umgebung per KI-Kamera auswertet und eine Nutzlast gezielt abwerfen
+          kann.
+        </p>
+        <h3>Teilziele</h3>
+        <ul>
+          <li><b>Autopilot:</b> Betaflight durch ArduPilot Copter ersetzen, Konfiguration
+              und Missionsplanung über QGroundControl.</li>
+          <li><b>Position &amp; Altitude Hold</b> ohne GPS über LiDAR und optischen Fluss.</li>
+          <li><b>Abwurfmechanismus</b> mit 9g-Servo, angesteuert über den Flight Controller.</li>
+          <li><b>Rahmenerweiterung</b> (3D-Druck) für Sensor, Servo, Pi und Kamera.</li>
+          <li><b>Companion-Computer</b> mit KI-Objekterkennung als Basis für autonomes
+              Verhalten.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Plattform &amp; Hardware</h2>
+        <div class="karte">
+          <table>
+            <tr><td>Rahmen</td><td>SpeedyBee BEE35 Pro, 3,5" CineWhoop</td></tr>
+            <tr><td>Flight Controller</td><td>Flywoo GOKU GN745 AIO (STM32F745)</td></tr>
+            <tr><td>Firmware</td><td>ArduPilot Copter 4.6.3</td></tr>
+            <tr><td>Antrieb</td><td>4 × Emax Eco II 2004, 3000 KV, ESC 45 A</td></tr>
+            <tr><td>Funkstrecke</td><td>ExpressLRS, RadioMaster XR4 Gemini</td></tr>
+            <tr><td>Companion</td><td>Raspberry Pi Zero 2 WH</td></tr>
+            <tr><td>KI-Kamera</td><td>Raspberry Pi AI Camera (Sony IMX500)</td></tr>
+            <tr><td>Navigation</td><td>MicoAir MTF-01P — LiDAR + Optical Flow</td></tr>
+            <tr><td>Aktuator</td><td>Micro-Servo 9g (MS18-F) für Abwurf</td></tr>
+            <tr><td>FPV-Video</td><td>RunCam Phoenix 2 → SpeedyBee TX800</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <!-- ############ FOTO 1 ############ -->
+      <section style="display:flex; flex-direction:column; flex:1;">
+        <h2>Die Drohne</h2>
+        <div class="foto foto-gross">
+          <img src="fotos/drohne-flug-quer.jpg" alt="Die CineWhoop-Drohne im Flug auf dem Campus der Frankfurt UAS">
+        </div>
+        <div class="bildunterschrift">
+          <b>Abb. 1:</b> Die 3,5"-CineWhoop im Flug auf dem Campus — ducted Propeller
+          und Propellerschutz erlauben Flüge in Personennähe.
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ======================= SPALTE 2 ======================= -->
+    <div class="spalte">
+
+      <section>
+        <h2>Systemarchitektur</h2>
+        <svg class="diagramm" viewBox="0 0 260 210" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="pfeil" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 z" fill="#5b6a78"/>
+            </marker>
+          </defs>
+
+          <!-- Bodenstation -->
+          <rect x="4" y="6" width="104" height="30" rx="3" fill="#334a5e"/>
+          <text class="dg-label" x="14" y="19">Laptop / Bodenstation</text>
+          <text class="dg-sub" x="14" y="26">QGroundControl · MAVProxy</text>
+          <text class="dg-sub" x="14" y="32">uv run drone-console / -health</text>
+
+          <!-- Fernsteuerung -->
+          <rect x="152" y="6" width="104" height="30" rx="3" fill="#334a5e"/>
+          <text class="dg-label" x="162" y="19">RadioMaster GX12</text>
+          <text class="dg-sub" x="162" y="26">ExpressLRS 868 MHz / 2,4 GHz</text>
+          <text class="dg-sub" x="162" y="32">Pilot behält jederzeit Vorrang</text>
+
+          <!-- Flight Controller -->
+          <rect x="60" y="80" width="140" height="38" rx="3" fill="#0b3d67"/>
+          <text class="dg-label" x="72" y="94">Flight Controller — GN745 AIO</text>
+          <text class="dg-sub" x="72" y="102">ArduPilot Copter 4.6.3 · EKF3</text>
+          <text class="dg-sub" x="72" y="109">Motorregelung · Modi · Failsafe</text>
+          <text class="dg-sub" x="72" y="115">Servo-Ausgang für Abwurf</text>
+
+          <!-- Raspberry Pi -->
+          <rect x="4" y="140" width="104" height="34" rx="3" fill="#1573b8"/>
+          <text class="dg-label" x="14" y="153">Raspberry Pi Zero 2 WH</text>
+          <text class="dg-sub" x="14" y="160">Python · pymavlink · modlib</text>
+          <text class="dg-sub" x="14" y="167">Follow-Logik &amp; MJPEG-Stream</text>
+
+          <!-- Kamera -->
+          <rect x="4" y="184" width="104" height="22" rx="3" fill="#0d9488"/>
+          <text class="dg-label" x="14" y="194">IMX500 AI-Kamera</text>
+          <text class="dg-sub" x="14" y="201">NanoDet läuft auf dem Sensor</text>
+
+          <!-- Sensorik -->
+          <rect x="152" y="140" width="104" height="34" rx="3" fill="#0d9488"/>
+          <text class="dg-label" x="162" y="153">MicoAir MTF-01P</text>
+          <text class="dg-sub" x="162" y="160">LiDAR 1–800 cm (nach unten)</text>
+          <text class="dg-sub" x="162" y="167">Optical Flow → Geschwindigkeit</text>
+
+          <!-- Servo -->
+          <rect x="152" y="184" width="104" height="22" rx="3" fill="#e8710a"/>
+          <text class="dg-label" x="162" y="194">Abwurfmechanismus</text>
+          <text class="dg-sub" x="162" y="201">Micro-Servo 9g · 900–2100 µs</text>
+
+          <!-- Kanten -->
+          <path d="M56,36 L56,58 L110,58 L110,80" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="30" y="55">USB · MAVLink</text>
+
+          <path d="M204,36 L204,58 L150,58 L150,80" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="207" y="55">ELRS-Funk</text>
+
+          <path d="M56,140 L56,128 L86,128 L86,118" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="4" y="133">UART4 · MAVLink 2</text>
+
+          <path d="M56,184 L56,174" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="59" y="181">CSI</text>
+
+          <path d="M204,140 L204,128 L174,128 L174,118" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="196" y="133">UART5</text>
+
+          <path d="M204,184 L204,174" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="207" y="181">PWM</text>
+        </svg>
+        <div class="bildunterschrift">
+          <b>Abb. 2:</b> Signalfluss zwischen Bodenstation, Fernsteuerung, Autopilot,
+          Companion-Computer und Sensorik.
+        </div>
+      </section>
+
+      <section>
+        <h2>Fliegen ohne GPS</h2>
+        <p>
+          In Innenräumen fehlt das GPS-Signal. Der <b>MTF-01P</b> ersetzt es durch zwei
+          Messgrößen, die der EKF3-Zustandsschätzer von ArduPilot direkt verarbeitet:
+        </p>
+        <ul>
+          <li><b>LiDAR</b> misst den Abstand zum Boden (1–800 cm) → stabile Höhe
+              (<i>Altitude Hold</i>).</li>
+          <li><b>Optischer Fluss</b> schätzt aus der Bildverschiebung die horizontale
+              Geschwindigkeit → Halten der Position (<i>Position Hold</i>).</li>
+        </ul>
+        <p>
+          Angebunden über <code>SERIAL5</code>, konfiguriert mit <code>FLOW_TYPE=5</code>
+          und <code>RNGFND1_TYPE=10</code>. Ein eigenes Testskript liest Range- und
+          Flow-Telemetrie aus und protokolliert sie als CSV — ohne die Drohne zu armieren.
+        </p>
+      </section>
+
+      <section>
+        <h2>Nutzlast-Abwurf</h2>
+        <p>
+          Ein <b>Micro-Servo 9g</b> öffnet auf Kommando einen 3D-gedruckten Haltebügel.
+          Angesteuert wird es über einen Servo-Ausgang des Flight Controllers, sodass der
+          Abwurf sowohl per Fernsteuerungskanal als auch aus einer Mission ausgelöst
+          werden kann.
+        </p>
+        <ul>
+          <li>Sicherer Stellbereich <code>900–2100&nbsp;µs</code>, Neutralstellung
+              <code>1500&nbsp;µs</code> (≈ 120° Stellweg).</li>
+          <li>Anlaufstrom bis 1,6&nbsp;A — Versorgung über den geregelten 5-V-Zweig,
+              gemeinsame Masse.</li>
+          <li>Halterung in Tinkercad konstruiert, mit Cura gesliced und in PLA gedruckt.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Software &amp; Werkzeuge</h2>
+        <div class="karte">
+          <table>
+            <tr><td>Autopilot</td><td>ArduPilot Copter · QGroundControl</td></tr>
+            <tr><td>Protokoll</td><td>MAVLink 2 (pymavlink, MAVProxy)</td></tr>
+            <tr><td>Companion</td><td>Raspberry Pi OS · Python 3.12 · uv</td></tr>
+            <tr><td>KI-Modell</td><td>NanoDet, On-Sensor auf IMX500 (modlib)</td></tr>
+            <tr><td>Qualität</td><td>ruff · ty · pytest</td></tr>
+            <tr><td>CAD / Druck</td><td>Tinkercad · Cura · PLA-Druckteile</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Projekt in Zahlen</h2>
+        <div class="kennzahlen">
+          <div class="kennzahl"><b>3,5"</b><span>CineWhoop mit Propellerschutz — indoor&shy;tauglich</span></div>
+          <div class="kennzahl"><b>800 cm</b><span>maximale LiDAR-Reichweite nach unten</span></div>
+          <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für Position Hold nötig</span></div>
+          <div class="kennzahl"><b>&lt; 1 m</b><span>Flughöhe in allen autonomen Tests</span></div>
+        </div>
+      </section>
+
+      <section style="display:flex; flex-direction:column; flex:1;">
+        <h2>Vorgehen</h2>
+        <ul class="ablauf">
+          <li><b>Bestandsaufnahme &amp; Sicherheitskonzept</b>
+              <span>Hardware sichten, Flugsicherheitsnetz, Failsafe-Regeln</span></li>
+          <li><b>ArduPilot flashen &amp; konfigurieren</b>
+              <span>Betaflight ersetzt, Parametersatz gesichert</span></li>
+          <li><b>MTF-01P in Betrieb nehmen</b>
+              <span>UART5, EKF3-Fusion, Telemetrie als CSV verifiziert</span></li>
+          <li><b>Raspberry Pi anbinden</b>
+              <span>UART4-MAVLink, automatisierter Health-Check</span></li>
+          <li><b>KI-Kamera integrieren</b>
+              <span>NanoDet auf der IMX500, annotierter Live-Stream</span></li>
+          <li class="offen"><b>Rahmenerweiterung &amp; Abwurf</b>
+              <span>3D-Druckteile, Servo am FC-Ausgang</span></li>
+          <li class="offen"><b>Autonome Flugversuche</b>
+              <span>Personenfolge im Netz, Auswertung der Regelgüte</span></li>
+        </ul>
+      </section>
+
+    </div>
+
+    <!-- ======================= SPALTE 3 ======================= -->
+    <div class="spalte">
+
+      <!-- ############ AUTONOMER FLUG — PLATZ ZUM FÜLLEN ############ -->
+      <section style="display:flex; flex-direction:column; flex:1;">
+        <h2>Autonomer Flug</h2>
+        <div class="platzhalter">
+          <h3>Ansatz</h3>
+          <p style="font-size:4.8mm;">
+            Der Pi wertet die Detektionen der KI-Kamera aus, berechnet daraus Ablage und
+            geschätzte Distanz zur Person und sendet über MAVLink&nbsp;2 Geschwindigkeits&shy;befehle
+            im Body-Frame an den Autopiloten. Sicherheitswächter für Batterie, Maximalhöhe und
+            Zielverlust brechen den Flug automatisch ab.
+          </p>
+          <h3>Ergebnisse</h3>
+          <div class="linien">
+            <div></div><div></div><div></div><div></div><div></div><div></div>
+          </div>
+          <h3>Erkenntnisse / Grenzen</h3>
+          <div class="linien">
+            <div></div><div></div><div></div><div></div>
+          </div>
+          <div class="fuellhinweis">
+            ✎ Freier Bereich — hier die Ergebnisse der autonomen Flugversuche eintragen
+            (Testaufbau im Flugsicherheitsnetz, erreichte Regelgüte, Messwerte, Videostills).
+          </div>
+        </div>
+      </section>
+
+      <!-- ############ FOTO 2 ############ -->
+      <section>
+        <h2>Autonomer Testflug</h2>
+        <div class="foto foto-mittel">
+          <!-- Foto einsetzen: <img src="fotos/foto2.jpg" alt="Testflug im Sicherheitsnetz"> -->
+          <div class="foto-icon">📷</div>
+          <div class="foto-text">Foto&nbsp;2 — Platz für ein Bild</div>
+          <div class="foto-hinweis">z.&nbsp;B. Testflug im Sicherheitsnetz oder<br>Screenshot der Personenerkennung</div>
+        </div>
+        <div class="bildunterschrift">
+          <b>Abb. 3:</b> Bildunterschrift hier eintragen.
+        </div>
+      </section>
+
+      <section>
+        <h2>Sicherheit</h2>
+        <div class="karte karte-akzent">
+          <ul>
+            <li>Alle Tests im <b>Flugsicherheitsnetz</b>, Propellerschutz montiert.</li>
+            <li>Flughöhe im autonomen Betrieb softwareseitig auf <b>&lt; 1 m</b> begrenzt.</li>
+            <li>Der Pilot kann über die Fernsteuerung jederzeit übernehmen; separater
+                Not-Aus schaltet in den LAND-Modus.</li>
+            <li>Testskripte für Sensorik armieren die Drohne nicht und schreiben keine
+                Parameter.</li>
+            <li>Parameterstände werden vor jeder Änderung als Backup gesichert.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section>
+        <h2>Stand &amp; Ausblick</h2>
+        <ul>
+          <li>ArduPilot geflasht und konfiguriert, Parametersatz gesichert.</li>
+          <li>MTF-01P an UART5 in Betrieb, Telemetrie verifiziert.</li>
+          <li>Pi an UART4 angebunden, MAVLink-Verbindung automatisiert prüfbar.</li>
+          <li>Personenerkennung auf der IMX500 läuft mit annotiertem Live-Stream.</li>
+          <li><b>Nächste Schritte:</b> Abwurfmechanik am Servo-Ausgang integrieren,
+              autonome Zielanflüge erweitern, Flugzeit und Regelgüte vermessen.</li>
+        </ul>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ============================ FUSS ============================ -->
+  <footer>
+    <div><b>Frankfurt University of Applied Sciences</b> &nbsp;·&nbsp; Projektarbeit &nbsp;·&nbsp; Sommersemester 2026</div>
+    <div class="qr"><span>Quellcode &amp; Dokumentation:</span> <code>github.com/AI-Drone-FRA-UAS/ai-drone</code></div>
+  </footer>
+
+</div>
+</body>
+</html>
