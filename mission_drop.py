@@ -273,7 +273,14 @@ def main() -> int:
         servo = Servo(
             args.servo_pin, min_pulse_width=900 / 1e6, max_pulse_width=2100 / 1e6
         )
+        # Position anfahren und PWM-Signal abschalten (verhindert Zittern/Ruckeln!)
         servo.value = args.servo_closed
+        time.sleep(0.4)
+        servo.value = None
+        logger.info(
+            "Servo erfolgreich auf geschlossene Position (%.2f) gesetzt und ruhiggestellt.",
+            args.servo_closed,
+        )
     except Exception as e:
         logger.warning(
             "Hinweis: Servo konnte nicht initialisiert werden (%s). Test läuft weiter.",
@@ -448,10 +455,15 @@ def main() -> int:
                             state = STATE_SEARCH
                             search_start_time = time.monotonic()
                             searcher.reset()
+                            stable_center_time = 0.0
                         else:
                             if not args.dry_run:
                                 drone.send_velocity_body(0, 0, 0, 0)
                     else:
+                        now = time.monotonic()
+                        if stable_center_time == 0.0:
+                            stable_center_time = now
+
                         offset_x = target.center[0] - CENTER_X
                         offset_y = CENTER_Y - target.center[1]
 
@@ -465,32 +477,26 @@ def main() -> int:
 
                         if not args.dry_run:
                             drone.send_velocity_body(vx, vy, 0.0, 0.0)
-                        else:
-                            logger.info(
-                                "[DRY-RUN CENTER] Offset: dx=%+6.1fpx, dy=%+6.1fpx | Sim-Befehl: vx=%+5.2fm/s, vy=%+5.2fm/s",
-                                offset_x,
-                                offset_y,
-                                vx,
-                                vy,
-                            )
 
-                        # Stabilitätsprüfung (< 45 Pixel Toleranz für 1.5 Sekunden)
-                        if abs(offset_x) < 45 and abs(offset_y) < 45:
-                            if stable_center_time == 0.0:
-                                stable_center_time = time.monotonic()
-                            elif time.monotonic() - stable_center_time >= 1.5:
-                                logger.info(
-                                    ">>> STATE: DROP (Zentrierung stabil: dx=%.1fpx, dy=%.1fpx)",
-                                    offset_x,
-                                    offset_y,
-                                )
-                                state = STATE_DROP
-                                drop_start_time = time.monotonic()
-                                drop_stage = 0
-                                if not args.dry_run:
-                                    drone.send_velocity_body(0, 0, 0, 0)
-                        else:
-                            stable_center_time = 0.0
+                        tracking_duration = now - stable_center_time
+                        logger.info(
+                            "[CENTER] Offset: dx=%+6.1fpx, dy=%+6.1fpx | Tag erkannt seit: %.1fs / 2.0s",
+                            offset_x,
+                            offset_y,
+                            tracking_duration,
+                        )
+
+                        # Wenn das Tag für 2.0 Sekunden durchgehend im Bild ist -> Auslösen!
+                        if tracking_duration >= 2.0:
+                            logger.info(
+                                ">>> STATE: DROP (Tag seit %.1fs stabil im Bild -> LÖSE SERVO AUS!)",
+                                tracking_duration,
+                            )
+                            state = STATE_DROP
+                            drop_start_time = now
+                            drop_stage = 0
+                            if not args.dry_run:
+                                drone.send_velocity_body(0, 0, 0, 0)
 
                 elif state == STATE_DROP:
                     if not args.dry_run:
@@ -499,26 +505,24 @@ def main() -> int:
                     dt = now - drop_start_time
 
                     if drop_stage == 0:
-                        if dt >= 0.4:
-                            logger.info(
-                                "Löse Servo physisch aus -> Position %.2f",
-                                args.servo_open,
-                            )
-                            if servo:
-                                servo.value = args.servo_open
-                            drop_stage = 1
+                        logger.info(
+                            ">>> SERVO WIRD GEÖFFNET -> Position %.2f", args.servo_open
+                        )
+                        if servo:
+                            servo.value = args.servo_open
+                        drop_stage = 1
                     elif drop_stage == 1:
-                        if dt >= 1.9:
-                            logger.info(
-                                "Schließe Servo physisch -> Position %.2f",
-                                args.servo_closed,
-                            )
+                        # Nach 0.4s ist der Servo offen -> Signal abschalten (bleibt offen stehen)
+                        if dt >= 0.4:
                             if servo:
-                                servo.value = args.servo_closed
+                                servo.value = None
                             drop_stage = 2
                     elif drop_stage == 2:
-                        if dt >= 2.4:
-                            logger.info("Abwurf abgeschlossen. >>> STATE: LAND")
+                        # 1.5s nach dem Öffnen -> Weiter zur Landung (Servo bleibt offen!)
+                        if dt >= 1.5:
+                            logger.info(
+                                "Abwurf abgeschlossen (Servo bleibt offen). >>> STATE: LAND"
+                            )
                             state = STATE_LAND
 
                 elif state == STATE_LAND:
