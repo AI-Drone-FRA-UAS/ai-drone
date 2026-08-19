@@ -538,10 +538,14 @@ def main() -> int:
 
     except KeyboardInterrupt:
         logger.warning(
-            "Mission vom Benutzer (STRG+C) abgebrochen! DroneController führt Notlandung aus."
+            "Mission vom Benutzer (STRG+C) abgebrochen! LÖSE SOFORT-NOT-AUS AUS!"
         )
+        if not args.dry_run and drone_context is not None:
+            drone_context.hard_emergency_kill()
     except Exception as e:
         logger.error("Kritischer Fehler während der Mission: %s", e)
+        if not args.dry_run and drone_context is not None:
+            drone_context.hard_emergency_kill()
     finally:
         camera.stop()
         camera.close()

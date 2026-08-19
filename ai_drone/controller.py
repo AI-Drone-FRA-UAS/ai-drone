@@ -224,7 +224,9 @@ class DroneController:
             elif msg_type == "COMMAND_ACK":
                 cmd = getattr(msg, "command", 0)
                 result = getattr(msg, "result", 0)
-                logger.info("[Flight Controller ACK] Command %d -> Result %d", cmd, result)
+                logger.info(
+                    "[Flight Controller ACK] Command %d -> Result %d", cmd, result
+                )
                 self.last_telemetry_time = now
             elif msg_type == "SYS_STATUS":
                 self.battery_voltage = float(msg.voltage_battery) / 1000.0
@@ -279,15 +281,72 @@ class DroneController:
 
         raise RuntimeError(f"Timeout beim Wechsel in Flugmodus '{mode_name}'.")
 
-    def arm(self, timeout: float = 10.0, force: bool = False) -> None:
-        """Schärft die Motoren der Drohne im GUIDED-Modus."""
+    def send_origin(
+        self,
+        lat: float = 50.1300,
+        lon: float = 8.6900,
+        alt: float = 100.0,
+    ) -> None:
+        """Sendet EKF Global Origin an ArduPilot für Non-GPS / Optical-Flow Navigation."""
+        if not self.connection:
+            return
+
+        lat_int = int(lat * 1e7)
+        lon_int = int(lon * 1e7)
+        alt_int = int(alt * 1000)
+
+        # 1. SET_GPS_GLOBAL_ORIGIN
+        self.connection.mav.set_gps_global_origin_send(
+            self.target_system,
+            lat_int,
+            lon_int,
+            alt_int,
+        )
+        # 2. SET_HOME_POSITION
+        self.connection.mav.set_home_position_send(
+            self.target_system,
+            lat_int,
+            lon_int,
+            alt_int,
+            0,
+            0,
+            0,
+            [1.0, 0.0, 0.0, 0.0],
+            0,
+            0,
+            0,
+        )
+        logger.info("EKF Global Origin gesetzt (Lat: %.4f, Lon: %.4f).", lat, lon)
+
+    def arm(
+        self,
+        timeout: float = 10.0,
+        force: bool = False,
+        mode: str = "GUIDED",
+    ) -> None:
+        """Schärft die Motoren der Drohne im gewählten Modus (Standard: GUIDED)."""
         if not self.connection:
             raise RuntimeError("Nicht verbunden.")
 
-        if self.flight_mode != "GUIDED":
-            self.set_mode("GUIDED")
+        # Bei Non-GPS / Optical Flow immer Origin senden für Positionsschätzung
+        self.send_origin()
+        time.sleep(0.2)
 
-        logger.info("Sende Arming-Befehl (force=%s)...", force)
+        if self.flight_mode != mode:
+            mode_map = self.connection.mode_mapping()
+            # Wenn GUIDED gewünscht ist, aber GUIDED_NOGPS existiert bei reinem Optical Flow:
+            target_mode = mode
+            if (
+                mode == "GUIDED"
+                and "GUIDED_NOGPS" in mode_map
+                and "GUIDED" not in mode_map
+            ):
+                target_mode = "GUIDED_NOGPS"
+            self.set_mode(target_mode)
+
+        logger.info(
+            "Sende Arming-Befehl (Modus: %s, force=%s)...", self.flight_mode, force
+        )
         if force:
             self.connection.mav.command_long_send(
                 self.target_system,
@@ -313,7 +372,11 @@ class DroneController:
                 return
             time.sleep(0.2)
 
-        reason = f" (Meldung vom FC: '{self.last_status_text}')" if self.last_status_text else ""
+        reason = (
+            f" (Meldung vom FC: '{self.last_status_text}')"
+            if self.last_status_text
+            else ""
+        )
         raise RuntimeError(f"Timeout beim Arming der Drohne{reason}.")
 
     def disarm(self, timeout: float = 10.0) -> None:
@@ -349,7 +412,6 @@ class DroneController:
                         mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
                         mode_mapping["LAND"],
                     )
-                # Wenn am Boden oder Höhe sehr gering, zusätzlich disarmen
                 if self.current_altitude is not None and self.current_altitude < 0.2:
                     self.connection.arducopter_disarm()
         except Exception as exc:
@@ -357,8 +419,78 @@ class DroneController:
         finally:
             self.is_flying = False
 
-    def takeoff(self, target_alt: float, timeout: float = 15.0) -> None:
-        """Führt einen autonomen Start im GUIDED-Modus auf die Zielhöhe durch.
+    def set_rc_override(
+        self,
+        roll: int = 1500,
+        pitch: int = 1500,
+        throttle: int = 1500,
+        yaw: int = 1500,
+    ) -> None:
+        """Sendet RC-Kanal-Overrides an ArduPilot (1000-2000, 1500=Neutral/Schweben)."""
+        if not self.connection:
+            return
+        self.connection.mav.rc_channels_override_send(
+            self.target_system,
+            self.target_component,
+            int(roll),
+            int(pitch),
+            int(throttle),
+            int(yaw),
+            0,
+            0,
+            0,
+            0,
+        )
+
+    def clear_rc_override(self) -> None:
+        """Löscht alle aktiven RC Overrides."""
+        if not self.connection:
+            return
+        self.connection.mav.rc_channels_override_send(
+            self.target_system,
+            self.target_component,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+
+    def hard_emergency_kill(self) -> None:
+        """Sofortiger NOT-AUS (Kill Switch): Schneidet den Motorstrom unverzüglich ab."""
+        logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        logger.warning("  SOFORT-NOT-AUS: MOTOREN WERDEN SOFORT ABGESCHALTET!  ")
+        logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        try:
+            self.clear_rc_override()
+            if self.connection:
+                self.set_rc_override(1500, 1500, 1000, 1500)
+                # Force Disarm via MAVLink (param2=21196 kill in mid-air)
+                self.connection.mav.command_long_send(
+                    self.target_system,
+                    self.target_component,
+                    mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                    0,
+                    0,  # 0 = Disarm
+                    21196,  # 21196 = Force Disarm / Kill Switch
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+                self.connection.arducopter_disarm()
+        except Exception as exc:
+            logger.error("Fehler beim Senden des Kill-Befehls: %s", exc)
+        finally:
+            self.is_flying = False
+            self.is_armed = False
+
+    def takeoff(self, target_alt: float, timeout: float = 12.0) -> None:
+        """Führt einen autonomen Start im ALT_HOLD Modus auf die Zielhöhe durch.
 
         Args:
             target_alt: Zielhöhe in Metern (muss <= max_altitude sein).
@@ -371,56 +503,51 @@ class DroneController:
                 f"Zielhöhe {target_alt} m überschreitet Sicherheitslimit von {self.max_altitude} m!"
             )
 
-        if self.flight_mode != "GUIDED":
-            self.set_mode("GUIDED")
+        # 1. In ALT_HOLD wechseln & schärfen
+        if self.flight_mode != "ALT_HOLD":
+            self.set_mode("ALT_HOLD")
         if not self.is_armed:
-            self.arm()
+            self.arm(mode="ALT_HOLD")
 
-        logger.info("Sende Takeoff-Befehl auf %.2f m...", target_alt)
-        self.connection.mav.command_long_send(
-            self.target_system,
-            self.target_component,
-            mavlink.MAV_CMD_NAV_TAKEOFF,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
+        logger.info(
+            "Starte Steigflug auf %.2f m im ALT_HOLD Modus (LiDAR-geführt)...",
             target_alt,
         )
         self.is_flying = True
-
         started = time.monotonic()
+
+        # 2. Steigflug mit aktivem Schub (Throttle 1650)
         while time.monotonic() - started < timeout:
             self.update_telemetry()
 
-            # Prüfe, ob Telemetriestream noch aktiv ist
-            if (
-                self.last_telemetry_time > 0
-                and (time.monotonic() - self.last_telemetry_time) > 2.0
-            ):
-                logger.error(
-                    "Telemetrie-Abbruch während Takeoff! Leite Notlandung ein."
-                )
-                self.emergency_stop()
-                raise RuntimeError("Telemetrie-Abbruch während des Starts.")
+            # Steig-Gas geben (1650 = sanfter Steigflug)
+            self.set_rc_override(roll=1500, pitch=1500, throttle=1650, yaw=1500)
 
+            # Prüfe, ob Zielhöhe erreicht ist
             if (
                 self.current_altitude is not None
-                and self.current_altitude >= target_alt * 0.95
+                and self.current_altitude >= target_alt * 0.85
             ):
-                logger.info("Zielhöhe erreicht: %.2f m", self.current_altitude)
+                logger.info(
+                    "Zielhöhe von %.2f m erreicht (Aktuell: %.2f m). Halte Position!",
+                    target_alt,
+                    self.current_altitude,
+                )
+                # Sofort Schwebegas (1500 = Höhe stabil halten)
+                self.set_rc_override(roll=1500, pitch=1500, throttle=1500, yaw=1500)
                 return
 
-            time.sleep(0.1)
+            time.sleep(0.05)
 
-        logger.error("Timeout beim Steigflug! Leite Landung ein.")
-        self.emergency_stop()
-        raise RuntimeError("Takeoff-Timeout überschritten.")
+        logger.warning(
+            "Takeoff-Zeit erreicht. Gehe in Schwebegas (1500) über (Höhe: %s m).",
+            f"{self.current_altitude:.2f}"
+            if self.current_altitude is not None
+            else "N/A",
+        )
+        self.set_rc_override(roll=1500, pitch=1500, throttle=1500, yaw=1500)
 
-    def land(self, timeout: float = 20.0) -> None:
+    def land(self, timeout: float = 15.0) -> None:
         """Wechselt in den LAND-Modus und wartet auf das Aufsetzen / Disarming."""
         logger.info("Leite Landung (LAND Modus) ein...")
         self.set_mode("LAND")
@@ -428,19 +555,23 @@ class DroneController:
         started = time.monotonic()
         while time.monotonic() - started < timeout:
             self.update_telemetry()
+            if self.flight_mode == "ALT_HOLD":
+                # Sanftes Sinken bei ALT_HOLD
+                self.set_rc_override(roll=1500, pitch=1500, throttle=1350, yaw=1500)
+
             if not self.is_armed or (
-                self.current_altitude is not None and self.current_altitude < 0.15
+                self.current_altitude is not None and self.current_altitude < 0.12
             ):
                 logger.info("Landung abgeschlossen. Drohne ist am Boden.")
+                self.clear_rc_override()
                 self.is_flying = False
                 return
-            time.sleep(0.2)
+            time.sleep(0.1)
 
-        logger.warning(
-            "Landung dauerte länger als %d s. Disarme sicherheitshalber.", timeout
-        )
+        logger.warning("Landung abgeschlossen. Disarme sicherheitshalber.")
+        self.clear_rc_override()
         try:
-            self.disarm(timeout=3.0)
+            self.disarm(timeout=2.0)
         except Exception:
             pass
         self.is_flying = False
@@ -450,8 +581,6 @@ class DroneController:
     ) -> None:
         """Sendet Body-Frame Geschwindigkeits- und Gierratenbefehle an die Drohne.
 
-        Ideale Schnittstelle für die Kamerablickrichtung (IMX500 AI Detections).
-
         Args:
             vx: Vorwärts-/Rückwärts-Geschwindigkeit in m/s (+ Vorwärts, - Rückwärts).
             vy: Links-/Rechts-Geschwindigkeit in m/s (+ Rechts, - Links).
@@ -460,19 +589,19 @@ class DroneController:
         """
         if not self.connection:
             raise RuntimeError("Nicht verbunden.")
-        if not self.is_flying or not self.is_armed:
+        if not self.is_armed:
             logger.warning(
-                "Ignoriere Geschwindigkeitsbefehl: Drohne ist nicht im Flug."
+                "Ignoriere Geschwindigkeitsbefehl: Drohne ist nicht geschärft (DISARMED)."
             )
             return
 
-        # Bitmaske 0x05C7 (1479): Ignoriere Position (Bit 0-2), Beschleunigung (Bit 6-8)
-        # und Gier-Winkel (Bit 10). Aktiviert nur vx, vy, vz (Bit 3-5) & Gier-Rate (Bit 11).
+        # 1. MAVLink SET_POSITION_TARGET_LOCAL_NED
         type_mask = 0x05C7
         yaw_rate_rad = math.radians(yaw_rate_deg)
+        time_boot_ms = int(time.monotonic() * 1000) & 0xFFFFFFFF
 
         self.connection.mav.set_position_target_local_ned_send(
-            0,
+            time_boot_ms,
             self.target_system,
             self.target_component,
             mavlink.MAV_FRAME_BODY_NED,
@@ -488,6 +617,24 @@ class DroneController:
             0,
             0,
             yaw_rate_rad,
+        )
+
+        # 2. RC Override Unterstützung für ALT_HOLD
+        # Pitch: negativ ist vorwärts in RC (-vx)
+        pitch_val = max(1350, min(1650, int(1500 - vx * 350)))
+        # Roll: positiv ist rechts (+vy)
+        roll_val = max(1350, min(1650, int(1500 + vy * 350)))
+        # Throttle: 1500 neutral, 1600 steigen, 1400 sinken
+        if vz < -0.10:
+            thr_val = 1600
+        elif vz > 0.10:
+            thr_val = 1400
+        else:
+            thr_val = 1500
+        yaw_val = max(1350, min(1650, int(1500 + yaw_rate_deg * 5)))
+
+        self.set_rc_override(
+            roll=roll_val, pitch=pitch_val, throttle=thr_val, yaw=yaw_val
         )
         logger.debug(
             "Velocity Body gesendet: vx=%.2f, vy=%.2f, vz=%.2f, yaw_rate=%.1f°/s",
