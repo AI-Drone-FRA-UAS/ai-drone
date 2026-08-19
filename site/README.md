@@ -21,8 +21,14 @@ touches the documentation, the site, or the workflow itself, and can also be
 started by hand from the Actions tab.
 
 One-time setup in the repository: **Settings → Pages → Build and deployment →
-Source: GitHub Actions**. Without that switch the workflow builds but the
-deploy step fails.
+Source: GitHub Actions**. Without that switch the workflow builds the site but
+`configure-pages` fails, so nothing is published.
+
+This step needs **admin** on the repository. It cannot be automated: creating a
+Pages site is closed to `GITHUB_TOKEN`, so `enablement: true` on the action
+fails with *Resource not accessible by integration*, and the REST API answers
+404 for anyone without admin. As of August 2026 the admins are `Jannik99F` and
+`Nankatsu09`.
 
 ## Layout
 

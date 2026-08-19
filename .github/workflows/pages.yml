@@ -41,11 +41,10 @@ jobs:
       - name: Build the site
         run: uv run --group docs python site/build.py
 
-      # enablement lets the workflow's own token create the Pages site, so no
-      # repository admin has to switch the source over by hand.
+      # Needs Pages to exist already: creating the site is closed to
+      # GITHUB_TOKEN, so "enablement: true" cannot help here. A repository
+      # admin has to set Settings -> Pages -> Source: GitHub Actions once.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
