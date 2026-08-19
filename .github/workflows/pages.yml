@@ -41,7 +41,11 @@ jobs:
       - name: Build the site
         run: uv run --group docs python site/build.py
 
+      # enablement lets the workflow's own token create the Pages site, so no
+      # repository admin has to switch the source over by hand.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
