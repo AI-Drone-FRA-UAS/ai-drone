@@ -67,8 +67,8 @@ The current loose forward-facing camera cannot truthfully satisfy that gate.
 
 ## Control architecture
 
-`ai_drone.controller.DroneController` owns the MAVLink connection and the
-arm/mode/takeoff/velocity/land state transitions. `ai_drone.follower` owns
+`ai_drone.flight.controller.DroneController` owns the MAVLink connection and the
+arm/mode/takeoff/velocity/land state transitions. `ai_drone.flight.follower` owns
 person-target extraction and bounded follow-control math. The CLI only parses
 operator intent and sequences those reusable components.
 

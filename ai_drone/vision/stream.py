@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import logging
 import math
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
-
-logger = logging.getLogger(__name__)
 
 # Shared state: the latest JPEG frame and a condition to notify waiters.
 _frame_lock = threading.Lock()
