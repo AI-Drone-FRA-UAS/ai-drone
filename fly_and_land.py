@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Präziser 50 cm Schwebeflug mit aktiver PID-Höhenregelung & ultra-sanftem Sinkflug.
+"""Präziser Schwebeflug basierend auf ArduPilot FLOWHOLD (Optical Flow Position & LiDAR Altitude Hold).
 
 Ablauf:
-1. PHASE 1 (Abheben): Erkennt beim Abheben (~8 cm, Boden=2 cm) das exakte Schwebegas (z. B. 39-42%).
-2. PHASE 2 (Sanfter Steigflug): Steigt geregelt mit ~8 cm/s sanft und überschwingfrei auf 50 cm.
-3. PHASE 3 (Präzisions-Schweben): Hält die Höhe für exakt 3.0 Sekunden aktiv auf 50 cm (PID-Regler).
-4. PHASE 4 (Ultra-sanfter Sinkflug): Sinkt mit 2.5 cm/s geregelt zu Boden.
-5. PHASE 5 (Bodenkontakt & Disarm): Schaltet am Boden sofort auf 0% Schub und disarmt.
+1. INITIALISIERUNG: Verbindet via MAVLink, setzt EKF Origin und wechselt in den Modus FLOWHOLD.
+2. ARMING: Schärft die Motoren sicher bei 0% Gas (1000 PWM).
+3. PHASE 1 (Steigflug): Steigt im FLOWHOLD-Modus (1650 PWM) mit aktiver optischer Driftkorrektur auf 50 cm.
+4. PHASE 2 (Schweben): Hält für 3.0 Sekunden vollautomatisch 50 cm Höhe & horizontale Position (1500 PWM).
+5. PHASE 3 (Sanftes Sinken): Sinkt geregelt mit ~1380 PWM zu Boden, während die Position gehalten wird.
+6. PHASE 4 (Touchdown & Disarm): Schaltet am Boden sofort auf 1000 PWM (0% Gas) und disarmt sicher.
 
 Sicherheit & Logging:
 - SOFORT-NOT-AUS per ENTER-Taste oder STRG+C (0% Gas + Force Disarm).
@@ -16,6 +17,7 @@ Sicherheit & Logging:
 
 from __future__ import annotations
 
+import argparse
 import csv
 import select
 import shutil
@@ -33,24 +35,22 @@ PORT = "/dev/serial0"
 BAUD = 115200  # 115200 oder 921600
 
 DEFAULT_TARGET_ALT = 0.50  # Zielhöhe in Metern (50 cm)
-MAX_ALTITUDE = 0.80  # Sicherheits-Höhenlimit in Metern (80 cm)
+MAX_ALTITUDE = (
+    0.80  # Maximales Sicherheits-Höhenlimit in Metern (80 cm) -> leitet Landung ein
+)
 DEFAULT_HOVER_DURATION = 3.0  # Schwebepause auf 50 cm in Sekunden
-DEFAULT_CLIMB_SPEED = 0.08  # Steiggeschwindigkeit: 0.08 m/s (8 cm/s)
-DEFAULT_DESCENT_SPEED = 0.025  # Sinkgeschwindigkeit: 0.025 m/s (2.5 cm/s)
-LIFTOFF_ALT = 0.08  # Abhebe-Schwelle in Metern (8 cm; Bodenwert ist ~2 cm)
-MAX_RAMP_THROTTLE = 52.0  # Maximales Schublimit für Abhebe-Suche
 
-# Trimmung gegen Drift (50.0% = Neutral / 1500 PWM)
-# > 50.0% zieht nach hinten (Pitch Up), < 50.0% zieht nach vorne (Pitch Down)
-DEFAULT_PITCH_TRIM = 51.8  # Standard-Gegensteuerung gegen Vorwärtsdrift
-DEFAULT_ROLL_TRIM = 50.0  # Standard-Roll (50% = Mitte)
-
-# PID-Regler Parameter für Höhenhaltung um hover_throttle
-KP_ALT = 14.0  # Proportional (% Schub pro Meter Höhenabweichung)
-KI_ALT = 1.5  # Integral (% Schub pro Meter*Sekunde)
-KD_ALT = 4.0  # Dämpfung (% Schub pro m/s Vertikalgeschwindigkeit)
-MAX_I = 3.5  # Maximaler I-Term Anteil (+/- 3.5%)
-MAX_CORRECTION = 7.0  # Maximale Schub-Abweichung vom Schwebegas (+/- 7.0%)
+# PWM-Werte für ArduPilot FLOWHOLD / ALT_HOLD Modus:
+# 1000 = Motor aus / Min
+# 1400-1440 = Sanftes Sinken (kontrolliert mit ~10-15 cm/s)
+# 1470-1500 = Aktives Bremsen / Halten
+# 1530-1545 = Sanfter Steigflug (extrem feinfühlig, verhindert Überschwingen)
+PWM_THROTTLE_DISARM = 1000
+PWM_THROTTLE_CLIMB = 1540
+PWM_THROTTLE_HOVER = 1500
+PWM_THROTTLE_BRAKE = 1470
+PWM_THROTTLE_DESCENT = 1420
+PWM_NEUTRAL = 1500
 # ------------------------------------------------
 
 master = None
@@ -81,14 +81,12 @@ class FlightLogger:
                 "timestamp_iso",
                 "elapsed_s",
                 "phase",
-                "throttle_pct",
+                "mode",
+                "throttle_pwm",
                 "target_alt_m",
                 "current_alt_m",
                 "vz_mps",
-                "p_term",
-                "i_term",
-                "d_term",
-                "total_correction",
+                "flow_quality",
             ]
         )
 
@@ -106,14 +104,12 @@ class FlightLogger:
     def log_telemetry(
         self,
         phase: str,
-        throttle_pct: float,
+        mode: str,
+        throttle_pwm: int,
         target_alt: float | None = None,
         current_alt: float | None = None,
         vz: float = 0.0,
-        p_term: float = 0.0,
-        i_term: float = 0.0,
-        d_term: float = 0.0,
-        total_correction: float = 0.0,
+        flow_quality: int | None = None,
     ):
         if current_alt is not None and current_alt > self.max_alt_seen:
             self.max_alt_seen = current_alt
@@ -125,14 +121,12 @@ class FlightLogger:
                 now_iso,
                 f"{elapsed:.3f}",
                 phase,
-                f"{throttle_pct:.2f}",
+                mode,
+                throttle_pwm,
                 f"{target_alt:.3f}" if target_alt is not None else "",
                 f"{current_alt:.3f}" if current_alt is not None else "",
                 f"{vz:.3f}",
-                f"{p_term:.2f}",
-                f"{i_term:.2f}",
-                f"{d_term:.2f}",
-                f"{total_correction:.2f}",
+                flow_quality if flow_quality is not None else "",
             ]
         )
 
@@ -143,7 +137,6 @@ class FlightLogger:
             if self.csv_file and not self.csv_file.closed:
                 self.csv_file.close()
 
-            # Kopiere auf latest-Dateien für schnellen Abruf
             shutil.copyfile(self.log_file_path, self.latest_log_path)
             shutil.copyfile(self.csv_file_path, self.latest_csv_path)
         except Exception as e:
@@ -159,7 +152,7 @@ def log_msg(*args, **kwargs):
 
 
 class TelemetryTracker:
-    """Liest nicht-blockierend MAVLink-Sensordaten und berechnet Höhe + Vertikalgeschwindigkeit."""
+    """Liest nicht-blockierend MAVLink-Sensordaten (LiDAR, Optical Flow, EKF)."""
 
     def __init__(self, m):
         self.m = m
@@ -168,6 +161,9 @@ class TelemetryTracker:
         self.filtered_vz: float = 0.0
         self.last_raw_alt: float | None = None
         self.last_raw_time: float = 0.0
+        self.flow_quality: int | None = None
+        self.flight_mode: str | None = None
+        self.is_armed: bool = False
 
     def update(self) -> float | None:
         """Liest alle anstehenden MAVLink-Nachrichten aus dem Puffer."""
@@ -175,15 +171,7 @@ class TelemetryTracker:
             return None
 
         while True:
-            msg = self.m.recv_match(
-                type=[
-                    "RANGEFINDER",
-                    "DISTANCE_SENSOR",
-                    "OPTICAL_FLOW",
-                    "OPTICAL_FLOW_RAD",
-                ],
-                blocking=False,
-            )
+            msg = self.m.recv_match(blocking=False)
             if msg is None:
                 break
 
@@ -191,7 +179,11 @@ class TelemetryTracker:
             raw_dist: float | None = None
             msg_type = msg.get_type()
 
-            if msg_type == "RANGEFINDER":
+            if msg_type == "HEARTBEAT":
+                self.is_armed = bool(msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                if hasattr(self.m, "flightmode"):
+                    self.flight_mode = self.m.flightmode
+            elif msg_type == "RANGEFINDER":
                 d = float(msg.distance)
                 if 0.01 <= d <= 3.0:
                     raw_dist = d
@@ -205,17 +197,18 @@ class TelemetryTracker:
                 d = float(msg.ground_distance)
                 if 0.01 <= d <= 3.0:
                     raw_dist = d
+                self.flow_quality = int(msg.quality)
             elif msg_type == "OPTICAL_FLOW_RAD":
                 d = float(msg.distance)
                 if 0.01 <= d <= 3.0:
                     raw_dist = d
+                self.flow_quality = int(msg.quality)
 
             if raw_dist is not None:
                 if self.last_raw_alt is not None and self.last_raw_time > 0:
                     dt = now - self.last_raw_time
                     if dt > 0.005:
                         instant_vz = (raw_dist - self.last_raw_alt) / dt
-                        # Tiefpass-Filter für die Vertikalgeschwindigkeit
                         self.filtered_vz = 0.70 * self.filtered_vz + 0.30 * instant_vz
 
                 self.current_alt = raw_dist
@@ -223,107 +216,28 @@ class TelemetryTracker:
                 self.last_raw_alt = raw_dist
                 self.last_raw_time = now
 
-        # Daten gelten als aktuell, wenn innerhalb der letzten 400ms empfangen
         if time.monotonic() - self.last_alt_time < 0.40:
             return self.current_alt
         return None
 
 
-class AltitudePID:
-    """PID-Höhenregler mit Anti-Windup um das Schwebegas."""
-
-    def __init__(
-        self,
-        kp: float = KP_ALT,
-        ki: float = KI_ALT,
-        kd: float = KD_ALT,
-        max_i: float = MAX_I,
-        max_correction: float = MAX_CORRECTION,
-    ):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self.max_i = max_i
-        self.max_correction = max_correction
-        self.integral = 0.0
-        self.last_time = time.monotonic()
-        self.p_term = 0.0
-        self.i_term = 0.0
-        self.d_term = 0.0
-        self.total_correction = 0.0
-
-    def reset(self):
-        self.integral = 0.0
-        self.last_time = time.monotonic()
-        self.p_term = 0.0
-        self.i_term = 0.0
-        self.d_term = 0.0
-        self.total_correction = 0.0
-
-    def compute(
-        self,
-        target_alt: float,
-        current_alt: float | None,
-        vz: float,
-        hover_throttle: float,
-    ) -> float:
-        if current_alt is None:
-            return hover_throttle
-
-        now = time.monotonic()
-        dt = max(0.005, min(0.15, now - self.last_time))
-        self.last_time = now
-
-        # error > 0: Drohne ist tiefer als Soll -> Schub erhöhen
-        # vz > 0: Drohne steigt -> Schub dämpfen
-        error = target_alt - current_alt
-
-        # Integriere nur in der Luft (> 4 cm)
-        if current_alt > 0.04:
-            self.integral += error * dt
-            self.integral = max(-self.max_i, min(self.max_i, self.integral))
-        else:
-            self.integral = 0.0
-
-        self.p_term = self.kp * error
-        self.i_term = self.ki * self.integral
-        self.d_term = -self.kd * vz
-
-        total = self.p_term + self.i_term + self.d_term
-        self.total_correction = max(
-            -self.max_correction, min(self.max_correction, total)
-        )
-        cmd = hover_throttle + self.total_correction
-        return max(0.0, min(100.0, cmd))
-
-
-def percent_to_pwm(pct: float) -> int:
-    """Wandelt 0-100% Schub linear in RC-PWM (1000-2000) um."""
-    clamped = max(0.0, min(100.0, pct))
-    return int(1000 + clamped * 10.0)
-
-
-def send_rc_percent(
+def send_rc_raw(
     m,
-    roll_pct: float = DEFAULT_ROLL_TRIM,
-    pitch_pct: float = DEFAULT_PITCH_TRIM,
-    throttle_pct: float = 0.0,
-    yaw_pct: float = 50.0,
+    roll: int = PWM_NEUTRAL,
+    pitch: int = PWM_NEUTRAL,
+    throttle: int = PWM_THROTTLE_DISARM,
+    yaw: int = PWM_NEUTRAL,
 ):
-    """Sendet Steuerbefehle in Prozent (Roll/Pitch/Yaw 50% = Neutral/Mitte)."""
+    """Sendet rohe RC-Override-PWM-Werte (1000-2000) an ArduPilot."""
     if m is None:
         return
-    r_pwm = percent_to_pwm(roll_pct)
-    p_pwm = percent_to_pwm(pitch_pct)
-    t_pwm = percent_to_pwm(throttle_pct)
-    y_pwm = percent_to_pwm(yaw_pct)
     m.mav.rc_channels_override_send(
         m.target_system,
         m.target_component,
-        r_pwm,
-        p_pwm,
-        t_pwm,
-        y_pwm,
+        int(roll),
+        int(pitch),
+        int(throttle),
+        int(yaw),
         0,
         0,
         0,
@@ -332,14 +246,14 @@ def send_rc_percent(
 
 
 def emergency_kill():
-    """Sofortiger Not-Aus: Schneidet den Motorstrom unverzüglich ab (0%)."""
+    """Sofortiger Not-Aus: Schneidet den Motorstrom unverzüglich ab (1000 PWM)."""
     log_msg("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    log_msg("  SOFORT-NOT-AUS: SCHNEIDE MOTORSTROM AB (0% SCHUB)!  ")
+    log_msg("  SOFORT-NOT-AUS: SCHNEIDE MOTORSTROM AB (MOTOREN AUS)!  ")
     log_msg("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
     global master
     if master is not None:
         try:
-            send_rc_percent(master, throttle_pct=0.0)
+            send_rc_raw(master, throttle=PWM_THROTTLE_DISARM)
             master.mav.command_long_send(
                 master.target_system,
                 master.target_component,
@@ -354,18 +268,7 @@ def emergency_kill():
                 0,
             )
             master.arducopter_disarm()
-            master.mav.rc_channels_override_send(
-                master.target_system,
-                master.target_component,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
+            send_rc_raw(master, 0, 0, 0, 0)
         except Exception as e:
             log_msg("Fehler beim Not-Aus:", e)
 
@@ -383,19 +286,71 @@ def keyboard_listener():
                 break
 
 
-def set_mode(m, mode_name: str):
-    """Wechselt den Flugmodus auf dem Flight Controller."""
+def set_mode(m, mode_name: str, timeout: float = 5.0) -> str:
+    """Wechselt den Flugmodus und verifiziert die Rückmeldung von ArduPilot."""
     mode_mapping = m.mode_mapping()
-    if mode_name not in mode_mapping:
-        raise Exception(f"Modus '{mode_name}' wird nicht unterstützt!")
-    mode_id = mode_mapping[mode_name]
-    log_msg(f"Wechsle in Modus {mode_name}...")
+
+    target_mode = mode_name
+    if target_mode not in mode_mapping:
+        if target_mode == "FLOWHOLD" and "ALT_HOLD" in mode_mapping:
+            log_msg(
+                "Hinweis: FLOWHOLD nicht direkt in Mode-Map -> Verwende ALT_HOLD als Fallback."
+            )
+            target_mode = "ALT_HOLD"
+        else:
+            raise Exception(
+                f"Modus '{mode_name}' wird vom Flight Controller nicht unterstützt!"
+            )
+
+    mode_id = mode_mapping[target_mode]
+    log_msg(f"Wechsle in Flugmodus {target_mode}...")
     m.mav.set_mode_send(
         m.target_system,
         mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
         mode_id,
     )
-    time.sleep(0.8)
+
+    started = time.monotonic()
+    while time.monotonic() - started < timeout:
+        msg = m.recv_match(type="HEARTBEAT", blocking=False)
+        if msg and hasattr(m, "flightmode"):
+            if m.flightmode == target_mode:
+                log_msg(f"Modus erfolgreich auf {target_mode} gewechselt.")
+                return target_mode
+        time.sleep(0.1)
+
+    log_msg(f"Moduswechsel auf {target_mode} gesendet.")
+    return target_mode
+
+
+def send_origin(m, lat: float = 50.1300, lon: float = 8.6900, alt: float = 100.0):
+    """Setzt den virtuellen EKF Global Origin für Optical Flow Navigation."""
+    if m is None:
+        return
+    lat_int = int(lat * 1e7)
+    lon_int = int(lon * 1e7)
+    alt_int = int(alt * 1000)
+
+    m.mav.set_gps_global_origin_send(
+        m.target_system,
+        lat_int,
+        lon_int,
+        alt_int,
+    )
+    m.mav.set_home_position_send(
+        m.target_system,
+        lat_int,
+        lon_int,
+        alt_int,
+        0,
+        0,
+        0,
+        [1.0, 0.0, 0.0, 0.0],
+        0,
+        0,
+        0,
+    )
+    log_msg("EKF Origin & Home Position gesetzt.")
 
 
 def request_streams(m):
@@ -405,6 +360,8 @@ def request_streams(m):
         mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR,
         mavlink.MAVLINK_MSG_ID_OPTICAL_FLOW,
         mavlink.MAVLINK_MSG_ID_OPTICAL_FLOW_RAD,
+        mavlink.MAVLINK_MSG_ID_ATTITUDE,
+        mavlink.MAVLINK_MSG_ID_SYS_STATUS,
     )
     for msg_id in message_ids:
         m.mav.command_long_send(
@@ -413,30 +370,20 @@ def request_streams(m):
             mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
             0,
             msg_id,
-            50_000,  # 50,000 us = 20 Hz
+            50_000,
             0,
             0,
             0,
             0,
             0,
         )
-    m.mav.request_data_stream_send(
-        m.target_system, m.target_component, mavlink.MAV_DATA_STREAM_EXTRA1, 20, 1
-    )
-    m.mav.request_data_stream_send(
-        m.target_system,
-        m.target_component,
-        mavlink.MAV_DATA_STREAM_RAW_SENSORS,
-        20,
-        1,
-    )
 
 
 def disarm_motors(m):
     """Führt einen sauberen Disarm durch und löscht alle Overrides."""
     if m is None:
         return
-    send_rc_percent(m, throttle_pct=0.0)
+    send_rc_raw(m, throttle=PWM_THROTTLE_DISARM)
     for _ in range(3):
         try:
             m.mav.command_long_send(
@@ -445,7 +392,7 @@ def disarm_motors(m):
                 mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
                 0,
                 0,  # Disarm
-                21196,  # Force Disarm
+                21196,
                 0,
                 0,
                 0,
@@ -457,27 +404,14 @@ def disarm_motors(m):
             pass
         time.sleep(0.08)
 
-    m.mav.rc_channels_override_send(
-        m.target_system,
-        m.target_component,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    )
+    send_rc_raw(m, 0, 0, 0, 0)
 
 
 def main():
     global master, logger
 
-    import argparse
-
     parser = argparse.ArgumentParser(
-        description="Präziser 50 cm Schwebeflug mit PID-Höhenregelung & Trimmung"
+        description="Präziser Schwebeflug im FLOWHOLD-Modus (Optical Flow + LiDAR)"
     )
     parser.add_argument(
         "--alt",
@@ -492,28 +426,22 @@ def main():
         help="Schwebeflug-Dauer auf Zielhöhe in Sekunden (Standard: 3.0s)",
     )
     parser.add_argument(
-        "--pitch-trim",
-        type=float,
-        default=DEFAULT_PITCH_TRIM,
-        help="Pitch-Trimmung in Prozent (>50% zieht nach hinten, <50% nach vorne, Standard: 51.8%%)",
+        "--mode",
+        type=str,
+        default="FLOWHOLD",
+        help="Flugmodus (Standard: FLOWHOLD, Fallback: ALT_HOLD)",
     )
     parser.add_argument(
-        "--roll-trim",
-        type=float,
-        default=DEFAULT_ROLL_TRIM,
-        help="Roll-Trimmung in Prozent (>50% rechts, <50% links, Standard: 50.0%%)",
+        "--climb-pwm",
+        type=int,
+        default=PWM_THROTTLE_CLIMB,
+        help="Steig-PWM (Standard: 1650)",
     )
     parser.add_argument(
-        "--climb-speed",
-        type=float,
-        default=DEFAULT_CLIMB_SPEED,
-        help="Steiggeschwindigkeit in m/s (Standard: 0.08 m/s = 8 cm/s)",
-    )
-    parser.add_argument(
-        "--descent-speed",
-        type=float,
-        default=DEFAULT_DESCENT_SPEED,
-        help="Sinkgeschwindigkeit in m/s (Standard: 0.025 m/s = 2.5 cm/s)",
+        "--descent-pwm",
+        type=int,
+        default=PWM_THROTTLE_DESCENT,
+        help="Sink-PWM (Standard: 1380)",
     )
     parser.add_argument(
         "--device",
@@ -525,30 +453,27 @@ def main():
 
     target_alt = args.alt
     hover_duration = args.duration
-    pitch_trim = args.pitch_trim
-    roll_trim = args.roll_trim
-    climb_speed = args.climb_speed
-    descent_speed = args.descent_speed
+    target_mode = args.mode
+    climb_pwm = args.climb_pwm
+    descent_pwm = args.descent_pwm
 
     logger = FlightLogger("logs")
 
     log_msg("====================================================================")
-    log_msg(f"  PRÄZISER SCHWEBEFLUG AUF {target_alt * 100:.0f} cm (PID-Geregelt)")
+    log_msg(f"  FLOWHOLD SCHWEBEFLUG AUF {target_alt * 100:.0f} cm")
     log_msg(
-        f"  (Haltezeit: {hover_duration:.1f}s | Sinkflug: {descent_speed * 100:.1f} cm/s | Max: {MAX_ALTITUDE * 100:.0f} cm)"
+        f"  (Modus: {target_mode} | Haltezeit: {hover_duration:.1f}s | Max-Limit: {MAX_ALTITUDE * 100:.0f} cm)"
     )
-    log_msg(f"  Trimmung: Pitch={pitch_trim:.1f}% (>50=hinten), Roll={roll_trim:.1f}%")
+    log_msg("  -> ArduPilot regelt Höhe via LiDAR & hält Position via Optical Flow!")
     log_msg(f"  Logdatei: {logger.log_file_path}")
     log_msg(f"  Telemetrie CSV: {logger.csv_file_path}")
     log_msg("  *** NOT-AUS: Drücke jederzeit 'ENTER' oder 'STRG+C' zum Killen! ***")
     log_msg("====================================================================")
 
-    # Not-Aus Listener starten
     t = threading.Thread(target=keyboard_listener, daemon=True)
     t.start()
 
     try:
-        # 1. Verbinden
         log_msg(f"Verbinde mit Flight Controller ({args.device})...")
         try:
             master = mavutil.mavlink_connection(args.device, baud=BAUD)
@@ -561,149 +486,103 @@ def main():
 
         request_streams(master)
         telemetry = TelemetryTracker(master)
-        pid = AltitudePID()
 
-        # 2. Modus auf STABILIZE
-        log_msg("Setze Modus auf STABILIZE...")
-        set_mode(master, "STABILIZE")
+        send_origin(master)
+        time.sleep(0.3)
 
-        # 3. Schärfen mit 0% Gas
-        log_msg("Arming mit 0% Gas...")
-        send_rc_percent(
-            master,
-            roll_pct=roll_trim,
-            pitch_pct=pitch_trim,
-            throttle_pct=0.0,
-        )
+        active_mode = set_mode(master, target_mode)
+
+        log_msg("Arming mit 0% Gas (1000 PWM)...")
+        send_rc_raw(master, throttle=PWM_THROTTLE_DISARM)
         master.arducopter_arm()
+
+        arm_start = time.monotonic()
+        while time.monotonic() - arm_start < 3.0:
+            telemetry.update()
+            if telemetry.is_armed:
+                break
+            time.sleep(0.1)
+
         log_msg("Drohne ist geschärft (ARMED).")
-        time.sleep(1.0)
+        # 5. PHASE 1: GEREGELTER STEIGFLUG AUF ZIELHÖHE (FLOWHOLD)
+        log_msg(
+            f"\n>>> 1. STARTE SANFTEN STEIGFLUG auf {target_alt * 100:.0f} cm (Throttle: {climb_pwm} PWM)..."
+        )
+        climb_start = time.monotonic()
+        last_print = 0.0
+        target_reached = False
 
-        # 4. PHASE 1: SANFTES HOCHFAHREN BIS ZUM ABHEBEN (~8 cm)
-        log_msg("\n>>> 1. STARTE SCHUB-RAMPE BIS ZUM ABHEBEN...")
-        thr_pct = 15.0
-        hover_throttle = 0.0
-        liftoff_detected = False
-
-        while thr_pct <= MAX_RAMP_THROTTLE and not stop_event.is_set():
-            thr_pct += 0.4
-            send_rc_percent(
-                master,
-                roll_pct=roll_trim,
-                pitch_pct=pitch_trim,
-                throttle_pct=thr_pct,
-            )
-
+        # Max 8 Sekunden Steigzeit
+        while (time.monotonic() - climb_start < 8.0) and not stop_event.is_set():
             alt = telemetry.update()
-            alt_str = f"{alt * 100:5.1f} cm" if alt is not None else "Am Boden"
-            log_msg(f"[SUCHE SCHWEBEDRUCK] Schub: {thr_pct:5.1f}% | Höhe: {alt_str}")
 
-            logger.log_telemetry(
-                phase="SEARCH_HOVER",
-                throttle_pct=thr_pct,
-                target_alt=LIFTOFF_ALT,
-                current_alt=alt,
-                vz=telemetry.filtered_vz,
-            )
-
-            # Sicherheitslimit-Check
+            # Sicherheits-Check: Bei > 80 cm nicht abstürzen lassen, sondern kontrolliert landen!
             if alt is not None and alt > MAX_ALTITUDE:
-                log_msg(f"\nWARNUNG: Maximalhöhe ({alt * 100:.1f} cm) überschritten!")
-                emergency_kill()
-                return
-
-            if alt is not None and alt >= LIFTOFF_ALT:
-                hover_throttle = thr_pct
-                liftoff_detected = True
                 log_msg(
-                    f"\n>>> 🚀 ABHEBEN ERKANNT BEI {hover_throttle:.1f}% SCHUB! Starte geregelten Steigflug..."
+                    f"\n>>> ⚠️ SICHERHEITSHÖHE ({alt * 100:.1f} cm > {MAX_ALTITUDE * 100:.0f} cm) ERREICHT -> LEITE SOFORT-LANDUNG EIN!"
                 )
                 break
 
-            time.sleep(0.08)
+            # Vorausschauende Steig-Drosselung (Aktives Bremsen):
+            # Ab 28 cm Höhe (55% von 50 cm) Gas auf 1470 PWM drosseln, damit die Aufwärts-
+            # Trägheit frühzeitig gebremst wird und die Drohne nicht über 50 cm schießt.
+            if alt is not None and alt >= target_alt * 0.55:
+                active_throttle = (
+                    PWM_THROTTLE_BRAKE  # 1470 PWM: baut Steigrate sanft ab
+                )
+            else:
+                active_throttle = (
+                    climb_pwm  # 1540 PWM: feinfühliges Abheben und Steigen
+                )
 
-        if not liftoff_detected or hover_throttle == 0.0:
-            log_msg(
-                f"\nFEHLER: Drohne konnte bis {MAX_RAMP_THROTTLE:.0f}% Schub nicht abheben. Breche sicher ab."
+            send_rc_raw(master, throttle=active_throttle)
+
+            logger.log_telemetry(
+                phase="CLIMB",
+                mode=active_mode,
+                throttle_pwm=active_throttle,
+                target_alt=target_alt,
+                current_alt=alt,
+                vz=telemetry.filtered_vz,
+                flow_quality=telemetry.flow_quality,
             )
-            disarm_motors(master)
-            return
 
-        # 5. PHASE 2: GEREGELTER STEIGFLUG BIS ZIELHÖHE (PID-Regler, kein Überschwingen)
+            now = time.monotonic()
+            if now - last_print >= 0.15:
+                alt_str = f"{alt * 100:5.1f} cm" if alt is not None else "---"
+                q_str = (
+                    f"Q:{telemetry.flow_quality}"
+                    if telemetry.flow_quality is not None
+                    else "Q:--"
+                )
+                log_msg(
+                    f"[STEIGEN]  PWM: {active_throttle} | Ist: {alt_str} / Soll: {target_alt * 100:.0f} cm | Flow: {q_str}"
+                )
+                last_print = now
+
+            # Zielhöhe erreicht -> Sofort in Schwebegas (1500 PWM) wechseln
+            if alt is not None and alt >= target_alt * 0.88:
+                target_reached = True
+                log_msg(
+                    f"\n>>> 🎯 ZIELHÖHE ERREICHT! Ist-Höhe: {alt * 100:.1f} cm. Schalte auf Schwebegas (1500 PWM)..."
+                )
+                send_rc_raw(master, throttle=PWM_THROTTLE_HOVER)
+                break
+
+            time.sleep(0.05)
+
+        if not target_reached and not stop_event.is_set():
+            alt = telemetry.update()
+            alt_str = f"{alt * 100:.1f} cm" if alt is not None else "N/A"
+            log_msg(
+                f"\n>>> Steigzeit-Limit erreicht (Höhe: {alt_str}). Gehe in Schwebeflug über..."
+            )
+            send_rc_raw(master, throttle=PWM_THROTTLE_HOVER)
+
+        # 6. PHASE 2: POSITION- & ALTITUDE-HOLD SCHWEBEFLUG (3.0 Sekunden)
         if not stop_event.is_set():
             log_msg(
-                f"\n>>> 2. SANFTER GEREGELTER STEIGFLUG bis {target_alt * 100:.0f} cm ({climb_speed * 100:.0f} cm/s)..."
-            )
-            pid.reset()
-            climb_start = time.monotonic()
-            current_alt = telemetry.update()
-            start_alt = current_alt if current_alt is not None else LIFTOFF_ALT
-            last_print = 0.0
-
-            while (time.monotonic() - climb_start < 8.0) and not stop_event.is_set():
-                elapsed = time.monotonic() - climb_start
-                ramp_alt = min(target_alt, start_alt + (elapsed * climb_speed))
-
-                alt = telemetry.update()
-
-                # Sicherheitslimit-Check
-                if alt is not None and alt > MAX_ALTITUDE:
-                    log_msg(
-                        f"\nWARNUNG: Maximalhöhe ({alt * 100:.1f} cm) überschritten!"
-                    )
-                    emergency_kill()
-                    return
-
-                active_thr = pid.compute(
-                    target_alt=ramp_alt,
-                    current_alt=alt,
-                    vz=telemetry.filtered_vz,
-                    hover_throttle=hover_throttle,
-                )
-                send_rc_percent(
-                    master,
-                    roll_pct=roll_trim,
-                    pitch_pct=pitch_trim,
-                    throttle_pct=active_thr,
-                )
-
-                logger.log_telemetry(
-                    phase="CLIMB",
-                    throttle_pct=active_thr,
-                    target_alt=ramp_alt,
-                    current_alt=alt,
-                    vz=telemetry.filtered_vz,
-                    p_term=pid.p_term,
-                    i_term=pid.i_term,
-                    d_term=pid.d_term,
-                    total_correction=pid.total_correction,
-                )
-
-                now = time.monotonic()
-                if now - last_print >= 0.15:
-                    alt_str = f"{alt * 100:5.1f} cm" if alt is not None else "---"
-                    log_msg(
-                        f"[STEIGEN]  Schub: {active_thr:5.1f}% | Ist: {alt_str} | Soll: {ramp_alt * 100:5.1f} cm"
-                    )
-                    last_print = now
-
-                # Zielhöhe erreicht und eingeschwungen
-                if (
-                    ramp_alt >= target_alt
-                    and alt is not None
-                    and abs(alt - target_alt) <= 0.03
-                ):
-                    log_msg(
-                        f"\n>>> 🎯 {target_alt * 100:.0f} CM ERREICHT & EINGESCHWUNGEN! Höhe: {alt * 100:.1f} cm"
-                    )
-                    break
-
-                time.sleep(0.05)
-
-        # 6. PHASE 3: PRÄZISIONS-SCHWEBEFLUG AUF EXAKT ZIELHÖHE
-        if not stop_event.is_set():
-            log_msg(
-                f"\n>>> 3. AKTIVES SCHWEBEN für {hover_duration:.1f}s auf exakt {target_alt * 100:.0f} cm..."
+                f"\n>>> 2. AKTIVER SCHWEBEFLUG für {hover_duration:.1f}s auf {target_alt * 100:.0f} cm (FLOWHOLD)..."
             )
             hover_start = time.monotonic()
             last_print = 0.0
@@ -713,108 +592,95 @@ def main():
             ) and not stop_event.is_set():
                 alt = telemetry.update()
 
-                # Sicherheitslimit-Check
+                # Sicherheits-Check: Bei > 80 cm kontrolliert abfangen und landen
                 if alt is not None and alt > MAX_ALTITUDE:
                     log_msg(
-                        f"\nWARNUNG: Maximalhöhe ({alt * 100:.1f} cm) überschritten!"
+                        f"\n>>> ⚠️ SICHERHEITSHÖHE ({alt * 100:.1f} cm > {MAX_ALTITUDE * 100:.0f} cm) ERREICHT -> LEITE LANDUNG EIN!"
                     )
-                    emergency_kill()
-                    return
+                    break
 
-                active_thr = pid.compute(
-                    target_alt=target_alt,
-                    current_alt=alt,
-                    vz=telemetry.filtered_vz,
-                    hover_throttle=hover_throttle,
-                )
-                send_rc_percent(
-                    master,
-                    roll_pct=roll_trim,
-                    pitch_pct=pitch_trim,
-                    throttle_pct=active_thr,
-                )
+                # Feine Höhenkorrektur im Schwebeflug:
+                # Liegt sie über 54 cm: mit 1460 PWM leicht nach unten drücken
+                # Liegt sie unter 46 cm: mit 1530 PWM sanft anheben
+                # Ansonsten 1500 PWM Totzone
+                if alt is not None and alt > target_alt + 0.04:
+                    hover_pwm = 1460
+                elif alt is not None and alt < target_alt - 0.04:
+                    hover_pwm = 1530
+                else:
+                    hover_pwm = PWM_THROTTLE_HOVER
+
+                send_rc_raw(master, throttle=hover_pwm)
 
                 logger.log_telemetry(
                     phase="HOVER",
-                    throttle_pct=active_thr,
+                    mode=active_mode,
+                    throttle_pwm=hover_pwm,
                     target_alt=target_alt,
                     current_alt=alt,
                     vz=telemetry.filtered_vz,
-                    p_term=pid.p_term,
-                    i_term=pid.i_term,
-                    d_term=pid.d_term,
-                    total_correction=pid.total_correction,
+                    flow_quality=telemetry.flow_quality,
                 )
 
                 now = time.monotonic()
                 if now - last_print >= 0.20:
                     alt_str = f"{alt * 100:5.1f} cm" if alt is not None else "N/A"
                     rem = hover_duration - (now - hover_start)
+                    q_str = (
+                        f"Q:{telemetry.flow_quality}"
+                        if telemetry.flow_quality is not None
+                        else "Q:--"
+                    )
                     log_msg(
-                        f"[SCHWEBEN] Schub: {active_thr:5.1f}% | Ist: {alt_str} | Soll: {target_alt * 100:5.1f} cm | Rest: {rem:3.1f}s"
+                        f"[SCHWEBEN] PWM: {hover_pwm} | Ist: {alt_str} | Soll: {target_alt * 100:.0f} cm | Rest: {rem:3.1f}s | Flow: {q_str}"
                     )
                     last_print = now
 
                 time.sleep(0.05)
 
-        # 7. PHASE 4: GEREGELTER ULTRA-SANFTER SINKFLUG
+        # 7. PHASE 3: GEREGELTER SINKFLUG & LANDUNG
         if not stop_event.is_set():
             log_msg(
-                f"\n>>> 4. STARTE ULTRA-SANFTEN SINKFLUG ({descent_speed * 100:.1f} cm/s)..."
+                f"\n>>> 3. STARTE KONTROLLIERTEN SINKFLUG / LANDUNG (Throttle: {descent_pwm} PWM)..."
             )
-            pid.reset()
             sink_start = time.monotonic()
-            current_alt = telemetry.update()
-            start_alt = current_alt if current_alt is not None else target_alt
             last_print = 0.0
             touchdown_count = 0
 
-            # Max 35s Sinkflug
-            while (time.monotonic() - sink_start < 35.0) and not stop_event.is_set():
-                elapsed = time.monotonic() - sink_start
-                desired_alt = max(0.02, start_alt - (elapsed * descent_speed))
-
+            # Max 20 Sekunden Sinkzeit
+            while (time.monotonic() - sink_start < 20.0) and not stop_event.is_set():
                 alt = telemetry.update()
 
-                active_thr = pid.compute(
-                    target_alt=desired_alt,
-                    current_alt=alt,
-                    vz=telemetry.filtered_vz,
-                    hover_throttle=hover_throttle,
-                )
-                send_rc_percent(
-                    master,
-                    roll_pct=roll_trim,
-                    pitch_pct=pitch_trim,
-                    throttle_pct=active_thr,
-                )
+                # Sanftes Sinken anfordern (1420 PWM)
+                # Nahe am Boden (< 15 cm) noch sanfter (1450 PWM)
+                current_descent_pwm = descent_pwm
+                if alt is not None and alt <= 0.15:
+                    current_descent_pwm = min(descent_pwm + 30, 1460)
+
+                send_rc_raw(master, throttle=current_descent_pwm)
 
                 logger.log_telemetry(
                     phase="DESCENT",
-                    throttle_pct=active_thr,
-                    target_alt=desired_alt,
+                    mode=active_mode,
+                    throttle_pwm=current_descent_pwm,
+                    target_alt=0.0,
                     current_alt=alt,
                     vz=telemetry.filtered_vz,
-                    p_term=pid.p_term,
-                    i_term=pid.i_term,
-                    d_term=pid.d_term,
-                    total_correction=pid.total_correction,
+                    flow_quality=telemetry.flow_quality,
                 )
 
                 now = time.monotonic()
                 if now - last_print >= 0.20:
                     alt_str = f"{alt * 100:5.1f} cm" if alt is not None else "---"
-                    log_msg(
-                        f"[SINKEN]   Schub: {active_thr:5.1f}% | Ist: {alt_str} | Soll: {desired_alt * 100:5.1f} cm"
-                    )
+                    log_msg(f"[SINKEN]   PWM: {current_descent_pwm} | Ist: {alt_str}")
                     last_print = now
 
-                # Aufsetzen am Boden (< 4.5 cm bei Sollhöhe < 12 cm)
-                if alt is not None and alt <= 0.045 and desired_alt <= 0.12:
+                # Aufsetzen am Boden (< 6 cm)
+                if alt is not None and alt <= 0.06:
                     touchdown_count += 1
-                    if touchdown_count >= 3:
+                    if touchdown_count >= 2:
                         log_msg(
-                            f"\n>>> 🛬 BUTTERWEICHES AUFSETZEN ERKANNT (Höhe: {alt * 100:.1f} cm)!"
+                            f"\n>>> 🛬 BODENKONTAKT ERKANNT (Höhe: {alt * 100:.1f} cm)!"
                         )
                         break
                 else:
@@ -822,11 +688,10 @@ def main():
 
                 time.sleep(0.05)
 
-            # 8. PHASE 5: MOTOREN AUS & DISARM
-            log_msg(">>> 5. MOTOREN AUS & DISARM...")
+            log_msg(">>> 4. MOTOREN AUS & DISARM...")
             disarm_motors(master)
             log_msg(
-                f"Flugtest erfolgreich beendet - Max-Höhe: {logger.max_alt_seen * 100:.1f} cm, Schwebegas: {hover_throttle:.1f}%!"
+                f"Flugtest erfolgreich beendet - Max-Höhe: {logger.max_alt_seen * 100:.1f} cm!"
             )
 
     except KeyboardInterrupt:
