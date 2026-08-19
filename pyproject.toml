@@ -38,6 +38,9 @@ dev = [
     "ruff>=0.15.12",
     "ty>=0.0.35",
 ]
+docs = [
+    "markdown-it-py>=3.0",
+]
 
 [tool.uv]
 # Runtime commands stay lightweight on the laptop. drone-deploy explicitly adds

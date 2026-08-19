@@ -1,0 +1,355 @@
+<section class="hero">
+  <div class="hero-bild" style="background-image:url('assets/drohne-flug-quer.jpg')"></div>
+  <div class="hero-verlauf"></div>
+  <div class="hero-inner">
+    <p class="hero-kicker">Frankfurt UAS · Fachbereich 2 · Projektarbeit</p>
+    <h1>KI-Drohne mit Personen&shy;erkennung</h1>
+    <p class="hero-text">
+      Von der FPV-Renndrohne zur autonomen Indoor-Plattform: ArduPilot als Autopilot,
+      ein Raspberry Pi als Companion-Computer, On-Sensor-KI der IMX500-Kamera und ein
+      servogesteuerter Lastenabwurf.
+    </p>
+    <div class="hero-knoepfe">
+      <a class="knopf knopf-primaer" href="ziele.html">Dokumentation lesen</a>
+      <a class="knopf knopf-sekundaer" href="plakat.html">Projektplakat</a>
+      <a class="knopf knopf-sekundaer" href="https://github.com/AI-Drone-FRA-UAS/ai-drone" target="_blank" rel="noopener">Quellcode</a>
+    </div>
+    <div class="hero-meta">
+      <div><span>Team</span><b>Jannik H. · Julian Veerkamp · Sebastian Urmann · Serkan Savranoglu</b></div>
+      <div><span>Betreuung</span><b>Prof. Dr. Baun</b></div>
+      <div><span>Zeitraum</span><b>Sommersemester 2026</b></div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="band-inner">
+    <p class="augenbraue">Ausgangslage</p>
+    <h2>Eine Renndrohne, die nur der Pilot fliegen kann</h2>
+    <p class="band-lead">
+      Am Anfang steht eine flugfertige 3,5"-CineWhoop mit Betaflight, die ausschließlich
+      manuell per Fernsteuerung geflogen wird. Sie hat kein GPS-taugliches Einsatzgebiet,
+      keinen Bordrechner und keine Möglichkeit, etwas zu transportieren. Ziel der
+      Projektarbeit ist der Umbau zu einer teilautonomen Plattform: stabil fliegen ohne
+      GPS, die Umgebung mit einer KI-Kamera auswerten und eine Nutzlast gezielt abwerfen.
+    </p>
+    <div class="kennzahlen">
+      <div class="kennzahl"><b>3,5"</b><span>CineWhoop mit Propellerschutz — indoortauglich</span></div>
+      <div class="kennzahl"><b>800 cm</b><span>maximale LiDAR-Reichweite nach unten</span></div>
+      <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für Position Hold nötig</span></div>
+      <div class="kennzahl"><b>&lt; 1 m</b><span>Flughöhe in allen autonomen Tests</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="band band-alt">
+  <div class="band-inner">
+    <p class="augenbraue">Systemarchitektur</p>
+    <h2>Wer redet mit wem</h2>
+    <p class="band-lead">
+      Die Aufgaben sind sauber getrennt: der Flight Controller stabilisiert, der Raspberry
+      Pi sieht und entscheidet, die Bodenstation beobachtet — und die Fernsteuerung hat
+      jederzeit Vorrang vor allem anderen.
+    </p>
+
+    <div class="diagramm">
+      <svg viewBox="0 0 920 560" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="Signalfluss zwischen Bodenstation, Fernsteuerung, Flight Controller, Raspberry Pi, Sensorik und Abwurfmechanismus">
+        <defs>
+          <marker id="pfeil" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--linie)" />
+          </marker>
+        </defs>
+
+        <g stroke="var(--linie)" stroke-width="2" fill="none" marker-end="url(#pfeil)">
+          <path d="M165 110 V141 H380 V166" />
+          <path d="M755 110 V141 H540 V166" />
+          <path d="M380 276 V310 H155 V338" />
+          <path d="M460 276 V338" />
+          <path d="M540 276 V310 H765 V338" />
+          <path d="M155 440 V464" />
+        </g>
+
+        <g font-family="Inter, sans-serif" font-size="11" fill="var(--text-leise)"
+           font-weight="600" letter-spacing=".04em">
+          <text x="272" y="135">USB · MAVLink</text>
+          <text x="592" y="135">ELRS-Funk</text>
+          <text x="196" y="304">UART4 · MAVLink 2</text>
+          <text x="470" y="308">PWM</text>
+          <text x="600" y="304">UART5</text>
+          <text x="165" y="457">CSI</text>
+        </g>
+
+        <!-- Bodenstation -->
+        <rect x="40" y="24" width="250" height="86" rx="10"
+              fill="var(--bg)" stroke="var(--linie)" stroke-width="1.5" />
+        <text x="60" y="52" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="var(--text)">Laptop · Bodenstation</text>
+        <text x="60" y="73" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">QGroundControl · MAVProxy</text>
+        <text x="60" y="92" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">drone-console · drone-health</text>
+
+        <!-- Fernsteuerung -->
+        <rect x="630" y="24" width="250" height="86" rx="10"
+              fill="var(--bg)" stroke="var(--linie)" stroke-width="1.5" />
+        <text x="650" y="52" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="var(--text)">RadioMaster GX12</text>
+        <text x="650" y="73" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">ExpressLRS 868 MHz / 2,4 GHz</text>
+        <text x="650" y="92" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">Pilot behält jederzeit Vorrang</text>
+
+        <!-- Flight Controller -->
+        <rect x="320" y="172" width="280" height="104" rx="10" fill="var(--blau-900)" />
+        <text x="344" y="202" font-family="Inter, sans-serif" font-size="15"
+              font-weight="700" fill="#ffffff">Flight Controller — GN745 AIO</text>
+        <text x="344" y="224" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.82)">ArduPilot Copter 4.6.3 · EKF3</text>
+        <text x="344" y="243" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.82)">Motorregelung · Flugmodi · Failsafe</text>
+        <text x="344" y="262" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.82)">Servo-Ausgang für den Abwurf</text>
+
+        <!-- Raspberry Pi -->
+        <rect x="30" y="344" width="250" height="96" rx="10" fill="var(--blau-500)" />
+        <text x="52" y="374" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">Raspberry Pi Zero 2 WH</text>
+        <text x="52" y="396" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.88)">Python · pymavlink · modlib</text>
+        <text x="52" y="415" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.88)">Follow-Logik &amp; MJPEG-Stream</text>
+
+        <!-- Abwurf -->
+        <rect x="345" y="344" width="230" height="76" rx="10" fill="var(--akzent)" />
+        <text x="367" y="374" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">Abwurfmechanismus</text>
+        <text x="367" y="396" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.9)">Micro-Servo 9 g · 900–2100 µs</text>
+
+        <!-- MTF-01P -->
+        <rect x="640" y="344" width="250" height="96" rx="10" fill="var(--tuerkis)" />
+        <text x="662" y="374" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">MicoAir MTF-01P</text>
+        <text x="662" y="396" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.9)">LiDAR 1–800 cm (nach unten)</text>
+        <text x="662" y="415" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.9)">Optical Flow → Geschwindigkeit</text>
+
+        <!-- Kamera -->
+        <rect x="30" y="470" width="250" height="70" rx="10" fill="#33495e" />
+        <text x="52" y="500" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">IMX500 AI-Kamera</text>
+        <text x="52" y="521" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.88)">NanoDet läuft auf dem Sensor</text>
+      </svg>
+    </div>
+    <p class="bildunterschrift">
+      Der Pi berechnet nur <em>wohin</em> geflogen werden soll und schickt
+      Geschwindigkeitsbefehle. <em>Wie</em> die Drohne dabei stabil bleibt, entscheidet
+      allein ArduPilot — und ein Kippschalter auf der Fernsteuerung beendet jederzeit
+      den autonomen Betrieb.
+    </p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="band-inner">
+    <p class="augenbraue">Die drei Kernthemen</p>
+    <h2>Was an dieser Drohne neu ist</h2>
+    <div class="karten">
+      <a class="karte" href="konfiguration.html">
+        <span class="karte-marke">Navigation</span>
+        <h3>Fliegen ohne GPS</h3>
+        <p>
+          In Innenräumen gibt es kein GPS. Der MTF-01P liefert stattdessen zwei Messgrößen,
+          die der EKF3-Zustandsschätzer direkt verarbeitet: ein nach unten gerichteter LiDAR
+          für die Höhe und optischer Fluss für die horizontale Geschwindigkeit. Damit hält
+          die Drohne Höhe und Position ohne einen einzigen Satelliten.
+        </p>
+        <span class="karte-mehr">Parameter und verifizierter Stand →</span>
+      </a>
+      <a class="karte" href="mavlink.html">
+        <span class="karte-marke">Autonomie</span>
+        <h3>KI direkt auf dem Sensor</h3>
+        <p>
+          Das NanoDet-Modell läuft auf der IMX500-Kamera selbst, nicht auf der CPU des Pi.
+          Der Pi bekommt fertige Detektionen, rechnet daraus Ablage und geschätzte Distanz
+          zur Person und sendet Geschwindigkeitsbefehle im Body-Frame an den Autopiloten.
+        </p>
+        <span class="karte-mehr">Regelung und Sicherheitswächter →</span>
+      </a>
+      <a class="karte" href="abwurf.html">
+        <span class="karte-marke">Nutzlast</span>
+        <h3>Abwurf auf Kommando</h3>
+        <p>
+          Ein 9-g-Servo öffnet einen 3D-gedruckten Haltebügel. Zwei Zahlen bestimmen das
+          ganze Design: der sichere Stellbereich von 900 bis 2100 µs und ein Blockierstrom
+          von 1,6 A, der keine Logikversorgung belasten darf.
+        </p>
+        <span class="karte-mehr">Kennwerte und offene Punkte →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="band band-alt">
+  <div class="band-inner">
+    <p class="augenbraue">Stand der Arbeit</p>
+    <h2>Was läuft und was noch offen ist</h2>
+    <p class="band-lead">
+      Alles Abgehakte ist am realen Aufbau verifiziert, nicht nur konfiguriert — die
+      Belege liegen als Parametersatz, CSV-Telemetrie und Protokoll im Repository.
+    </p>
+    <div class="status">
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>ArduPilot statt Betaflight</b>
+          Copter 4.6.3 auf dem GN745 geflasht und konfiguriert, Parametersatz gesichert.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>MTF-01P an UART5</b>
+          LiDAR und optischer Fluss in der EKF3-Fusion, Telemetrie als CSV verifiziert.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Raspberry Pi an UART4</b>
+          Bidirektionales MAVLink 2 über <code>/dev/serial0</code>, automatisiert prüfbar
+          mit <code>drone-health</code>.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Personenerkennung</b>
+          NanoDet auf der IMX500, annotierter Live-Stream als MJPEG vom Pi.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Netzanbindung im Feld</b>
+          eduroam auf dem Campus mit Tailscale, sonst der eigene Hotspot als Rückfallebene.</span>
+      </div>
+      <div class="status-zeile offen">
+        <span class="status-punkt">○</span>
+        <span><b>Abwurf am Flight Controller</b>
+          Servo auf der Werkbank und am Pi getestet; der Servo-Ausgang des GN745 ist noch
+          nicht zugewiesen.</span>
+      </div>
+      <div class="status-zeile offen">
+        <span class="status-punkt">○</span>
+        <span><b>Rahmenerweiterung</b>
+          Gehäuse und weiche Rahmenteile sind gedruckt; die Trägerplatte für Sensor,
+          Servo und Kamera fehlt noch.</span>
+      </div>
+      <div class="status-zeile offen">
+        <span class="status-punkt">○</span>
+        <span><b>Autonome Flugversuche</b>
+          Regelkette steht und ist simuliert geflogen; die Vermessung der Regelgüte im
+          Sicherheitsnetz steht aus.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="band-inner">
+    <p class="augenbraue">Dokumentation</p>
+    <h2>Alle Dokumente des Projekts</h2>
+    <p class="band-lead">
+      Jede Seite wird direkt aus den Markdown-Dateien des Repositories erzeugt. Was hier
+      steht, steht auch im Code-Repository — es gibt keine zweite Wahrheit.
+    </p>
+    <div class="karten">
+      <a class="karte" href="ziele.html">
+        <span class="karte-marke">Projekt</span>
+        <h3>Ziele und Hardware</h3>
+        <p>Die fünf Teilziele der Projektarbeit, die gestellte Ausrüstung und die vollständige Spezifikation des Drohnenaufbaus.</p>
+      </a>
+      <a class="karte" href="architektur.html">
+        <span class="karte-marke">Projekt</span>
+        <h3>Softwarearchitektur</h3>
+        <p>Welcher Code auf welchem Rechner läuft, jedes Kommando, die Umgebungsvariablen und die Testsuite.</p>
+      </a>
+      <a class="karte" href="konfiguration.html">
+        <span class="karte-marke">Hardware</span>
+        <h3>Drohnenkonfiguration</h3>
+        <p>Der verifizierte Stand des Flight Controllers: serielle Ports, Sensorparameter und die beiden Kamerapfade.</p>
+      </a>
+      <a class="karte" href="abwurf.html">
+        <span class="karte-marke">Hardware</span>
+        <h3>Abwurfmechanismus</h3>
+        <p>Servokennwerte, die drei Ansteuerungswege, die mechanischen Randbedingungen und die offene Parametrierung.</p>
+      </a>
+      <a class="karte" href="rahmen.html">
+        <span class="karte-marke">Hardware</span>
+        <h3>Rahmen und 3D-Druck</h3>
+        <p>Die Druckteile im Repository mit Maßen, Material und den Slicer-Einstellungen, mit denen sie gedruckt wurden.</p>
+      </a>
+      <a class="karte" href="mavlink.html">
+        <span class="karte-marke">Fliegen</span>
+        <h3>MAVLink-Steuerung</h3>
+        <p>Der <code>DroneController</code>, Geschwindigkeiten im Body-Frame, die Personenfolge und die Sicherheitsregeln.</p>
+      </a>
+      <a class="karte" href="verbindung.html">
+        <span class="karte-marke">Fliegen</span>
+        <h3>Laptop ↔ Drohne</h3>
+        <p>Die vollständige USB-Verbindungssequenz, stabile Gerätepfade, MAVProxy-Kommandos und das Herunterfahren.</p>
+      </a>
+      <a class="karte" href="pi-usb-ssh.html">
+        <span class="karte-marke">Raspberry Pi</span>
+        <h3>USB und SSH</h3>
+        <p>Den USB-Gadget-Link und SSH auf einem frischen Pi in Betrieb nehmen, inklusive Fehlersuche am Kabelweg.</p>
+      </a>
+      <a class="karte" href="eduroam.html">
+        <span class="karte-marke">Raspberry Pi</span>
+        <h3>eduroam und Tailscale</h3>
+        <p>Wie der Pi auf dem Campus automatisch ins Hochschulnetz kommt und von überall über Tailscale erreichbar bleibt.</p>
+      </a>
+      <a class="karte" href="hotspot.html">
+        <span class="karte-marke">Raspberry Pi</span>
+        <h3>Hotspot als Rückfallebene</h3>
+        <p>Der eigene Access Point <code>AI-Drone-Zero</code>, die Priorisierung gegenüber bekannten WLANs und die Internetfreigabe vom Mac.</p>
+      </a>
+      <a class="karte" href="session-19-06.html">
+        <span class="karte-marke">Protokolle</span>
+        <h3>Inbetriebnahme</h3>
+        <p>Das vollständige Protokoll der MAVLink- und UART-Inbetriebnahme: jedes Kommando, jeder Fehler, jede Lösung.</p>
+      </a>
+      <a class="karte" href="servo-arduino.html">
+        <span class="karte-marke">Protokolle</span>
+        <h3>Servo am Arduino</h3>
+        <p>Die arduino-cli-Sketches, mit denen Stellbereich und Drehrichtung des Servos vermessen wurden.</p>
+      </a>
+      <a class="karte" href="doku-index.html">
+        <span class="karte-marke">Übersicht</span>
+        <h3>Index aller Dokumente</h3>
+        <p>Die vollständige Landkarte der Dokumentation im Repository, nach Aufgabe gruppiert — auch für alles, was hier keine eigene Karte hat.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="band band-alt">
+  <div class="band-inner">
+    <div class="plakat-band">
+      <div>
+        <p class="augenbraue">Projektplakat</p>
+        <h2>Das Projekt auf einer A1-Seite</h2>
+        <p class="band-lead">
+          Ziele, Plattform, Architektur, Sicherheitskonzept und Projektstand — gesetzt für
+          den Druck im Format A1 hoch (594 × 841 mm). Die Quelle ist eine einzelne
+          HTML-Datei im Repository, das PDF wird daraus erzeugt.
+        </p>
+        <div class="hero-knoepfe" style="margin-bottom:0">
+          <a class="knopf knopf-primaer" href="assets/plakat.pdf">PDF ansehen</a>
+          <a class="knopf knopf-sekundaer" href="plakat.html"
+             style="color:var(--text);border-color:var(--linie);background:var(--bg)">Details</a>
+        </div>
+      </div>
+      <div class="plakat-bild">
+        <img src="assets/plakat-vorschau.jpg" alt="Vorschau des A1-Projektplakats"
+             width="1240" height="1756" loading="lazy">
+      </div>
+    </div>
+  </div>
+</section>
