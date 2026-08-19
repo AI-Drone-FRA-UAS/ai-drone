@@ -1,6 +1,17 @@
 # AI Drone Professor Baun
 
-# Install dependencies
+A 3.5" CineWhoop FPV drone converted into a semi-autonomous indoor platform:
+ArduPilot Copter on a Flywoo GN745, a Raspberry Pi Zero 2 WH as companion
+computer, on-sensor AI on an IMX500 camera, and a servo-driven payload drop.
+Project work at Frankfurt University of Applied Sciences, supervised by
+Prof. Dr. Baun.
+
+**[Documentation index](docs/README.md)** — every document in this repository,
+grouped by task. The rendered version is published as a
+[project site](site/README.md); the A1 poster is in
+[docs/poster/](docs/poster/README.md).
+
+## Install dependencies
 
 ```bash
 # Install uv (Linux/MacOS)
@@ -204,5 +215,21 @@ back to its own `AI-Drone-Zero` hotspot. See
 [eduroam WLAN auf dem Raspberry Pi](docs/EDUROAM_SETUP.md) and
 [README_HOTSPOT.md](README_HOTSPOT.md).
 
-Hardware details and the parameter backup are in
-`docs/DRONE_CONFIGURATION.md` and `params/`.
+## Documentation
+
+Start at the [documentation index](docs/README.md). The most-used entries:
+
+| Topic | Document |
+|-------|----------|
+| What the project is building, and with what hardware | [Implementation Reference](docs/drone-project.md) |
+| How the code is laid out and what each command does | [Software Architecture](docs/SOFTWARE_ARCHITECTURE.md) |
+| Verified flight-controller state and parameters | [Drone Configuration](docs/DRONE_CONFIGURATION.md) |
+| Autonomous control, body-frame velocity, safety rules | [Pi MAVLink Control](docs/PI_MAVLINK_CONTROL.md) |
+| The payload drop servo | [Payload Drop Mechanism](docs/PAYLOAD_DROP.md) |
+| Printed frame parts | [Frame Extension and 3D Prints](docs/FRAME_AND_3D_PRINTS.md) |
+
+To preview the published site locally:
+
+```bash
+uv run --group docs python site/build.py --serve
+```
