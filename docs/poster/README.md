@@ -30,7 +30,6 @@ ist per `.gitignore` ausgenommen, weil es 29 MB groß ist.
 
 ## Noch auszufüllen
 
-- **Nachname von Jannik** im Kopfbereich — aktuell steht dort `Jannik H.`.
 - **Foto 2** (rechte Spalte, „Autonomer Testflug"): Testflug im Sicherheitsnetz
   oder ein Screenshot der Personenerkennung. Danach die Bildunterschrift
   **Abb. 3** ergänzen.
