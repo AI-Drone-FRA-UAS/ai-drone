@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from typing import Any
 
-from ai_drone.config_snapshot import PARAMETER_NAME_PATTERN, decode_parameter_name
-from ai_drone.mavlink_safety import heartbeat_is_armed, is_vehicle_message
+from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
+
+# ArduPilot parameter identifiers are fixed-width, NUL-padded, and bounded to
+# 16 uppercase characters on the wire.  These are wire-format rules, so they
+# live with the parameter protocol rather than with configuration capture.
+PARAMETER_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,15}\Z")
+
+
+def decode_parameter_name(value: str | bytes) -> str:
+    """Decode the fixed-width MAVLink PARAM_VALUE identifier."""
+
+    if isinstance(value, bytes):
+        return value.split(b"\0", 1)[0].decode("ascii", errors="strict")
+    return value.split("\0", 1)[0]
 
 
 def request_parameter(
