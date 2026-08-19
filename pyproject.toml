@@ -20,6 +20,7 @@ drone-config-sync = "ai_drone.config_sync:main"
 drone-console = "ai_drone.console:main"
 drone-control = "ai_drone.cli.control:main"
 drone-deploy = "ai_drone.deploy:main"
+drone-drop = "mission_drop:main"
 drone-fly-and-land = "ai_drone.cli.fly_and_land:main"
 drone-follow = "ai_drone.cli.follow_person:main"
 drone-health = "ai_drone.health:main"
@@ -39,6 +40,7 @@ module-root = ""
 
 [dependency-groups]
 raspi = [
+    "gpiozero>=2.0.1",
     "modlib==1.3.1",
     "numpy>=2.3.5",
     "opencv-python>=4.11.0.86",

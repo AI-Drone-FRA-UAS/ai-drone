@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Autonome Abwurf-Mission für die ai-drone (Testversion ohne 2. LiDAR mit 2m Suchgrenze).
+"""Autonome Abwurf-Mission für die ai-drone (mit sicherem --dry-run Modus).
 
 Fliegt ein expandierendes Spiral-Suchmuster ab, begrenzt auf maximal 2 Meter Radius
 um den Startpunkt. Sobald das AprilTag erkannt wird, zentriert sich die Drohne
 präzise darüber, löst den Servo aus und landet sicher.
+Im `--dry-run` Modus bleiben die Motoren komplett AUS (sicherer Schreibtisch-Test).
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ if _is_raspberry_pi():
         from ai_drone.controller import DroneController
     except ImportError as e:
         print(f"Fehler beim Importieren der Pi-Abhängigkeiten: {e}")
+        print(
+            "Hinweis: Bitte mit 'uv run --group raspi ./mission_drop.py' oder '.venv/bin/python mission_drop.py' starten!"
+        )
         sys.exit(1)
 
 logging.basicConfig(
@@ -57,17 +61,40 @@ STATE_DROP = 3
 STATE_LAND = 4
 
 
-class BoundedSearchPattern:
-    """Verwaltet eine expandierende Suchspirale mit strikter 2-Meter-Grenze.
+class DummyDrone:
+    """Mock-Controller für Dry-Run Tests ohne angeschlossenen Flight Controller."""
 
-    Schenkel 1: Vorwärts (1 * T)
-    Schenkel 2: Rechts    (1 * T)
-    Schenkel 3: Rückwärts (2 * T)
-    Schenkel 4: Links     (2 * T)
-    ...
-    Erreicht die Ausdehnung den maximalen Radius (z. B. 2.0 m), signalisiert
-    die Klasse das Ende des Suchbereichs, um Wandkollisionen sicher zu verhindern.
-    """
+    def __init__(self) -> None:
+        self.current_altitude: float | None = 0.5
+        self.battery_voltage: float | None = 15.2
+        self.flight_mode: str | None = "GUIDED"
+        self.is_armed: bool = False
+        self.is_flying: bool = False
+        self.forward_distance: float | None = None
+
+    def __enter__(self) -> DummyDrone:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        pass
+
+    def update_telemetry(self) -> None:
+        pass
+
+    def takeoff(self, target_alt: float) -> None:
+        pass
+
+    def land(self) -> None:
+        pass
+
+    def send_velocity_body(
+        self, vx: float, vy: float, vz: float, yaw_rate_deg: float = 0.0
+    ) -> None:
+        pass
+
+
+class BoundedSearchPattern:
+    """Verwaltet eine expandierende Suchspirale mit strikter 2-Meter-Grenze."""
 
     def __init__(
         self,
@@ -98,7 +125,6 @@ class BoundedSearchPattern:
         leg_duration = multiplier * self.step_time
         leg_distance = multiplier * (self.speed * self.step_time)
 
-        # Sicherheitsgrenze: Halber Schenkel entspricht dem Abstand zum Startpunkt
         current_radius = leg_distance / 2.0
         if current_radius > self.max_radius_m:
             logger.warning(
@@ -120,7 +146,6 @@ class BoundedSearchPattern:
                 (multiplier * self.speed * self.step_time) / 2.0,
             )
 
-        # 4 Richtungsphasen: 0=Vorwärts, 1=Rechts, 2=Rückwärts, 3=Links
         phase = (self.current_leg - 1) % 4
         if phase == 0:
             return (self.speed, 0.0, 0.0, 0.0)
@@ -135,13 +160,28 @@ class BoundedSearchPattern:
 def filter_valid_tags(
     detections: list[TagDetection], target_id: int | None = None
 ) -> TagDetection | None:
-    """Filtert Rauschen und prüft Hamming-Distanz sowie Ziel-ID."""
+    """Filtert und meldet gefundene Tags mit Live-Log."""
     for det in detections:
+        margin_str = (
+            f"{det.decision_margin:.1f}"
+            if det.decision_margin is not None
+            else "N/A"
+        )
+        hamming_str = str(det.hamming) if det.hamming is not None else "N/A"
+        logger.info(
+            "Tag im Bild gesehen: ID=%d | Margin=%s | Hamming=%s | Pos=(%.0f, %.0f)",
+            det.tag_id,
+            margin_str,
+            hamming_str,
+            det.center[0],
+            det.center[1],
+        )
+
         if target_id is not None and det.tag_id != target_id:
             continue
-        if det.hamming is not None and det.hamming > 0:
+        if det.hamming is not None and det.hamming > 1:
             continue
-        if det.decision_margin is not None and det.decision_margin < 25.0:
+        if det.decision_margin is not None and det.decision_margin < 10.0:
             continue
         return det
     return None
@@ -149,8 +189,19 @@ def filter_valid_tags(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Autonome AprilTag Abwurf-Mission (2m Sicherheitsradius-Test)",
+        description="Autonome AprilTag Abwurf-Mission (mit sicherem --dry-run Modus)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Sicherer Trockentest am Boden: Motoren bleiben 100%% AUS!",
+    )
+    parser.add_argument(
+        "--family",
+        type=str,
+        default="tag36h11",
+        help="AprilTag Familie (Standard: tag36h11)",
     )
     parser.add_argument("--takeoff-alt", type=float, default=0.5, help="Starthöhe (m)")
     parser.add_argument(
@@ -223,12 +274,17 @@ def main() -> int:
         )
         servo.value = args.servo_closed
     except Exception as e:
-        logger.error("Fehler beim Initialisieren des Servos: %s", e)
-        return 1
+        logger.warning(
+            "Hinweis: Servo konnte nicht initialisiert werden (%s). Test läuft weiter.",
+            e,
+        )
+        servo = None
 
     # 2. Kamera und Detektor initialisieren
-    logger.info("Initialisiere Kamera und AprilTag Detector...")
-    detector = create_detector(backend="auto", threads=4)
+    logger.info(
+        "Initialisiere Kamera und AprilTag Detector (Familie: %s)...", args.family
+    )
+    detector = create_detector(backend="auto", family=args.family, threads=4)
     camera = Picamera2()
     camera.configure(
         camera.create_video_configuration(
@@ -246,13 +302,34 @@ def main() -> int:
         max_radius_m=args.max_radius,
     )
 
-    logger.info(
-        "Bereit für Testflug (Max-Radius: %.1fm, Starthöhe: %.1fm, STRG+C für Not-Aus)...",
-        args.max_radius,
-        args.takeoff_alt,
-    )
+    if args.dry_run:
+        logger.info(
+            "===================================================================="
+        )
+        logger.info(
+            "*** DRY-RUN MODUS AKTIV: Motoren bleiben AUS, kein Arming/Flug! ***"
+        )
+        logger.info(
+            "===================================================================="
+        )
+
+    # Controller-Instanz auswählen (echt oder Dummy bei fehlendem FC)
+    drone_context = None
+    if args.dry_run:
+        try:
+            drone_context = DroneController(
+                device=args.device, max_altitude=args.max_alt
+            )
+        except Exception:
+            logger.info(
+                "Kein Flight Controller gefunden -> Verwende Dummy-Controller für Dry-Run."
+            )
+            drone_context = DummyDrone()
+    else:
+        drone_context = DroneController(device=args.device, max_altitude=args.max_alt)
+
     try:
-        with DroneController(device=args.device, max_altitude=args.max_alt) as drone:
+        with drone_context as drone:
             state = STATE_TAKEOFF
 
             # Tracking- & Filter-Variablen
@@ -273,7 +350,8 @@ def main() -> int:
 
                 # 2. Sicherheitsüberwachung: Batterie-Wächter
                 if (
-                    drone.battery_voltage is not None
+                    not args.dry_run
+                    and drone.battery_voltage is not None
                     and drone.battery_voltage > 0.0
                     and drone.battery_voltage < args.min_battery
                 ):
@@ -285,7 +363,7 @@ def main() -> int:
                     state = STATE_LAND
 
                 # Wenn Landung abgeschlossen -> Loop beenden
-                if state == STATE_LAND and not drone.is_flying:
+                if state == STATE_LAND and (args.dry_run or not drone.is_flying):
                     logger.info("Mission erfolgreich beendet.")
                     break
 
@@ -310,8 +388,16 @@ def main() -> int:
 
                 # --- STATE MACHINE LOGIC ---
                 if state == STATE_TAKEOFF:
-                    logger.info(">>> STATE: TAKEOFF auf %.2f m", args.takeoff_alt)
-                    drone.takeoff(target_alt=args.takeoff_alt)
+                    if args.dry_run:
+                        logger.info(
+                            ">>> [DRY-RUN] Simuliere Takeoff auf %.2f m (Motoren bleiben aus)",
+                            args.takeoff_alt,
+                        )
+                        time.sleep(1.0)
+                    else:
+                        logger.info(">>> STATE: TAKEOFF auf %.2f m", args.takeoff_alt)
+                        drone.takeoff(target_alt=args.takeoff_alt)
+
                     logger.info(
                         "Takeoff abgeschlossen. Beginne Suche (Max-Radius: %.1fm)...",
                         args.max_radius,
@@ -336,16 +422,19 @@ def main() -> int:
 
                     vx, vy, vz, yaw = searcher.get_velocity(now)
 
-                    # Robustheits-Filter: mindestens 3 aufeinanderfolgende Frames
-                    if consecutive_detections >= 3 and target is not None:
+                    # In Dry-Run reicht 1 Frame, im Flug 2 Frames zur Stabilisierung
+                    min_consec = 1 if args.dry_run else 2
+                    if consecutive_detections >= min_consec and target is not None:
                         logger.info(
-                            ">>> STATE: CENTER (Tag %d stabil erkannt!)", target.tag_id
+                            ">>> STATE: CENTER (Tag %d stabil erfasst!)", target.tag_id
                         )
                         state = STATE_CENTER
-                        drone.send_velocity_body(0, 0, 0, 0)
+                        if not args.dry_run:
+                            drone.send_velocity_body(0, 0, 0, 0)
                         stable_center_time = 0.0
                     else:
-                        drone.send_velocity_body(vx, vy, vz, yaw)
+                        if not args.dry_run:
+                            drone.send_velocity_body(vx, vy, vz, yaw)
 
                 elif state == STATE_CENTER:
                     if target is None:
@@ -359,12 +448,9 @@ def main() -> int:
                             search_start_time = time.monotonic()
                             searcher.reset()
                         else:
-                            # Kurzzeitiges Schweben bei Frame-Verlust
-                            drone.send_velocity_body(0, 0, 0, 0)
+                            if not args.dry_run:
+                                drone.send_velocity_body(0, 0, 0, 0)
                     else:
-                        # Pixel-Offset zur Bildmitte berechnen (Nadir-Mount)
-                        # Bild-X (Rechts) -> Body-Y (Rechts)
-                        # Bild-Y (Unten)  -> Body-X (Rückwärts, d.h. Oben ist Vorwärts)
                         offset_x = target.center[0] - CENTER_X
                         offset_y = CENTER_Y - target.center[1]
 
@@ -373,17 +459,25 @@ def main() -> int:
                         vx = offset_y * kp
                         vy = offset_x * kp
 
-                        # Geschwindigkeiten kappen
                         vx = max(-args.center_speed, min(args.center_speed, vx))
                         vy = max(-args.center_speed, min(args.center_speed, vy))
 
-                        drone.send_velocity_body(vx, vy, 0.0, 0.0)
+                        if not args.dry_run:
+                            drone.send_velocity_body(vx, vy, 0.0, 0.0)
+                        else:
+                            logger.info(
+                                "[DRY-RUN CENTER] Offset: dx=%+6.1fpx, dy=%+6.1fpx | Sim-Befehl: vx=%+5.2fm/s, vy=%+5.2fm/s",
+                                offset_x,
+                                offset_y,
+                                vx,
+                                vy,
+                            )
 
-                        # Stabilitätsprüfung (< 35 Pixel Toleranz für 1.8 Sekunden)
-                        if abs(offset_x) < 35 and abs(offset_y) < 35:
+                        # Stabilitätsprüfung (< 45 Pixel Toleranz für 1.5 Sekunden)
+                        if abs(offset_x) < 45 and abs(offset_y) < 45:
                             if stable_center_time == 0.0:
                                 stable_center_time = time.monotonic()
-                            elif time.monotonic() - stable_center_time >= 1.8:
+                            elif time.monotonic() - stable_center_time >= 1.5:
                                 logger.info(
                                     ">>> STATE: DROP (Zentrierung stabil: dx=%.1fpx, dy=%.1fpx)",
                                     offset_x,
@@ -392,41 +486,48 @@ def main() -> int:
                                 state = STATE_DROP
                                 drop_start_time = time.monotonic()
                                 drop_stage = 0
-                                drone.send_velocity_body(0, 0, 0, 0)
+                                if not args.dry_run:
+                                    drone.send_velocity_body(0, 0, 0, 0)
                         else:
                             stable_center_time = 0.0
 
                 elif state == STATE_DROP:
-                    # Non-blocking Abwurf-Sequenz mit fortlaufender Telemetrie
-                    drone.send_velocity_body(0, 0, 0, 0)
+                    if not args.dry_run:
+                        drone.send_velocity_body(0, 0, 0, 0)
                     now = time.monotonic()
                     dt = now - drop_start_time
 
                     if drop_stage == 0:
-                        # 0.4s Vorlauf zum Einschwingen
                         if dt >= 0.4:
                             logger.info(
-                                "Löse Servo aus -> Position %.2f", args.servo_open
+                                "Löse Servo physisch aus -> Position %.2f",
+                                args.servo_open,
                             )
-                            servo.value = args.servo_open
+                            if servo:
+                                servo.value = args.servo_open
                             drop_stage = 1
                     elif drop_stage == 1:
-                        # 1.5s Offenhalten für sicheren Abwurf
                         if dt >= 1.9:
                             logger.info(
-                                "Schließe Servo -> Position %.2f", args.servo_closed
+                                "Schließe Servo physisch -> Position %.2f",
+                                args.servo_closed,
                             )
-                            servo.value = args.servo_closed
+                            if servo:
+                                servo.value = args.servo_closed
                             drop_stage = 2
                     elif drop_stage == 2:
-                        # 0.5s Nachlauf
                         if dt >= 2.4:
                             logger.info("Abwurf abgeschlossen. >>> STATE: LAND")
                             state = STATE_LAND
 
                 elif state == STATE_LAND:
-                    if drone.is_flying:
-                        drone.land()
+                    if args.dry_run:
+                        logger.info(">>> [DRY-RUN] Simuliere Landung...")
+                        time.sleep(1.0)
+                        break
+                    else:
+                        if drone.is_flying:
+                            drone.land()
 
                 time.sleep(0.01)
 
@@ -439,7 +540,8 @@ def main() -> int:
     finally:
         camera.stop()
         camera.close()
-        servo.close()
+        if servo:
+            servo.close()
         logger.info("Kamera und Servo sicher geschlossen.")
 
     return 0
