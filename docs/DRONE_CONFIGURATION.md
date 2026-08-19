@@ -83,7 +83,7 @@ USB link and this Pi UART link.
 The drone has two separate camera paths:
 
 - RunCam Phoenix 2 analog FPV camera -> SpeedyBee TX800 at 5806 MHz.
-- Raspberry Pi IMX500 AI Camera -> `modlib`/NanoDet processing on the Pi.
+- Raspberry Pi IMX500 AI Camera -> CPU AprilTag detection on the Pi.
 
 The repository only handles the Pi IMX500 path. It does not capture the
 analog FPV signal on the laptop. No camera tilt motor or ArduPilot gimbal is

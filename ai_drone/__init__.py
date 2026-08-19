@@ -11,26 +11,26 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ai_drone.flight.controller import DroneController, FlightSafetyError
-    from ai_drone.flight.follower import (
-        AutonomousFollower,
-        PersonTarget,
-        get_person_target,
+    from ai_drone.flight.guards import (
+        FlightController,
+        FlightGuardError,
+        check_safety_guardrails,
     )
 
 _LAZY_EXPORTS = {
-    "AutonomousFollower": "ai_drone.flight.follower",
     "DroneController": "ai_drone.flight.controller",
     "FlightSafetyError": "ai_drone.flight.controller",
-    "PersonTarget": "ai_drone.flight.follower",
-    "get_person_target": "ai_drone.flight.follower",
+    "FlightController": "ai_drone.flight.guards",
+    "FlightGuardError": "ai_drone.flight.guards",
+    "check_safety_guardrails": "ai_drone.flight.guards",
 }
 
 __all__ = [
-    "AutonomousFollower",
     "DroneController",
+    "FlightController",
+    "FlightGuardError",
     "FlightSafetyError",
-    "PersonTarget",
-    "get_person_target",
+    "check_safety_guardrails",
 ]
 
 

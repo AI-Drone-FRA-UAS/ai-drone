@@ -1,16 +1,16 @@
 # Consolidated MAVLink control
 
 `drone-control` is the single CLI for flight-controller status,
-takeoff/hover, body-frame velocity, and person following. Its flight sequences
-manage arming, stop, landing, and cleanup. Dedicated follow and linear-flight
-wrappers are folded into these modes, so the capability has one maintained
+takeoff/hover, and body-frame velocity. Its flight sequences manage arming,
+stop, landing, and cleanup. Dedicated linear-flight wrappers are folded into
+these modes, so the capability has one maintained
 implementation and command surface.
 
-The control code is implemented, but no live arm, takeoff, altitude hold,
-velocity flight, or person-follow flight has been validated on this aircraft.
-Read [the handoff](HANDOFF.md) before using it. The current vehicle has
-`ARMING_CHECK=0`, a loose forward-facing camera, no useful indoor fence, a
-disconnected servo, and no forward MT-15; those conditions block live flight.
+The control code is implemented, but no live arm, takeoff, altitude hold, or
+velocity flight has been validated on this aircraft. Check the newest capture
+under `state/` and the newest dump under `params/` for the controller's actual
+configuration before using it; `ARMING_CHECK` and `FENCE_ENABLE` in particular
+decide whether live flight is possible at all.
 
 ## Run the command
 
@@ -35,21 +35,19 @@ The command groups the following behaviors:
 | `status` | Passive altitude, battery, mode, and armed-state monitoring | Disarmed bench use is possible |
 | `hover` (`takeoff` alias) | Guided takeoff, timed altitude hold, then land | Implemented; SITL and restrained-flight validation required |
 | `velocity-test` | Bounded body-frame velocity/yaw command, then stop and land | Implemented; SITL and restrained-flight validation required |
-| `follow` | Offline simulation or IMX500 person-follow flight | Simulation available; live flight blocked by mounting/calibration/flight gates |
 
 Use each subcommand's `--help` output for its exact confirmation token and
 limits. Do not bypass those gates in wrappers or documentation.
 
-The two non-actuating starting points are:
+The non-actuating starting point is:
 
 ```bash
 uv run drone-control status --duration 10
-uv run drone-control follow --simulate --duration 15
 ```
 
-Simulation exercises the follow control math without a camera, arming, or
-takeoff. It is not a full ArduPilot dynamics test; use Copter SITL for mode,
-arming, telemetry-loss, takeoff, velocity, and landing behavior.
+`status` only reads telemetry: no arming, mode change, or setpoint is sent.
+There is no in-repository simulation of the flight modes; use Copter SITL for
+mode, arming, telemetry-loss, takeoff, velocity, and landing behavior.
 
 Every live flight mode requires the exact acknowledgement:
 
@@ -109,9 +107,9 @@ does not itself send a command.
    the envelope.
 6. Validate bounded velocity one axis at a time. Test loss-of-link and stale
    localization before enabling any camera-driven command.
-7. Enable person-follow flight only after the camera is rigid and its geometry
-   is measured, the target-loss behavior passes SITL and restrained tests, and
-   people are outside the vehicle's possible path.
+7. Enable any camera-driven flight only after the camera is rigid and its
+   geometry is measured, the target-loss behavior passes SITL and restrained
+   tests, and people are outside the vehicle's possible path.
 
 The forward MT-15 is an additional stop-ahead sensor, not a prerequisite that
 the current follow loop already consumes and not a substitute for a protected

@@ -34,6 +34,7 @@ source_modules =
     ai_drone.platform
     ai_drone.cli_parsing
     ai_drone.recording
+    ai_drone.validation
 forbidden_modules =
     ai_drone.cli
 
@@ -45,6 +46,7 @@ source_modules =
     ai_drone.platform
     ai_drone.cli_parsing
     ai_drone.recording
+    ai_drone.validation
 forbidden_modules =
     ai_drone.cli
     ai_drone.config

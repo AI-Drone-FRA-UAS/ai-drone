@@ -4,12 +4,10 @@ Software and bench tools for a Raspberry Pi Zero 2 W, ArduPilot flight
 controller, IMX500 camera, downward MTF-01P range/optical-flow sensor, planned
 forward MT-15 rangefinder, motors, and payload servo.
 
-Read [the current handoff](docs/HANDOFF.md) before touching hardware. It is the
-source of truth for the verified live state. In particular, the controller
-currently reports `ARMING_CHECK=0`, the camera is loosely held and faces
-forward, and the servo and forward MT-15 are disconnected. Keep the aircraft
-disarmed unless a documented actuator or flight test has been explicitly
-authorized and all of its physical prerequisites are satisfied.
+Keep the aircraft disarmed unless an actuator or flight test has been
+explicitly authorized and its physical prerequisites are satisfied. Check the
+newest capture under `state/` and `params/` for the controller's actual
+configuration rather than assuming it from documentation.
 
 ## Setup
 
@@ -44,7 +42,7 @@ flight commands are intentionally not maintained.
 | `drone-record` | Record synchronized camera, AprilTag, and MAVLink data while disarmed |
 | `drone-servo` | Guarded direct-BCM12 payload-servo bench test |
 | `drone-motor-test` | Guarded, low-power, propeller-off ArduPilot motor check |
-| `drone-control` | Canonical status, takeoff/hover, velocity, and person-follow CLI; flight sequences arm and land |
+| `drone-control` | Canonical status, takeoff/hover, and velocity CLI; flight sequences arm and land |
 | `drone-config-export` / `drone-config-sync` | Capture the complete ArduPilot configuration |
 
 Use `uv run <command> --help` for the authoritative options. Pi-only commands
@@ -119,20 +117,19 @@ SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --record --duration 15
 ```
 
-The current camera can test image quality, frame rate, person detection, and
-AprilTag pixel detection. It cannot validate floor-relative metric pose,
-altitude geometry, or person-follow flight until it is rigidly mounted and
-calibrated for the intended orientation.
+The camera can test image quality, frame rate, and AprilTag pixel detection.
+It cannot validate floor-relative metric pose or altitude geometry until its
+mounting orientation is recorded and its intrinsics are calibrated.
 
 ## Hardware tests that require preparation
 
 ### Servo
 
-The servo utility is ready, but the servo is disconnected. It drives Pi BCM12
-(physical pin 32), not a flight-controller output. Before using it, remove the
-propellers, secure the frame, connect signal and common ground, use a suitable
-regulated external 5 V supply, and verify the linkage and pulse limits. Then
-follow the guarded modes shown by:
+The servo is connected and the utility is ready. It drives Pi BCM12 (physical
+pin 32), not a flight-controller output, so it actuates whenever it is run.
+Before using it, remove the propellers, secure the frame, confirm signal and
+common ground, use a suitable regulated external 5 V supply, and verify the
+linkage and pulse limits. Then follow the guarded modes shown by:
 
 ```bash
 uv run drone-servo --help
@@ -158,8 +155,8 @@ frame, resolve all pre-arm failures, and follow the exact confirmations in the
 
 ### Altitude hold and flight control
 
-`drone-control` keeps the former arming, takeoff/hover, body-frame velocity,
-landing, and person-follow capabilities in one CLI. Arming and landing are
+`drone-control` keeps the arming, takeoff/hover, body-frame velocity, and
+landing capabilities in one CLI. Arming and landing are
 managed inside its guarded flight sequences rather than duplicated as raw
 standalone commands. These paths have not been validated on this aircraft. Run
 the command on the Pi after deploying:
@@ -199,7 +196,7 @@ uv run --group dev pytest -q
 
 ## Documentation map
 
-- [Current handoff](docs/HANDOFF.md): verified live state and next actions.
+- [Repository state](docs/REPOSITORY_STATE.md): current layout, commands, and what is verified.
 - [MAVLink control](docs/PI_MAVLINK_CONTROL.md): staged control and flight tests.
 - [Sensor recording and wiring](docs/SENSOR_RECORDING.md): MTF-01P, MT-15, camera, and datasets.
 - [AprilTag mission](docs/APRILTAG_MISSION.md): mounting, calibration, and approach architecture.

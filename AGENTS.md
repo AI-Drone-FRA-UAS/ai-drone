@@ -1,13 +1,5 @@
 # Repository agent notes
 
-## Session handoff
-
-- Read `docs/HANDOFF.md` before continuing hardware, network, AprilTag,
-  configuration, motor, flight, or GitHub work. It records the last verified
-  live state, implemented tools, safety gates, and prioritized next actions.
-- Treat newer dated state captures and explicit user instructions as overriding
-  the handoff when they conflict.
-
 ## Network access
 
 - GitHub and Raspberry Pi network calls may fail or report misleading

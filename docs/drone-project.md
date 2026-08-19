@@ -1,11 +1,10 @@
 # AI Drone — Original Requirements and Hardware Inventory
 
 > This is a historical procurement/requirements brief, not the authoritative
-> live state or an operating procedure. Read [HANDOFF.md](HANDOFF.md) before
-> hardware, configuration, motor, or flight work. The current vehicle runs
-> ArduPilot, its Pi and downward sensor links have been verified, the payload
-> servo and forward rangefinder are disconnected, and the camera is loosely
-> held facing forward. Radio credentials have deliberately been removed; rotate
+> live state or an operating procedure. Check the newest capture under `state/`
+> and the newest dump under `params/` before hardware, configuration, motor, or
+> flight work. The current vehicle runs ArduPilot and its Pi and downward sensor
+> links have been verified. Radio credentials have deliberately been removed; rotate
 > any binding phrase that was previously committed before relying on it.
 
 ---
@@ -67,13 +66,13 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 
 - The RPi is connected to flight-controller UART4 and `/dev/serial0` MAVLink
   has been verified while disarmed.
-- Rigidly mount the **Raspberry Pi AI Camera Module** facing downward. It is
-  currently held by a small cable and faces forward, so metric floor-tag
-  geometry must not be trusted.
-- Run AI inference on the Pi. The current code uses the IMX500/modlib path for
-  person detection and CPU AprilTag detection. Guarded person-follow integration
-  remains available through `drone-control follow`, but live use is blocked
-  until its camera, calibration, preflight, and staged-flight gates pass;
+- Mount the **Raspberry Pi AI Camera Module** facing downward. The camera is
+  now connected and mounted; its orientation, rigidity, and intrinsic
+  calibration have not been recorded, so metric floor-tag geometry must not be
+  trusted until they are.
+- Run AI inference on the Pi. The current code uses CPU AprilTag detection.
+  Person detection and the `drone-control follow` mode have been retired to
+  `attic/`, along with the IMX500/modlib dependency;
   AprilTag detection does not yet command a flight mission.
 - The **USB A/V Grabber (MacroSilicon MS210x)** can be used to capture the analog FPV camera
   feed on the RPi as an additional video source.
