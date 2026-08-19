@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Autonome Abwurf-Mission für die ai-drone mit aktiver Hinderniserkennung (MT-15).
+"""Autonome Abwurf-Mission für die ai-drone (Testversion ohne 2. LiDAR mit 2m Suchgrenze).
 
-Fliegt ein expandierendes Spiral-Suchmuster (Expanding Square Search) ab,
-um von jedem beliebigen Startpunkt aus die gesamte Halle 360° abzusuchen.
-Weicht Wänden automatisch aus (MT-15 ToF nach vorne), erkennt das AprilTag,
-zentriert sich exakt darüber und löst den Servo (GPIO 12) aus.
+Fliegt ein expandierendes Spiral-Suchmuster ab, begrenzt auf maximal 2 Meter Radius
+um den Startpunkt. Sobald das AprilTag erkannt wird, zentriert sich die Drohne
+präzise darüber, löst den Servo aus und landet sicher.
 """
 
 from __future__ import annotations
@@ -58,86 +57,79 @@ STATE_DROP = 3
 STATE_LAND = 4
 
 
-class SearchPattern:
-    """Verwaltet das Suchmuster mit Unterstützung für dynamische Hindernisausweichung.
+class BoundedSearchPattern:
+    """Verwaltet eine expandierende Suchspirale mit strikter 2-Meter-Grenze.
 
-    Unterstützt ein expandierendes Spiral-Muster (Expanding Square Search):
-    Leg 1: Vorwärts (1 * T)
-    Leg 2: Rechts    (1 * T)
-    Leg 3: Rückwärts (2 * T)
-    Leg 4: Links     (2 * T)
-    Leg 5: Vorwärts (3 * T)
-    Leg 6: Rechts    (3 * T)
+    Schenkel 1: Vorwärts (1 * T)
+    Schenkel 2: Rechts    (1 * T)
+    Schenkel 3: Rückwärts (2 * T)
+    Schenkel 4: Links     (2 * T)
     ...
-    Wird vor der Drohne eine Wand erkannt, kann der Schenkel mit `advance_to_next_leg()`
-    vorzeitig abgebrochen werden, sodass die Drohne sofort nach rechts/links abbiegt.
+    Erreicht die Ausdehnung den maximalen Radius (z. B. 2.0 m), signalisiert
+    die Klasse das Ende des Suchbereichs, um Wandkollisionen sicher zu verhindern.
     """
 
     def __init__(
         self,
         speed: float = 0.15,
-        step_time: float = 3.0,
-        pattern: str = "spiral",
+        step_time: float = 2.5,
+        max_radius_m: float = 2.0,
     ) -> None:
         self.speed = speed
         self.step_time = step_time
-        self.pattern = pattern
+        self.max_radius_m = max_radius_m
         self.current_leg = 1
         self.leg_start_time = 0.0
+        self.is_finished = False
 
     def reset(self) -> None:
         self.current_leg = 1
         self.leg_start_time = 0.0
-
-    def advance_to_next_leg(self, now: float) -> None:
-        """Schaltet bei Wandanäherung sofort auf den nächsten Schenkel (Abbiegen)."""
-        self.current_leg += 1
-        self.leg_start_time = now
-        multiplier = (self.current_leg + 1) // 2
-        logger.info(
-            "Wand-Ausweichmanöver: Schalte vorzeitig auf Schenkel %d (Dauer: %.1fs)",
-            self.current_leg,
-            multiplier * self.step_time,
-        )
+        self.is_finished = False
 
     def get_velocity(self, now: float) -> tuple[float, float, float, float]:
+        if self.is_finished:
+            return (0.0, 0.0, 0.0, 0.0)
+
         if self.leg_start_time == 0.0:
             self.leg_start_time = now
 
-        if self.pattern == "spiral":
+        multiplier = (self.current_leg + 1) // 2
+        leg_duration = multiplier * self.step_time
+        leg_distance = multiplier * (self.speed * self.step_time)
+
+        # Sicherheitsgrenze: Halber Schenkel entspricht dem Abstand zum Startpunkt
+        current_radius = leg_distance / 2.0
+        if current_radius > self.max_radius_m:
+            logger.warning(
+                "Suchgrenze (%.1f m Radius) erreicht! Beende Suche sicherheitshalber.",
+                self.max_radius_m,
+            )
+            self.is_finished = True
+            return (0.0, 0.0, 0.0, 0.0)
+
+        dt = now - self.leg_start_time
+        if dt >= leg_duration:
+            self.current_leg += 1
+            self.leg_start_time = now
             multiplier = (self.current_leg + 1) // 2
-            leg_duration = multiplier * self.step_time
-            dt = now - self.leg_start_time
+            logger.info(
+                "Spirale: Schenkel %d | Dauer: %.1fs | Max-Abstand: ca. %.2fm",
+                self.current_leg,
+                multiplier * self.step_time,
+                (multiplier * self.speed * self.step_time) / 2.0,
+            )
 
-            if dt >= leg_duration:
-                self.advance_to_next_leg(now)
-
-            # 4 Phasen: 0=Vorwärts, 1=Rechts, 2=Rückwärts, 3=Links
-            phase = (self.current_leg - 1) % 4
-            if phase == 0:
-                return (self.speed, 0.0, 0.0, 0.0)
-            elif phase == 1:
-                return (0.0, self.speed, 0.0, 0.0)
-            elif phase == 2:
-                return (-self.speed, 0.0, 0.0, 0.0)
-            else:
-                return (0.0, -self.speed, 0.0, 0.0)
-
-        else:  # lawnmower (Schlangenmuster)
-            t_forward = 8.0
-            t_side = 2.0
-            cycle = (t_forward + t_side) * 2
-            dt = now - self.leg_start_time
-            t_in = dt % cycle
-
-            if t_in < t_forward:
-                return (self.speed, 0.0, 0.0, 0.0)
-            elif t_in < t_forward + t_side:
-                return (0.0, self.speed, 0.0, 0.0)
-            elif t_in < 2 * t_forward + t_side:
-                return (-self.speed, 0.0, 0.0, 0.0)
-            else:
-                return (0.0, self.speed, 0.0, 0.0)
+        # 4 Richtungsphasen: 0=Vorwärts, 1=Rechts, 2=Rückwärts, 3=Links
+        phase = (self.current_leg - 1) % 4
+        if phase == 0:
+            return (self.speed, 0.0, 0.0, 0.0)
+        elif phase == 1:
+            return (0.0, self.speed, 0.0, 0.0)
+        elif phase == 2:
+            return (-self.speed, 0.0, 0.0, 0.0)
+        else:
+            return (0.0, -self.speed, 0.0, 0.0)
 
 
 def filter_valid_tags(
@@ -145,13 +137,10 @@ def filter_valid_tags(
 ) -> TagDetection | None:
     """Filtert Rauschen und prüft Hamming-Distanz sowie Ziel-ID."""
     for det in detections:
-        # Falls spezifische ID gefordert
         if target_id is not None and det.tag_id != target_id:
             continue
-        # Native AprilTag3 liefert hamming; 0 bedeutet fehlerfrei decodiert
         if det.hamming is not None and det.hamming > 0:
             continue
-        # Decision Margin filtern (unter 25 ist unsicher/Rauschen)
         if det.decision_margin is not None and det.decision_margin < 25.0:
             continue
         return det
@@ -160,12 +149,18 @@ def filter_valid_tags(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Autonome AprilTag Abwurf-Mission für AI-Drone mit MT-15 Kollisionsschutz",
+        description="Autonome AprilTag Abwurf-Mission (2m Sicherheitsradius-Test)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--takeoff-alt", type=float, default=0.6, help="Starthöhe (m)")
+    parser.add_argument("--takeoff-alt", type=float, default=0.5, help="Starthöhe (m)")
     parser.add_argument(
-        "--max-alt", type=float, default=1.0, help="Sicherheits-Höhenlimit (m)"
+        "--max-alt", type=float, default=0.8, help="Sicherheits-Höhenlimit (m)"
+    )
+    parser.add_argument(
+        "--max-radius",
+        type=float,
+        default=2.0,
+        help="Maximaler Suchradius um den Startpunkt in Metern",
     )
     parser.add_argument(
         "--min-battery",
@@ -174,37 +169,19 @@ def main() -> int:
         help="Kritische Mindestspannung (V) für Notlandung",
     )
     parser.add_argument(
-        "--min-wall-dist",
-        type=float,
-        default=1.0,
-        help="Mindestabstand zur Wand (m) für MT-15 ToF Sensor",
-    )
-    parser.add_argument(
-        "--pattern",
-        choices=("spiral", "lawnmower"),
-        default="spiral",
-        help="Suchmuster: 'spiral' (Expanding Square ab Startpunkt) oder 'lawnmower'",
-    )
-    parser.add_argument(
-        "--step-time",
-        type=float,
-        default=3.0,
-        help="Basis-Schenkeldauer für die Suchspirale in Sekunden",
-    )
-    parser.add_argument(
         "--search-speed", type=float, default=0.15, help="Suchgeschwindigkeit (m/s)"
-    )
-    parser.add_argument(
-        "--max-search-time",
-        type=float,
-        default=90.0,
-        help="Maximalzeit für Suche vor automatischem Abbruch (s)",
     )
     parser.add_argument(
         "--center-speed",
         type=float,
         default=0.2,
         help="Max Geschwindigkeit beim Zentrieren (m/s)",
+    )
+    parser.add_argument(
+        "--max-search-time",
+        type=float,
+        default=60.0,
+        help="Maximalzeit für Suche vor Landung (s)",
     )
     parser.add_argument(
         "--target-id",
@@ -262,14 +239,18 @@ def main() -> int:
         )
     )
 
-    # 3. Suchmuster-Generator initialisieren
-    searcher = SearchPattern(
+    # 3. Begrenztes Suchmuster initialisieren (max. 2.0 m Radius)
+    searcher = BoundedSearchPattern(
         speed=args.search_speed,
-        step_time=args.step_time,
-        pattern=args.pattern,
+        step_time=2.5,
+        max_radius_m=args.max_radius,
     )
 
-    logger.info("Starte MAVLink Verbindung (STRG+C für Not-Aus)...")
+    logger.info(
+        "Bereit für Testflug (Max-Radius: %.1fm, Starthöhe: %.1fm, STRG+C für Not-Aus)...",
+        args.max_radius,
+        args.takeoff_alt,
+    )
     try:
         with DroneController(device=args.device, max_altitude=args.max_alt) as drone:
             state = STATE_TAKEOFF
@@ -281,15 +262,9 @@ def main() -> int:
             consecutive_detections = 0
             drop_start_time = 0.0
             drop_stage = 0
-            last_wall_warning = 0.0
 
             camera.start()
-            logger.info(
-                "Kamera gestartet. Modus: %s (Max-Dauer: %.1fs, Wand-Limit: %.1fm)...",
-                args.pattern.upper(),
-                args.max_search_time,
-                args.min_wall_dist,
-            )
+            logger.info("Kamera gestartet. Starte Mission...")
 
             # --- MISSION LOOP ---
             while True:
@@ -338,7 +313,8 @@ def main() -> int:
                     logger.info(">>> STATE: TAKEOFF auf %.2f m", args.takeoff_alt)
                     drone.takeoff(target_alt=args.takeoff_alt)
                     logger.info(
-                        "Takeoff abgeschlossen. Beginne Suche (%s)...", args.pattern
+                        "Takeoff abgeschlossen. Beginne Suche (Max-Radius: %.1fm)...",
+                        args.max_radius,
                     )
                     state = STATE_SEARCH
                     search_start_time = time.monotonic()
@@ -348,30 +324,17 @@ def main() -> int:
                     now = time.monotonic()
                     elapsed = now - search_start_time
 
-                    # Timeout-Prüfung für die Suche
-                    if elapsed > args.max_search_time:
+                    # Zeitlimit oder Radiuslimit erreicht -> Landen
+                    if elapsed > args.max_search_time or searcher.is_finished:
                         logger.warning(
-                            "Suchzeit-Limit (%.1fs) überschritten! Breche Mission ab und lande.",
-                            args.max_search_time,
+                            "Suchgrenze erreicht (Zeit: %.1fs, Fertig: %s)! Leite Landung ein.",
+                            elapsed,
+                            searcher.is_finished,
                         )
                         state = STATE_LAND
                         continue
 
                     vx, vy, vz, yaw = searcher.get_velocity(now)
-
-                    # MT-15 Wand-Kollisionsüberwachung:
-                    # Fliegt die Drohne vorwärts (vx > 0) und die Wand ist zu nah -> vorzeitig abbiegen!
-                    if vx > 0.0 and drone.forward_distance is not None:
-                        if drone.forward_distance < args.min_wall_dist:
-                            if now - last_wall_warning > 1.0:
-                                logger.warning(
-                                    "WAND ERKANNT in %.2f m (< %.2f m)! Breche Vorwärts-Schenkel ab und biege ab.",
-                                    drone.forward_distance,
-                                    args.min_wall_dist,
-                                )
-                                last_wall_warning = now
-                            searcher.advance_to_next_leg(now)
-                            vx, vy, vz, yaw = searcher.get_velocity(now)
 
                     # Robustheits-Filter: mindestens 3 aufeinanderfolgende Frames
                     if consecutive_detections >= 3 and target is not None:
@@ -409,19 +372,6 @@ def main() -> int:
                         kp = 0.0012
                         vx = offset_y * kp
                         vy = offset_x * kp
-
-                        # MT-15 Sicherheitsgrenze im Center-Modus:
-                        # Verhindert, dass die Drohne bei der Zentrierung zu nah an eine Wand fährt
-                        if (
-                            vx > 0.0
-                            and drone.forward_distance is not None
-                            and drone.forward_distance < 0.6
-                        ):
-                            logger.warning(
-                                "Wand zu nah (%.2fm) während Zentrierung! Begrenze Vorwärtsflug.",
-                                drone.forward_distance,
-                            )
-                            vx = 0.0
 
                         # Geschwindigkeiten kappen
                         vx = max(-args.center_speed, min(args.center_speed, vx))
