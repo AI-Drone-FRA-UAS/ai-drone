@@ -17,7 +17,7 @@ Das System verbindet Computer Vision, Mehrsensor-Fusion und Aktuatorik auf dem R
                   │   └──────┬─────────────┬─────────────┬─────────────┘   │
                   └──────────┼─────────────┼─────────────┼─────────────────┘
                              │             │             │
-                    CSI/I2C  │    GPIO 12  │    MAVLink  │ UART (/dev/serial0)
+                    CSI/I2C  │    GPIO 18  │    MAVLink  │ UART (/dev/serial0)
                              ▼             ▼             ▼
         ┌──────────────────────┐ ┌──────────┐ ┌────────────────────────────┐
         │  Raspberry Pi IMX500 │ │  SG90    │ │     Flywoo GN745 AIO       │
@@ -36,7 +36,7 @@ Das System verbindet Computer Vision, Mehrsensor-Fusion und Aktuatorik auf dem R
 ### Komponenten & Schnittstellen
 
 1. **IMX500 AI-Kamera (Nadir, 90° nach unten):** Erfasst kontinuierlich hochauflösende Kamerabilder des Bodens zur Erkennung von AprilTag 3 (tag36h11) Markern.
-2. **SG90 Servo (GPIO 12):** Löst den mechanischen Abwurfmechanismus über `gpiozero.Servo` aus.
+2. **SG90 Servo (GPIO 18):** Löst den mechanischen Abwurfmechanismus über `gpiozero.Servo` aus.
 3. **MicoAir MTF-01P (Boden):** Liefert optischen Fluss für die horizontale Drift-Stabilisierung und LiDAR-Höhendaten (`RNGFND1_ORIENT=25`).
 4. **MicoAir MT-15 (Vorne):** ToF-Distanzmesser (bis 15 m) zur Echtzeit-Wanderkennung und Kollisionsvermeidung in der Flugrichtung (`RNGFND2_ORIENT=0`).
 5. **Flywoo GN745 AIO Flight Controller:** Führt EKF3-Zustandsschätzung aus und empfängt Body-Frame Geschwindigkeitsbefehle (`SET_POSITION_TARGET_LOCAL_NED`).
@@ -177,7 +177,7 @@ cd ~/ai-drone
   --search-speed 0.15 \
   --max-search-time 90.0 \
   --center-speed 0.2 \
-  --servo-pin 12 \
+  --servo-pin 18 \
   --servo-closed -0.5 \
   --servo-open 0.5
 ```

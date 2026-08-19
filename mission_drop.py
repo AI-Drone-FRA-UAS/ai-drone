@@ -163,9 +163,7 @@ def filter_valid_tags(
     """Filtert und meldet gefundene Tags mit Live-Log."""
     for det in detections:
         margin_str = (
-            f"{det.decision_margin:.1f}"
-            if det.decision_margin is not None
-            else "N/A"
+            f"{det.decision_margin:.1f}" if det.decision_margin is not None else "N/A"
         )
         hamming_str = str(det.hamming) if det.hamming is not None else "N/A"
         logger.info(
@@ -241,7 +239,10 @@ def main() -> int:
         help="Gezielte AprilTag-ID (Standard: beliebiges valides Tag)",
     )
     parser.add_argument(
-        "--servo-pin", type=int, default=12, help="BCM GPIO Pin für Servo"
+        "--servo-pin",
+        type=int,
+        default=18,
+        help="BCM GPIO Pin für Servo (Standard: 18, physischer Pin 12)",
     )
     parser.add_argument(
         "--servo-closed",
