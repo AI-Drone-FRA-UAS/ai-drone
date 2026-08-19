@@ -1,0 +1,442 @@
+/* ==========================================================================
+   AI-Drohne — Projektseite
+   Farbwelt und Typo folgen dem A1-Plakat (docs/poster/plakat.html).
+   ========================================================================== */
+
+:root {
+  --blau-900: #0b3d67;
+  --blau-700: #12558c;
+  --blau-500: #1573b8;
+  --akzent:   #e8710a;
+  --tuerkis:  #0d9488;
+
+  --bg:        #ffffff;
+  --bg-alt:    #f4f7fa;
+  --flaeche:   #f4f7fa;
+  --flaeche-2: #eaf0f6;
+  --linie:     #d8e1e9;
+  --linie-weich: #e7edf3;
+  --text:      #16212b;
+  --text-leise: #566675;
+  --code-bg:   #f2f6f9;
+  --schatten:  0 1px 2px rgba(11, 61, 103, .06), 0 8px 24px -12px rgba(11, 61, 103, .18);
+  --schatten-gross: 0 2px 4px rgba(11, 61, 103, .06), 0 24px 60px -24px rgba(11, 61, 103, .35);
+
+  --kopf-h: 60px;
+  --seite-max: 1400px;
+  --radius: 12px;
+
+  --serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0d1620;
+    --bg-alt:    #101d29;
+    --flaeche:   #142230;
+    --flaeche-2: #1a2b3b;
+    --linie:     #24384a;
+    --linie-weich: #1c2c3b;
+    --text:      #e4ecf3;
+    --text-leise: #9db0c1;
+    --code-bg:   #101d29;
+    --blau-500:  #4ea6e6;
+    --blau-700:  #2b78b4;
+    --blau-900:  #071c2e;
+    --schatten:  0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    --schatten-gross: 0 2px 4px rgba(0, 0, 0, .4), 0 24px 60px -24px rgba(0, 0, 0, .8);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--kopf-h) + 16px); }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: var(--blau-500); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+img { max-width: 100%; height: auto; }
+
+/* ---------------------------------------------------------------- Kopfzeile */
+
+.kopf {
+  position: sticky; top: 0; z-index: 50;
+  height: var(--kopf-h);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.6) blur(12px);
+  border-bottom: 1px solid var(--linie);
+}
+.kopf-inner {
+  max-width: var(--seite-max); margin: 0 auto; height: 100%;
+  padding: 0 22px; display: flex; align-items: center; gap: 18px;
+}
+.marke {
+  display: flex; align-items: center; gap: 9px;
+  font-weight: 700; letter-spacing: -.01em; color: var(--text);
+  font-size: 15px; white-space: nowrap;
+}
+.marke:hover { text-decoration: none; }
+.marke-punkt {
+  width: 11px; height: 11px; border-radius: 3px; flex: none;
+  background: linear-gradient(135deg, var(--akzent) 0%, var(--akzent) 50%, var(--tuerkis) 50%);
+}
+.marke small {
+  font-weight: 500; color: var(--text-leise); font-size: 13px;
+  padding-left: 9px; margin-left: 2px; border-left: 1px solid var(--linie);
+}
+.kopf-nav { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.kopf-nav a {
+  color: var(--text-leise); font-size: 14px; font-weight: 500;
+  padding: 6px 11px; border-radius: 7px;
+}
+.kopf-nav a:hover { color: var(--text); background: var(--flaeche); text-decoration: none; }
+.kopf-nav a.aktiv { color: var(--blau-500); background: var(--flaeche); }
+.nav-schalter {
+  display: none; margin-left: auto;
+  background: var(--flaeche); border: 1px solid var(--linie); color: var(--text);
+  border-radius: 8px; padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer;
+}
+
+/* -------------------------------------------------------------------- Hero */
+
+.hero { position: relative; overflow: hidden; background: var(--blau-900); color: #fff; }
+.hero-bild {
+  position: absolute; inset: 0;
+  /* background-image is set on the element: a url() inside a custom property
+     would resolve relative to this stylesheet, not to the page. */
+  background-size: cover; background-position: center 46%;
+  opacity: .6;
+}
+.hero-verlauf {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(180deg, rgba(6, 28, 48, .38) 0%, rgba(6, 28, 48, .22) 38%, rgba(6, 28, 48, .9) 100%),
+    linear-gradient(100deg, rgba(11, 61, 103, .88) 0%, rgba(11, 61, 103, .42) 52%, rgba(11, 61, 103, .04) 100%);
+}
+.hero-inner {
+  position: relative;
+  max-width: var(--seite-max); margin: 0 auto;
+  padding: 86px 22px 78px;
+}
+.hero-kicker {
+  text-transform: uppercase; letter-spacing: .12em; font-size: 12.5px;
+  font-weight: 600; opacity: .82; margin: 0 0 18px;
+}
+.hero h1 {
+  font-size: clamp(38px, 6.2vw, 68px); line-height: 1.03;
+  letter-spacing: -.03em; font-weight: 800; margin: 0 0 20px; max-width: 16ch;
+}
+.hero-text {
+  font-size: clamp(17px, 1.9vw, 21px); line-height: 1.5;
+  max-width: 60ch; opacity: .93; margin: 0 0 32px;
+}
+.hero-knoepfe { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 44px; }
+.knopf {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 22px; border-radius: 9px;
+  font-weight: 600; font-size: 15px; border: 1px solid transparent;
+  transition: transform .12s ease, background .12s ease;
+}
+.knopf:hover { text-decoration: none; transform: translateY(-1px); }
+.knopf-primaer { background: var(--akzent); color: #fff; }
+.knopf-primaer:hover { background: #f5842a; }
+.knopf-sekundaer { background: rgba(255, 255, 255, .12); color: #fff; border-color: rgba(255, 255, 255, .35); }
+.knopf-sekundaer:hover { background: rgba(255, 255, 255, .2); }
+
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 14px 46px;
+  border-top: 1px solid rgba(255, 255, 255, .25); padding-top: 24px;
+}
+.hero-meta div { font-size: 15px; }
+.hero-meta span {
+  display: block; text-transform: uppercase; letter-spacing: .1em;
+  font-size: 11.5px; opacity: .68; margin-bottom: 4px;
+}
+.hero-meta b { font-weight: 600; }
+
+/* ------------------------------------------------------------- Startseite */
+
+.band { padding: 76px 22px; }
+.band-alt { background: var(--bg-alt); border-block: 1px solid var(--linie-weich); }
+.band-inner { max-width: var(--seite-max); margin: 0 auto; }
+
+.band h2 {
+  font-size: clamp(26px, 3.2vw, 34px); letter-spacing: -.022em;
+  margin: 0 0 10px; font-weight: 800; color: var(--text);
+}
+.band-lead {
+  color: var(--text-leise); font-size: 17px; max-width: 66ch; margin: 0 0 38px;
+}
+.band h2 + .band-lead { margin-top: -2px; }
+
+.augenbraue {
+  display: inline-flex; align-items: center; gap: 8px;
+  text-transform: uppercase; letter-spacing: .12em;
+  font-size: 12px; font-weight: 700; color: var(--akzent); margin: 0 0 14px;
+}
+.augenbraue::before {
+  content: ""; width: 20px; height: 3px; border-radius: 2px; background: var(--akzent);
+}
+
+/* Kennzahlen */
+.kennzahlen {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.kennzahl {
+  border-radius: var(--radius); padding: 26px 24px; color: #fff;
+  background: var(--blau-900); box-shadow: var(--schatten);
+}
+.kennzahl:nth-child(2) { background: var(--blau-500); }
+.kennzahl:nth-child(3) { background: var(--tuerkis); }
+.kennzahl:nth-child(4) { background: #33495e; }
+.kennzahl b { display: block; font-size: 40px; line-height: 1; font-weight: 800; letter-spacing: -.03em; margin-bottom: 10px; }
+.kennzahl span { font-size: 14px; opacity: .88; line-height: 1.4; }
+
+/* Karten-Raster */
+.karten { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+.karte {
+  background: var(--bg); border: 1px solid var(--linie);
+  border-radius: var(--radius); padding: 26px 24px;
+  box-shadow: var(--schatten); display: flex; flex-direction: column;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+a.karte:hover {
+  text-decoration: none; transform: translateY(-2px);
+  box-shadow: var(--schatten-gross); border-color: var(--blau-500);
+}
+.karte h3 { margin: 0 0 8px; font-size: 18px; letter-spacing: -.015em; color: var(--text); font-weight: 700; }
+.karte p { margin: 0; color: var(--text-leise); font-size: 15px; line-height: 1.55; }
+.karte-mehr { margin-top: 16px; font-size: 14px; font-weight: 600; color: var(--blau-500); }
+.karte-marke {
+  display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--text-leise); margin-bottom: 12px;
+}
+
+/* Statusliste */
+.status { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+.status-zeile {
+  display: flex; gap: 15px; align-items: flex-start;
+  background: var(--bg); border: 1px solid var(--linie);
+  border-left: 4px solid var(--tuerkis);
+  border-radius: 10px; padding: 17px 20px;
+}
+.status-zeile.offen { border-left-color: var(--akzent); }
+.status-punkt {
+  flex: none; margin-top: 3px; width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  background: var(--tuerkis);
+}
+.status-zeile.offen .status-punkt { background: var(--akzent); }
+.status-zeile b { display: block; font-size: 15.5px; margin-bottom: 3px; }
+.status-zeile span { color: var(--text-leise); font-size: 14.5px; line-height: 1.5; }
+
+/* Architektur-Diagramm */
+.diagramm { overflow-x: auto; padding-bottom: 8px; }
+.diagramm svg { min-width: 720px; width: 100%; height: auto; display: block; }
+.bildunterschrift { color: var(--text-leise); font-size: 14px; margin-top: 14px; max-width: 70ch; }
+
+/* Plakat-Vorschau */
+.plakat-band { display: grid; gap: 42px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: center; }
+.plakat-bild {
+  border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--linie); box-shadow: var(--schatten-gross);
+  background: var(--bg);
+}
+.plakat-bild img { display: block; width: 100%; }
+
+/* ------------------------------------------------------------ Doku-Layout */
+
+.doku {
+  max-width: var(--seite-max); margin: 0 auto;
+  display: grid; grid-template-columns: 258px minmax(0, 1fr) 208px;
+  gap: 42px; padding: 40px 22px 96px;
+  align-items: start;
+}
+
+.seitennav {
+  position: sticky; top: calc(var(--kopf-h) + 24px);
+  max-height: calc(100vh - var(--kopf-h) - 48px); overflow-y: auto;
+  font-size: 14.5px; padding-right: 6px;
+}
+.seitennav .gruppe { margin-bottom: 26px; }
+.seitennav .gruppe > b {
+  display: block; text-transform: uppercase; letter-spacing: .1em;
+  font-size: 11.5px; color: var(--text-leise); margin-bottom: 9px; font-weight: 700;
+}
+.seitennav a {
+  display: block; padding: 5px 12px; margin-left: -12px;
+  border-radius: 7px; color: var(--text-leise); line-height: 1.4;
+}
+.seitennav a:hover { color: var(--text); background: var(--flaeche); text-decoration: none; }
+.seitennav a.aktiv {
+  color: var(--blau-500); background: var(--flaeche); font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--akzent);
+}
+
+.inhaltsnav {
+  position: sticky; top: calc(var(--kopf-h) + 24px);
+  max-height: calc(100vh - var(--kopf-h) - 48px); overflow-y: auto;
+  font-size: 13.5px; border-left: 1px solid var(--linie); padding-left: 18px;
+}
+.inhaltsnav b {
+  display: block; text-transform: uppercase; letter-spacing: .1em;
+  font-size: 11.5px; color: var(--text-leise); margin-bottom: 10px;
+}
+.inhaltsnav a { display: block; padding: 3.5px 0; color: var(--text-leise); line-height: 1.4; }
+.inhaltsnav a:hover { color: var(--blau-500); text-decoration: none; }
+.inhaltsnav a.stufe-3 { padding-left: 13px; font-size: 13px; }
+
+/* --------------------------------------------------------- Doku-Textkörper */
+
+.inhalt { min-width: 0; }
+.brotkrumen { font-size: 13.5px; color: var(--text-leise); margin-bottom: 10px; }
+.brotkrumen a { color: var(--text-leise); }
+
+.inhalt h1 {
+  font-size: clamp(30px, 4vw, 40px); line-height: 1.15; letter-spacing: -.028em;
+  font-weight: 800; margin: 0 0 14px;
+}
+.inhalt h2 {
+  font-size: 25px; letter-spacing: -.02em; font-weight: 700;
+  margin: 52px 0 16px; padding-top: 22px; border-top: 1px solid var(--linie-weich);
+}
+.inhalt h3 { font-size: 19px; letter-spacing: -.012em; font-weight: 700; margin: 34px 0 10px; }
+.inhalt h4 { font-size: 16.5px; font-weight: 700; margin: 26px 0 8px; color: var(--text-leise); }
+.inhalt > h2:first-of-type { border-top: none; padding-top: 0; margin-top: 38px; }
+
+.anker {
+  float: left; margin-left: -22px; width: 22px;
+  color: var(--linie); opacity: 0; font-weight: 400;
+  transition: opacity .12s ease;
+}
+h2:hover .anker, h3:hover .anker { opacity: 1; }
+.anker:hover { color: var(--akzent); text-decoration: none; }
+
+.inhalt p { margin: 0 0 16px; }
+.inhalt ul, .inhalt ol { margin: 0 0 18px; padding-left: 24px; }
+.inhalt li { margin-bottom: 7px; }
+.inhalt li::marker { color: var(--akzent); }
+.inhalt ol li::marker { color: var(--text-leise); font-weight: 600; }
+.inhalt hr { border: none; border-top: 1px solid var(--linie); margin: 40px 0; }
+.inhalt strong { font-weight: 700; }
+
+.inhalt blockquote {
+  margin: 22px 0; padding: 16px 22px;
+  border-left: 4px solid var(--akzent);
+  background: var(--flaeche); border-radius: 0 10px 10px 0;
+  color: var(--text);
+}
+.inhalt blockquote p:last-child { margin-bottom: 0; }
+
+.inhalt code {
+  font-family: var(--mono); font-size: .875em;
+  background: var(--code-bg); border: 1px solid var(--linie-weich);
+  padding: .12em .38em; border-radius: 5px; color: var(--blau-500);
+  overflow-wrap: break-word;
+}
+.inhalt pre {
+  background: var(--code-bg); border: 1px solid var(--linie);
+  border-radius: 10px; padding: 17px 19px; overflow-x: auto;
+  margin: 0 0 20px; line-height: 1.55;
+}
+.inhalt pre code {
+  background: none; border: none; padding: 0; font-size: 13.5px; color: var(--text);
+}
+
+.tabelle-huelle { overflow-x: auto; margin: 0 0 22px; }
+.inhalt table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+.inhalt th, .inhalt td {
+  text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--linie);
+  vertical-align: top;
+}
+.inhalt th {
+  font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-leise); border-bottom: 2px solid var(--linie);
+  white-space: nowrap;
+}
+.inhalt tbody tr:hover { background: var(--flaeche); }
+.inhalt tbody tr:last-child td { border-bottom: none; }
+
+.seiten-fuss {
+  margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--linie);
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  font-size: 14px; color: var(--text-leise);
+}
+.seiten-fuss a.quelle { margin-left: auto; }
+.blaettern { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
+.blaettern a {
+  flex: 1 1 240px; border: 1px solid var(--linie); border-radius: 10px;
+  padding: 14px 18px; background: var(--bg);
+}
+.blaettern a:hover { border-color: var(--blau-500); text-decoration: none; }
+.blaettern span {
+  display: block; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--text-leise); margin-bottom: 3px;
+}
+.blaettern b { color: var(--text); font-weight: 600; font-size: 15px; }
+.blaettern .weiter { text-align: right; }
+
+/* ------------------------------------------------------------------ Fußzeile */
+
+.fuss {
+  background: var(--blau-900); color: rgba(255, 255, 255, .78);
+  padding: 46px 22px; font-size: 14.5px;
+}
+.fuss-inner {
+  max-width: var(--seite-max); margin: 0 auto;
+  display: flex; flex-wrap: wrap; gap: 22px 46px; align-items: baseline;
+}
+.fuss a { color: #fff; }
+.fuss-recht { margin-left: auto; }
+
+/* ------------------------------------------------------------------ Responsiv */
+
+@media (max-width: 1180px) {
+  .doku { grid-template-columns: 236px minmax(0, 1fr); }
+  .inhaltsnav { display: none; }
+}
+
+@media (max-width: 860px) {
+  .doku { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 22px; }
+  .seitennav {
+    position: static; max-height: none; overflow: visible;
+    display: none; border-bottom: 1px solid var(--linie);
+    padding: 4px 0 22px; margin-bottom: 26px;
+  }
+  .seitennav.offen { display: block; }
+  .nav-schalter { display: inline-block; }
+  .kopf-nav { display: none; }
+  .hero-inner { padding: 58px 22px 52px; }
+  .band { padding: 54px 22px; }
+  .plakat-band { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .fuss-recht { margin-left: 0; }
+}
+
+@media print {
+  .kopf, .seitennav, .inhaltsnav, .blaettern, .nav-schalter { display: none; }
+  .doku { display: block; padding: 0; }
+  body { font-size: 11pt; }
+}
+
+.seiten-lead {
+  font-size: 18px; line-height: 1.55; color: var(--text-leise);
+  margin: -4px 0 6px; max-width: 62ch;
+}
+.seiten-original {
+  font-size: 13.5px; color: var(--text-leise); margin: 0 0 26px;
+  padding: 8px 0 0; border-top: 1px solid var(--linie-weich);
+}
+.seiten-original b { font-weight: 600; color: var(--text); }
