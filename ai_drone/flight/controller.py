@@ -19,6 +19,7 @@ from ai_drone.mavlink.safety import (
     require_fresh_disarmed_heartbeat,
 )
 from ai_drone.recording import request_message_intervals
+from ai_drone.validation import finite_in_range
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +30,6 @@ FUTURE_TOLERANCE_MS = 250
 
 class FlightSafetyError(RuntimeError):
     """Raised when a live-flight safety invariant is violated."""
-
-
-def _finite(value: float, name: str, *, minimum: float, maximum: float) -> float:
-    number = float(value)
-    if not math.isfinite(number) or not minimum <= number <= maximum:
-        raise ValueError(
-            f"{name} must be finite and between {minimum:g} and {maximum:g}"
-        )
-    return number
 
 
 class DroneController:
@@ -59,7 +51,7 @@ class DroneController:
             raise ValueError("baud must be between 1 and 4000000")
         self.device = self.find_device(device)
         self.baud = baud
-        self.max_altitude = _finite(
+        self.max_altitude = finite_in_range(
             max_altitude, "max_altitude", minimum=0.1, maximum=10.0
         )
         self.target_system = target_system
@@ -260,14 +252,14 @@ class DroneController:
             )
 
     def altitude_is_fresh(self, max_age: float = 1.0) -> bool:
-        _finite(max_age, "max_age", minimum=0.05, maximum=10.0)
+        finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
         return (
             self.current_altitude is not None
             and time.monotonic() - self.last_telemetry_time <= max_age
         )
 
     def heartbeat_is_fresh(self, max_age: float = 2.5) -> bool:
-        _finite(max_age, "max_age", minimum=0.05, maximum=10.0)
+        finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
         return (
             self.last_heartbeat_time > 0
             and time.monotonic() - self.last_heartbeat_time <= max_age
@@ -275,7 +267,7 @@ class DroneController:
 
     def wait_for_altitude(self, timeout: float = 3.0) -> float | None:
         """Wait for a newly received, downward DISTANCE_SENSOR sample."""
-        _finite(timeout, "timeout", minimum=0.05, maximum=30.0)
+        finite_in_range(timeout, "timeout", minimum=0.05, maximum=30.0)
         connection = self._connection()
         while (queued := connection.recv_match(blocking=False)) is not None:
             self._process_message(queued, time.monotonic())
@@ -309,7 +301,7 @@ class DroneController:
             )
 
     def set_mode(self, mode_name: str, timeout: float = 5.0) -> None:
-        _finite(timeout, "timeout", minimum=0.1, maximum=30.0)
+        finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
         connection = self._connection()
         requested = mode_name.upper()
         mapping = connection.mode_mapping()
@@ -329,7 +321,7 @@ class DroneController:
         raise TimeoutError(f"flight controller did not confirm {requested} mode")
 
     def arm(self, timeout: float = 10.0) -> None:
-        _finite(timeout, "timeout", minimum=0.5, maximum=30.0)
+        finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         self.update_telemetry()
         if self.is_armed and not self._armed_by_controller:
             raise FlightSafetyError(
@@ -362,7 +354,7 @@ class DroneController:
         self._connection().arducopter_disarm()
 
     def disarm(self, timeout: float = 10.0) -> None:
-        _finite(timeout, "timeout", minimum=0.5, maximum=30.0)
+        finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         if self._flight_started_by_controller:
             raise FlightSafetyError("refusing to force-disarm a flight; use land()")
         self._request_disarm()
@@ -378,10 +370,10 @@ class DroneController:
         raise TimeoutError("flight controller did not confirm disarming")
 
     def takeoff(self, target_alt: float, timeout: float = 15.0) -> None:
-        target = _finite(
+        target = finite_in_range(
             target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
         )
-        _finite(timeout, "timeout", minimum=1.0, maximum=60.0)
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=60.0)
         if not self.is_armed:
             self.arm()
         if not self._armed_by_controller:
@@ -424,7 +416,7 @@ class DroneController:
         raise TimeoutError("takeoff altitude was not reached")
 
     def land(self, timeout: float = 30.0) -> None:
-        _finite(timeout, "timeout", minimum=1.0, maximum=120.0)
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
         self._landing_commanded = True
         self.set_mode("LAND")
         deadline = time.monotonic() + timeout
@@ -459,10 +451,12 @@ class DroneController:
         vz: float,
         yaw_rate_deg: float = 0.0,
     ) -> None:
-        forward = _finite(vx, "vx", minimum=-1.0, maximum=1.0)
-        right = _finite(vy, "vy", minimum=-1.0, maximum=1.0)
-        down = _finite(vz, "vz", minimum=-0.5, maximum=0.5)
-        yaw_rate = _finite(yaw_rate_deg, "yaw_rate_deg", minimum=-45.0, maximum=45.0)
+        forward = finite_in_range(vx, "vx", minimum=-1.0, maximum=1.0)
+        right = finite_in_range(vy, "vy", minimum=-1.0, maximum=1.0)
+        down = finite_in_range(vz, "vz", minimum=-0.5, maximum=0.5)
+        yaw_rate = finite_in_range(
+            yaw_rate_deg, "yaw_rate_deg", minimum=-45.0, maximum=45.0
+        )
         if not self.is_flying or not self.is_armed or self._landing_commanded:
             raise FlightSafetyError(
                 "velocity commands require an active controller-owned flight"

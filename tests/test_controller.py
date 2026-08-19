@@ -151,17 +151,3 @@ def test_flight_confirmation_is_checked_before_device_access(monkeypatch) -> Non
         lambda _args: pytest.fail("must not access MAVLink before confirmation"),
     )
     assert control.main(["hover", "--confirm-flight", "yes"]) == 1
-
-
-def test_follow_simulation_does_not_access_mavlink(monkeypatch) -> None:
-    monkeypatch.setattr(
-        control,
-        "_controller",
-        lambda _args: pytest.fail("simulation must not access MAVLink"),
-    )
-    monkeypatch.setattr(
-        control.AutonomousFollower,
-        "run_simulated_tracking",
-        lambda _self, _duration: None,
-    )
-    assert control.main(["follow", "--simulate", "--duration", "0.1"]) == 0

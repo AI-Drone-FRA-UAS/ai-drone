@@ -4,55 +4,28 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import time
 from collections.abc import Sequence
 
 from ai_drone.flight.controller import DroneController, FlightSafetyError
-from ai_drone.flight.follower import AutonomousFollower
+from ai_drone.flight.guards import FlightGuardError, check_safety_guardrails
+from ai_drone.validation import finite_in_range
 
 FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
-FOLLOW_CONFIRMATION = "CAMERA_RIGID_AND_CALIBRATED"
 logger = logging.getLogger(__name__)
-
-
-class _SimulationController:
-    """No-I/O target for the pure person-follow simulation."""
-
-    battery_voltage: float | None = 16.0
-    current_altitude: float | None = 0.0
-    max_altitude: float = 0.8
-    is_flying: bool = False
-    is_armed: bool = False
-
-    def update_telemetry(self) -> None:
-        return
-
-    def emergency_stop(self) -> None:
-        return
-
-    def send_velocity_body(
-        self, vx: float, vy: float, vz: float, yaw_rate_deg: float = 0.0
-    ) -> None:
-        return
-
-
-def _bounded(value: float, name: str, minimum: float, maximum: float) -> float:
-    number = float(value)
-    if not math.isfinite(number) or not minimum <= number <= maximum:
-        raise ValueError(
-            f"{name} must be finite and between {minimum:g} and {maximum:g}"
-        )
-    return number
 
 
 def _validate_common(args: argparse.Namespace) -> None:
     if isinstance(args.baud, bool) or not 1 <= args.baud <= 4_000_000:
         raise ValueError("--baud must be between 1 and 4000000")
-    _bounded(args.max_alt, "--max-alt", 0.1, 10.0)
+    finite_in_range(args.max_alt, "--max-alt", minimum=0.1, maximum=10.0)
     if hasattr(args, "takeoff_alt"):
-        _bounded(args.takeoff_alt, "--takeoff-alt", 0.15, args.max_alt)
-    _bounded(args.duration, "--duration", 0.1, 3_600.0)
+        finite_in_range(
+            args.takeoff_alt, "--takeoff-alt", minimum=0.15, maximum=args.max_alt
+        )
+    finite_in_range(args.duration, "--duration", minimum=0.1, maximum=3_600.0)
+    if hasattr(args, "min_battery"):
+        finite_in_range(args.min_battery, "--min-battery", minimum=0.0, maximum=60.0)
 
 
 def _require_flight_confirmation(args: argparse.Namespace) -> None:
@@ -71,12 +44,16 @@ def _controller(args: argparse.Namespace) -> DroneController:
     )
 
 
-def _monitor(drone: DroneController, duration: float) -> None:
+def _monitor(drone: DroneController, duration: float, min_battery_v: float) -> None:
+    """Hold for ``duration`` seconds, aborting the moment a guard trips."""
+
     deadline = time.monotonic() + duration
     while time.monotonic() < deadline:
         drone.update_telemetry()
-        if not drone.altitude_is_fresh() or not drone.heartbeat_is_fresh():
-            raise FlightSafetyError("flight telemetry became stale")
+        try:
+            check_safety_guardrails(drone, min_battery_v)
+        except FlightGuardError as error:
+            raise FlightSafetyError(str(error)) from error
         time.sleep(0.05)
 
 
@@ -111,25 +88,27 @@ def cmd_hover(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
     with _controller(args) as drone:
         drone.takeoff(args.takeoff_alt)
-        _monitor(drone, args.duration)
+        _monitor(drone, args.duration, args.min_battery)
         drone.land()
     return 0
 
 
 def cmd_velocity_test(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
-    _bounded(args.vx, "--vx", -1.0, 1.0)
-    _bounded(args.vy, "--vy", -1.0, 1.0)
-    _bounded(args.vz, "--vz", -0.5, 0.5)
-    _bounded(args.yaw_rate, "--yaw-rate", -45.0, 45.0)
+    finite_in_range(args.vx, "--vx", minimum=-1.0, maximum=1.0)
+    finite_in_range(args.vy, "--vy", minimum=-1.0, maximum=1.0)
+    finite_in_range(args.vz, "--vz", minimum=-0.5, maximum=0.5)
+    finite_in_range(args.yaw_rate, "--yaw-rate", minimum=-45.0, maximum=45.0)
     with _controller(args) as drone:
         drone.takeoff(args.takeoff_alt)
         deadline = time.monotonic() + args.duration
         try:
             while time.monotonic() < deadline:
                 drone.update_telemetry()
-                if not drone.altitude_is_fresh() or not drone.heartbeat_is_fresh():
-                    raise FlightSafetyError("flight telemetry became stale")
+                try:
+                    check_safety_guardrails(drone, args.min_battery)
+                except FlightGuardError as error:
+                    raise FlightSafetyError(str(error)) from error
                 drone.send_velocity_body(args.vx, args.vy, args.vz, args.yaw_rate)
                 time.sleep(0.2)
         finally:
@@ -137,46 +116,6 @@ def cmd_velocity_test(args: argparse.Namespace) -> int:
                 drone.send_velocity_body(0.0, 0.0, 0.0, 0.0)
             except (OSError, RuntimeError):
                 logger.warning("could not send final zero-velocity setpoint")
-        drone.land()
-    return 0
-
-
-def cmd_follow(args: argparse.Namespace) -> int:
-    follower = AutonomousFollower(
-        _SimulationController(),
-        target_dist_m=args.target_dist,
-        max_vx=args.max_speed,
-        max_yaw_rate_deg=args.max_yaw,
-    )
-    if args.simulate:
-        follower.run_simulated_tracking(args.duration)
-        return 0
-
-    _require_flight_confirmation(args)
-    if args.confirm_live_follow != FOLLOW_CONFIRMATION:
-        raise ValueError(
-            f"--confirm-live-follow must be exactly {FOLLOW_CONFIRMATION}; the current "
-            "loosely cable-held camera does not satisfy this gate"
-        )
-    if args.focal_length_px is None:
-        raise ValueError("live follow requires measured --focal-length-px")
-    _bounded(args.confidence, "--confidence", 0.0, 1.0)
-    _bounded(args.focal_length_px, "--focal-length-px", 1.0, 100_000.0)
-    _bounded(args.person_height, "--person-height", 0.5, 2.5)
-    with _controller(args) as drone:
-        live_follower = AutonomousFollower(
-            drone,
-            target_dist_m=args.target_dist,
-            max_vx=args.max_speed,
-            max_yaw_rate_deg=args.max_yaw,
-        )
-        drone.takeoff(args.takeoff_alt)
-        live_follower.run_live_tracking(
-            confidence=args.confidence,
-            max_duration_s=args.duration,
-            focal_length_px=args.focal_length_px,
-            person_height_m=args.person_height,
-        )
         drone.land()
     return 0
 
@@ -215,23 +154,6 @@ def _parser() -> argparse.ArgumentParser:
     velocity.add_argument("--confirm-flight")
     velocity.set_defaults(handler=cmd_velocity_test)
 
-    follow = commands.add_parser(
-        "follow", help="simulate or run experimental live person following"
-    )
-    _add_common_options(follow, include_takeoff=True)
-    follow.add_argument("--duration", type=float, default=15.0)
-    follow.add_argument("--target-dist", type=float, default=2.0)
-    follow.add_argument("--max-speed", type=float, default=0.3)
-    follow.add_argument("--max-yaw", type=float, default=20.0)
-    follow.add_argument("--confidence", type=float, default=0.4)
-    follow.add_argument("--focal-length-px", type=float)
-    follow.add_argument("--person-height", type=float, default=1.7)
-    follow.add_argument(
-        "--simulate", "--sim-target", dest="simulate", action="store_true"
-    )
-    follow.add_argument("--confirm-flight")
-    follow.add_argument("--confirm-live-follow")
-    follow.set_defaults(handler=cmd_follow)
     return parser
 
 
@@ -245,6 +167,12 @@ def _add_common_options(
     parser.add_argument("--max-alt", type=float, default=0.8)
     if include_takeoff:
         parser.add_argument("--takeoff-alt", type=float, default=0.4)
+        parser.add_argument(
+            "--min-battery",
+            type=float,
+            default=14.4,
+            help="abort and stop below this pack voltage",
+        )
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
