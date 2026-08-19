@@ -20,15 +20,18 @@ uv run --group docs python site/build.py --serve
 touches the documentation, the site, or the workflow itself, and can also be
 started by hand from the Actions tab.
 
-One-time setup in the repository: **Settings → Pages → Build and deployment →
-Source: GitHub Actions**. Without that switch the workflow builds the site but
-`configure-pages` fails, so nothing is published.
+The site is live at <https://ai-drone-fra-uas.github.io/ai-drone/>.
 
-This step needs **admin** on the repository. It cannot be automated: creating a
-Pages site is closed to `GITHUB_TOKEN`, so `enablement: true` on the action
-fails with *Resource not accessible by integration*, and the REST API answers
-404 for anyone without admin. As of August 2026 the admins are `Jannik99F` and
-`Nankatsu09`.
+Pages is configured with **Settings → Pages → Build and deployment → Source:
+GitHub Actions**, done once on 2026-08-19. Should that ever be reset, note that
+re-enabling it needs **admin** on the repository and cannot be automated:
+creating a Pages site is closed to `GITHUB_TOKEN`, so `enablement: true` on
+`actions/configure-pages` fails with *Resource not accessible by integration*,
+and the REST API answers `404` rather than `403` to anyone without admin.
+
+The `/ai-drone/` path is deliberate. Serving from `https://ai-drone-fra-uas.github.io/`
+would mean renaming this repository to `AI-Drone-FRA-UAS.github.io`, or adding a
+second hosting repository and a token; neither was worth it.
 
 ## Layout
 
