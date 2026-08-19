@@ -8,8 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_drone import console, health, mavlink_devices
-from ai_drone.cli import lidar, picam, servo
+from ai_drone.cli import lidar, servo
+from ai_drone.mavlink import console, health
+from ai_drone.mavlink import devices as mavlink_devices
 from ai_drone.platform import is_raspberry_pi
 
 
@@ -36,52 +37,11 @@ def test_rangefinder_message_becomes_csv_row(monkeypatch) -> None:
     assert row["voltage_v"] == 4.9
 
 
-def test_picam_is_disabled_off_pi(tmp_path) -> None:
+def test_platform_detection_rejects_non_pi(tmp_path) -> None:
     model = tmp_path / "model"
     model.write_text("Desktop PC")
 
     assert is_raspberry_pi(model) is False
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        ["--port", "0"],
-        ["--port", "65536"],
-        ["--confidence", "nan"],
-        ["--threshold", "inf"],
-        ["--altitude", "-1"],
-        ["--altitude", "1"],
-        ["--fov", "180"],
-    ],
-)
-def test_picam_rejects_invalid_numbers_before_platform_check(
-    monkeypatch, arguments
-) -> None:
-    monkeypatch.setattr(
-        picam,
-        "is_raspberry_pi",
-        lambda: pytest.fail("numeric validation must happen before platform access"),
-    )
-
-    with pytest.raises(SystemExit) as error:
-        picam.main(arguments)
-
-    assert error.value.code == 2
-
-
-def test_picam_altitude_requires_exact_nadir_confirmation(monkeypatch) -> None:
-    monkeypatch.setattr(picam, "is_raspberry_pi", lambda: False)
-
-    with pytest.raises(SystemExit, match="Pi-only"):
-        picam.main(
-            [
-                "--altitude",
-                "1.0",
-                "--confirm-nadir-geometry",
-                "NADIR_CALIBRATED",
-            ]
-        )
 
 
 def test_servo_input_parsing() -> None:
@@ -223,7 +183,7 @@ def test_drone_console_prefers_stable_device(tmp_path, monkeypatch) -> None:
 def test_drone_health_remote_command_contains_requested_connection() -> None:
     command = health._remote_command("/dev/serial0", 115200, 12.0)
 
-    assert command.startswith(".venv/bin/python -m ai_drone.health --usb-only")
+    assert command.startswith(".venv/bin/python -m ai_drone.mavlink.health --usb-only")
     assert "--usb-device /dev/serial0" in command
     assert "--baud 115200 --timeout 12.0" in command
     assert "--local-label 'Pi UART'" in command

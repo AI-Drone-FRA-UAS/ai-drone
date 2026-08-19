@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_drone import config_sync
 from ai_drone.cli import config_export
-from ai_drone.config_snapshot import (
+from ai_drone.config import sync as config_sync
+from ai_drone.config.snapshot import (
     ParameterRecord,
     download_all_parameters,
     format_parameter_value,

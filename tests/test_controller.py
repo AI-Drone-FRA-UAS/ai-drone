@@ -102,7 +102,9 @@ def test_stale_and_future_downward_samples_are_rejected() -> None:
 def test_arming_checks_must_be_exactly_all(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
-    monkeypatch.setattr("ai_drone.controller.request_parameter", lambda *_args: 0.0)
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.request_parameter", lambda *_args: 0.0
+    )
 
     with pytest.raises(FlightSafetyError, match="ARMING_CHECK=0"):
         controller.verify_arming_checks()
@@ -116,7 +118,9 @@ def test_land_timeout_never_force_disarms(monkeypatch) -> None:
     monkeypatch.setattr(controller, "set_mode", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "update_telemetry", lambda: None)
     times = iter([0.0, 0.0, 2.0])
-    monkeypatch.setattr("ai_drone.controller.time.monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.time.monotonic", lambda: next(times)
+    )
 
     with pytest.raises(TimeoutError, match="LAND remains commanded"):
         controller.land(timeout=1.0)

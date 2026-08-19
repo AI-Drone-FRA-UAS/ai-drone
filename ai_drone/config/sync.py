@@ -13,16 +13,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ai_drone import deploy
-from ai_drone.config_snapshot import (
+from ai_drone.config.snapshot import (
     ParameterRecord,
     parameter_sha256,
     records_from_json,
     render_parameter_file,
 )
 from ai_drone.durability import atomic_write_text
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from ai_drone.link import deploy
 
 
 def _run(
@@ -239,7 +237,7 @@ def main(arguments: list[str] | None = None) -> int:
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be finite and greater than zero")
     if args.publish:
-        _ensure_clean_repository(REPO_ROOT)
+        _ensure_clean_repository(deploy.REPO_ROOT)
 
     plan = deploy.build_plan([], environ=os.environ)
     if not args.no_sync:
@@ -259,12 +257,12 @@ def main(arguments: list[str] | None = None) -> int:
     if completed.stderr:
         print(completed.stderr, end="")
     bundle = json.loads(completed.stdout)
-    paths = write_snapshot(bundle, REPO_ROOT)
+    paths = write_snapshot(bundle, deploy.REPO_ROOT)
     print(f"Saved {bundle['parameter_count']} parameters to {paths[0]}")
     print(f"Saved snapshot metadata to {paths[1]}")
 
     if args.publish:
-        publish_snapshot(paths, REPO_ROOT)
+        publish_snapshot(paths, deploy.REPO_ROOT)
     else:
         print("Review the files, or rerun from a clean tree with --publish.")
     return 0

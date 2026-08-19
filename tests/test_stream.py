@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from ai_drone import stream
+from ai_drone.vision import stream
 
 
 class _MemoryHandler(stream._MJPEGHandler):

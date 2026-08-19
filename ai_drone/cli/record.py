@@ -17,12 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from pymavlink import mavutil
 
-from ai_drone.apriltags import (
-    CameraCalibration,
-    Detector,
-    create_detector,
-    estimate_pose,
-)
 from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.durability import (
     DEFAULT_SYNC_INTERVAL_S,
@@ -30,8 +24,8 @@ from ai_drone.durability import (
     atomic_write_text,
     synced_stream,
 )
-from ai_drone.mavlink_devices import find_serial_device
-from ai_drone.mavlink_safety import (
+from ai_drone.mavlink.devices import find_serial_device
+from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_armed_vehicle_heartbeat,
     is_vehicle_message,
@@ -46,6 +40,12 @@ from ai_drone.recording import (
     telemetry_record,
     video_timestamp_summary,
     write_json_line,
+)
+from ai_drone.vision.apriltags import (
+    CameraCalibration,
+    Detector,
+    create_detector,
+    estimate_pose,
 )
 
 if TYPE_CHECKING:

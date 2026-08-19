@@ -6,7 +6,7 @@ import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.cli_parsing import parse_even_resolution
-from ai_drone.mavlink_safety import (
+from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_armed_vehicle_heartbeat,
     is_vehicle_message,

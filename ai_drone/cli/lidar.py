@@ -23,8 +23,8 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone.mavlink_devices import find_serial_device
-from ai_drone.mavlink_safety import heartbeat_is_armed, is_vehicle_message
+from ai_drone.mavlink.devices import find_serial_device
+from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
 from ai_drone.recording import request_message_intervals
 
 MESSAGE_TYPES = (

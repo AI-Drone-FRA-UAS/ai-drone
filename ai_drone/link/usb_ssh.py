@@ -11,7 +11,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from ai_drone.pi_targets import (
+from ai_drone.link.targets import (
     DEFAULT_DIRECT_SSH_CONFIG,
     ConnectionTarget,
     ping_command,

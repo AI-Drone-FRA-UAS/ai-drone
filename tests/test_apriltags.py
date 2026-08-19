@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 import ai_drone.cli.apriltag as apriltag_cli
-from ai_drone.apriltags import (
+from ai_drone.cli.apriltag import _parser, _serialize_payload, _validate_args
+from ai_drone.cli_parsing import parse_even_resolution
+from ai_drone.vision.apriltags import (
     CameraCalibration,
     NativeAprilTagDetector,
     TagDetection,
@@ -18,8 +20,6 @@ from ai_drone.apriltags import (
     create_detector,
     estimate_pose,
 )
-from ai_drone.cli.apriltag import _parser, _serialize_payload, _validate_args
-from ai_drone.cli_parsing import parse_even_resolution
 
 
 def _calibration() -> CameraCalibration:
@@ -383,7 +383,7 @@ def test_apriltag_cleanup_preserves_primary_error_and_attempts_all_resources(
     )
     monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "picamera2", SimpleNamespace(Picamera2=FakeCamera))
-    from ai_drone import stream
+    from ai_drone.vision import stream
 
     monkeypatch.setattr(stream, "start_server", fake_start_server)
 

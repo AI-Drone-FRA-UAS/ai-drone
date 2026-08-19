@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NoReturn
 
-from ai_drone.mavlink_devices import (
+from ai_drone.mavlink.devices import (
     STABLE_FLIGHT_CONTROLLER_DEVICE,
     find_serial_device,
 )

@@ -14,20 +14,20 @@ from pathlib import Path
 
 from pymavlink import mavutil
 
-from ai_drone.console import DEFAULT_BAUD
-from ai_drone.mavlink_devices import find_serial_device
-from ai_drone.mavlink_safety import (
-    heartbeat_is_armed,
-    is_vehicle_message,
-    require_fresh_disarmed_heartbeat,
-)
-from ai_drone.pi_targets import (
+from ai_drone.link.targets import (
     DEFAULT_DIRECT_SSH_CONFIG,
     DEFAULT_PI_HOSTNAME,
     DEFAULT_PI_USERNAME,
     resolve_connection_target,
     split_ssh_target,
     ssh_base_command,
+)
+from ai_drone.mavlink.console import DEFAULT_BAUD
+from ai_drone.mavlink.devices import find_serial_device
+from ai_drone.mavlink.safety import (
+    heartbeat_is_armed,
+    is_vehicle_message,
+    require_fresh_disarmed_heartbeat,
 )
 
 DEFAULT_PI_HOST = f"{DEFAULT_PI_USERNAME}@{DEFAULT_PI_HOSTNAME}"
@@ -124,7 +124,7 @@ def _remote_command(device: str, baud: int, timeout: float) -> str:
         [
             ".venv/bin/python",
             "-m",
-            "ai_drone.health",
+            "ai_drone.mavlink.health",
             "--usb-only",
             "--usb-device",
             device,

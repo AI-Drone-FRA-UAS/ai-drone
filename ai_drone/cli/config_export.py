@@ -13,15 +13,15 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone.config_snapshot import (
+from ai_drone.config.snapshot import (
     ParameterRecord,
     download_all_parameters,
     parameter_sha256,
     records_to_json,
 )
 from ai_drone.durability import atomic_write_text
-from ai_drone.mavlink_devices import resolve_mavlink_endpoint
-from ai_drone.mavlink_safety import (
+from ai_drone.mavlink.devices import resolve_mavlink_endpoint
+from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     require_fresh_disarmed_heartbeat,
 )

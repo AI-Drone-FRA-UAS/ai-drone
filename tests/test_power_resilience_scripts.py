@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_drone.deploy import RUNTIME_FILES
+from ai_drone.link.deploy import RUNTIME_FILES
 
 RESILIENCE_SCRIPT = Path("scripts/setup-pi-power-resilience.sh")
 UPGRADE_SCRIPT = Path("scripts/pi-safe-upgrade.sh")

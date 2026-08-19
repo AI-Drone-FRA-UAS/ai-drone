@@ -7,7 +7,7 @@ The connect flow never handles the Wi-Fi PSK: each OS command below joins a
 
     nmcli dev wifi connect AI-Drone-Zero password <PSK>
 
-Functions come in two flavours, matching ``pi_usb_ssh``: pure command builders
+Functions come in two flavours, matching ``link.usb_ssh``: pure command builders
 (``*_command``) that are trivial to unit test, and thin read-only runners
 (``ap_available`` / ``current_ssid`` / ``wifi_device``) that shell out.
 """

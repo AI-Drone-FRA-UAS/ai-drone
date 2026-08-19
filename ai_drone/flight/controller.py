@@ -11,9 +11,9 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone.mavlink_devices import resolve_mavlink_endpoint
-from ai_drone.mavlink_parameters import request_parameter
-from ai_drone.mavlink_safety import (
+from ai_drone.mavlink.devices import resolve_mavlink_endpoint
+from ai_drone.mavlink.parameters import request_parameter
+from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_vehicle_message,
     require_fresh_disarmed_heartbeat,

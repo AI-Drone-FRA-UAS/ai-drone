@@ -8,8 +8,8 @@ import math
 import time
 from collections.abc import Sequence
 
-from ai_drone.controller import DroneController, FlightSafetyError
-from ai_drone.follower import AutonomousFollower
+from ai_drone.flight.controller import DroneController, FlightSafetyError
+from ai_drone.flight.follower import AutonomousFollower
 
 FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
 FOLLOW_CONFIRMATION = "CAMERA_RIGID_AND_CALIBRATED"

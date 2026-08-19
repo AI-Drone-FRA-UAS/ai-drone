@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone.apriltags import TagDetection
 from ai_drone.cli.record import (
     AnalysisFrame,
     CaptureState,
@@ -31,7 +30,7 @@ from ai_drone.cli.record import (
 )
 from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.durability import IntervalSync
-from ai_drone.mavlink_safety import is_armed_vehicle_heartbeat
+from ai_drone.mavlink.safety import is_armed_vehicle_heartbeat
 from ai_drone.recording import (
     TELEMETRY_RATES_HZ,
     create_recording_paths,
@@ -41,6 +40,7 @@ from ai_drone.recording import (
     video_timestamp_summary,
     write_json_line,
 )
+from ai_drone.vision.apriltags import TagDetection
 
 
 def test_create_recording_paths_creates_expected_dataset(tmp_path) -> None:
