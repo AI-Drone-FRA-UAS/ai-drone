@@ -53,6 +53,7 @@ class DroneController:
 
         self.connection: Any | None = None
         self.current_altitude: float | None = None
+        self.forward_distance: float | None = None
         self.battery_voltage: float | None = None
         self.flight_mode: str | None = None
         self.is_armed: bool = False
@@ -192,8 +193,23 @@ class DroneController:
                     self.current_altitude = float(msg.distance)
                 self.last_telemetry_time = now
             elif msg_type == "DISTANCE_SENSOR":
-                if self.current_altitude is None:
-                    self.current_altitude = float(msg.current_distance) / 100.0
+                orientation = getattr(msg, "orientation", 25)
+                dist_m = float(msg.current_distance) / 100.0
+                if orientation == 0:  # MAV_SENSOR_ROTATION_NONE = Forward (0)
+                    self.forward_distance = dist_m
+                elif orientation == 25:  # MAV_SENSOR_ROTATION_PITCH_270 = Downward (25)
+                    if self.current_altitude is None:
+                        self.current_altitude = dist_m
+                else:
+                    if self.current_altitude is None:
+                        self.current_altitude = dist_m
+                self.last_telemetry_time = now
+            elif msg_type == "OBSTACLE_DISTANCE":
+                if hasattr(msg, "distances") and len(msg.distances) > 0:
+                    front_dist = msg.distances[0]
+                    max_dist = getattr(msg, "max_distance", 1500)
+                    if 0 < front_dist < max_dist:
+                        self.forward_distance = float(front_dist) / 100.0
                 self.last_telemetry_time = now
             elif msg_type == "SYS_STATUS":
                 self.battery_voltage = float(msg.voltage_battery) / 1000.0
