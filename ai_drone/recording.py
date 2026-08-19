@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
@@ -94,12 +95,21 @@ def create_recording_paths(
     else:
         candidate = output
 
-    root = candidate
-    suffix = 1
-    while root.exists() and any(root.iterdir()):
-        root = candidate.with_name(f"{candidate.name}-{suffix}")
-        suffix += 1
-    root.mkdir(parents=True, exist_ok=True)
+    suffix = 0
+    while True:
+        root = (
+            candidate
+            if suffix == 0
+            else candidate.with_name(f"{candidate.name}-{suffix}")
+        )
+        try:
+            # An exclusive mkdir is the reservation. An exists()/mkdir(exist_ok=True)
+            # pair lets concurrent recorders select and write into the same dataset.
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            suffix += 1
+        else:
+            break
     return RecordingPaths(
         root=root,
         video=root / "camera.h264",
@@ -115,14 +125,18 @@ def create_recording_paths(
 
 def json_safe(value: Any) -> Any:
     """Convert MAVLink and camera metadata values to JSON-compatible objects."""
-    if value is None or isinstance(value, str | int | float | bool):
+    if value is None or isinstance(value, str | int | bool):
         return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, bytes | bytearray | memoryview):
         return bytes(value).hex()
     if isinstance(value, Mapping):
         return {str(key): json_safe(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
         return [json_safe(item) for item in value]
+    if hasattr(value, "tolist"):
+        return json_safe(value.tolist())
     if hasattr(value, "item"):
         return json_safe(value.item())
     return str(value)
@@ -131,7 +145,7 @@ def json_safe(value: Any) -> Any:
 def telemetry_record(message: Any, *, elapsed_s: float) -> dict[str, Any]:
     """Build a timestamped JSON record from any received MAVLink message."""
     return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "elapsed_s": round(elapsed_s, 6),
         "message": message.get_type(),
         "source_system": message.get_srcSystem(),
@@ -140,19 +154,30 @@ def telemetry_record(message: Any, *, elapsed_s: float) -> dict[str, Any]:
     }
 
 
-def write_json_line(handle: Any, record: Mapping[str, Any]) -> None:
-    """Write one compact JSON Lines record."""
-    handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")))
+def write_json_line(handle: TextIO, record: Mapping[str, Any]) -> None:
+    """Write one compact, standards-compliant JSON Lines record."""
+    handle.write(
+        json.dumps(
+            json_safe(record),
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
     handle.write("\n")
 
 
-def request_telemetry_messages(connection: Any) -> list[str]:
-    """Request bounded sensor streams without issuing any actuator command."""
-    requested: list[str] = []
-    for name, rate_hz in TELEMETRY_RATES_HZ.items():
-        message_id = getattr(mavlink, f"MAVLINK_MSG_ID_{name}", None)
-        if message_id is None:
-            continue
+def request_message_intervals(
+    connection: Any,
+    rates_hz: Mapping[int, float],
+) -> None:
+    """Request bounded MAVLink streams without issuing actuator commands."""
+
+    for message_id, rate_hz in rates_hz.items():
+        if message_id < 0:
+            raise ValueError("MAVLink message IDs must be non-negative")
+        if not math.isfinite(rate_hz) or rate_hz <= 0:
+            raise ValueError("MAVLink message rates must be finite and positive")
         interval_us = round(1_000_000 / rate_hz)
         connection.mav.command_long_send(
             connection.target_system,
@@ -167,17 +192,20 @@ def request_telemetry_messages(connection: Any) -> list[str]:
             0,
             0,
         )
+
+
+def request_telemetry_messages(connection: Any) -> list[str]:
+    """Request bounded sensor streams without issuing any actuator command."""
+    requested: list[str] = []
+    rates_by_id: dict[int, float] = {}
+    for name, rate_hz in TELEMETRY_RATES_HZ.items():
+        message_id = getattr(mavlink, f"MAVLINK_MSG_ID_{name}", None)
+        if message_id is None:
+            continue
+        rates_by_id[int(message_id)] = rate_hz
         requested.append(name)
+    request_message_intervals(connection, rates_by_id)
     return requested
-
-
-def is_armed_vehicle_heartbeat(message: Any, *, vehicle_system: int) -> bool:
-    """Return whether a heartbeat from the connected vehicle reports armed."""
-    if message.get_type() != "HEARTBEAT":
-        return False
-    if message.get_srcSystem() != vehicle_system:
-        return False
-    return bool(message.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
 
 
 def video_timestamp_summary(path: Path) -> dict[str, int | float]:

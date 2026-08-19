@@ -16,6 +16,39 @@ from typing import Protocol
 
 import numpy as np
 
+_VALID_DISTORTION_COEFFICIENT_COUNTS = frozenset({4, 5, 8, 12, 14})
+
+
+def _json_number(value: object, *, field: str) -> float:
+    """Parse one finite JSON number without accepting booleans or strings."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field} must be a number")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field} must be finite")
+    return parsed
+
+
+def _json_positive_int(value: object, *, field: str) -> int:
+    """Parse a strictly positive JSON integer without lossy coercion."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _validate_detector_options(
+    family: str,
+    *,
+    threads: int,
+    decimate: float | None = None,
+) -> None:
+    if not isinstance(family, str) or not family.strip():
+        raise ValueError("family must be a non-empty string")
+    if isinstance(threads, bool) or not isinstance(threads, int) or threads <= 0:
+        raise ValueError("threads must be a positive integer")
+    if decimate is not None and (not math.isfinite(decimate) or decimate < 1.0):
+        raise ValueError("decimate must be finite and at least 1.0")
+
 
 @dataclass(frozen=True)
 class CameraCalibration:
@@ -31,14 +64,39 @@ class CameraCalibration:
         """Load and validate a calibration JSON file."""
         source = Path(path)
         data = json.loads(source.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("camera calibration must be a JSON object")
+        matrix_data = data.get("camera_matrix")
+        if not isinstance(matrix_data, list):
+            raise ValueError("camera_matrix must be a 3x3 array")
+        distortion_data = data.get("distortion_coefficients")
+        if not isinstance(distortion_data, list):
+            raise ValueError("distortion_coefficients must be an array")
+
+        matrix: list[tuple[float, ...]] = []
+        for row_index, row in enumerate(matrix_data):
+            if not isinstance(row, list):
+                raise ValueError("camera_matrix must be a 3x3 array")
+            matrix.append(
+                tuple(
+                    _json_number(
+                        value,
+                        field=f"camera_matrix[{row_index}][{column_index}]",
+                    )
+                    for column_index, value in enumerate(row)
+                )
+            )
         calibration = cls(
-            image_width=int(data["image_width"]),
-            image_height=int(data["image_height"]),
-            camera_matrix=tuple(
-                tuple(float(value) for value in row) for row in data["camera_matrix"]
+            image_width=_json_positive_int(
+                data.get("image_width"), field="image_width"
             ),
+            image_height=_json_positive_int(
+                data.get("image_height"), field="image_height"
+            ),
+            camera_matrix=tuple(matrix),
             distortion_coefficients=tuple(
-                float(value) for value in data["distortion_coefficients"]
+                _json_number(value, field=f"distortion_coefficients[{index}]")
+                for index, value in enumerate(distortion_data)
             ),
         )
         calibration.validate()
@@ -46,23 +104,69 @@ class CameraCalibration:
 
     def validate(self) -> None:
         """Reject malformed or physically implausible intrinsics."""
-        if self.image_width <= 0 or self.image_height <= 0:
-            raise ValueError("calibration image dimensions must be positive")
+        if (
+            isinstance(self.image_width, bool)
+            or not isinstance(self.image_width, int)
+            or self.image_width <= 0
+            or isinstance(self.image_height, bool)
+            or not isinstance(self.image_height, int)
+            or self.image_height <= 0
+        ):
+            raise ValueError("calibration image dimensions must be positive integers")
         if len(self.camera_matrix) != 3 or any(
             len(row) != 3 for row in self.camera_matrix
         ):
             raise ValueError("camera_matrix must be a 3x3 array")
+        if not all(math.isfinite(value) for row in self.camera_matrix for value in row):
+            raise ValueError("camera_matrix values must be finite")
         fx = self.camera_matrix[0][0]
         fy = self.camera_matrix[1][1]
         if fx <= 0 or fy <= 0:
-            raise ValueError("camera focal lengths must be positive")
-        if not self.distortion_coefficients:
-            raise ValueError("distortion_coefficients must not be empty")
+            raise ValueError("camera focal lengths must be finite and positive")
+        cx = self.camera_matrix[0][2]
+        cy = self.camera_matrix[1][2]
+        if not (0 <= cx < self.image_width and 0 <= cy < self.image_height):
+            raise ValueError(
+                "camera principal point must be inside the calibrated image"
+            )
+        expected_fixed_entries = (
+            (self.camera_matrix[0][1], 0.0),
+            (self.camera_matrix[1][0], 0.0),
+            (self.camera_matrix[2][0], 0.0),
+            (self.camera_matrix[2][1], 0.0),
+            (self.camera_matrix[2][2], 1.0),
+        )
+        if any(
+            not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-12)
+            for actual, expected in expected_fixed_entries
+        ):
+            raise ValueError(
+                "camera_matrix must use OpenCV pinhole form "
+                "[[fx,0,cx],[0,fy,cy],[0,0,1]]"
+            )
+        if (
+            len(self.distortion_coefficients)
+            not in _VALID_DISTORTION_COEFFICIENT_COUNTS
+        ):
+            valid_counts = sorted(_VALID_DISTORTION_COEFFICIENT_COUNTS)
+            raise ValueError(
+                f"distortion_coefficients must contain {valid_counts} values"
+            )
+        if not all(math.isfinite(value) for value in self.distortion_coefficients):
+            raise ValueError("distortion_coefficients values must be finite")
 
     def arrays_for(self, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
         """Return intrinsics scaled to a resolution with the same aspect ratio."""
-        if width <= 0 or height <= 0:
-            raise ValueError("target image dimensions must be positive")
+        self.validate()
+        if (
+            isinstance(width, bool)
+            or not isinstance(width, int)
+            or width <= 0
+            or isinstance(height, bool)
+            or not isinstance(height, int)
+            or height <= 0
+        ):
+            raise ValueError("target image dimensions must be positive integers")
         source_aspect = self.image_width / self.image_height
         target_aspect = width / height
         if not math.isclose(source_aspect, target_aspect, rel_tol=0.0, abs_tol=1e-3):
@@ -92,6 +196,43 @@ class TagDetection:
     hamming: int | None = None
     decision_margin: float | None = None
 
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.tag_id, bool)
+            or not isinstance(self.tag_id, int)
+            or self.tag_id < 0
+        ):
+            raise ValueError("tag_id must be a non-negative integer")
+        try:
+            corners = np.asarray(self.corners, dtype=np.float64)
+        except (TypeError, ValueError) as error:
+            raise ValueError("tag corners must contain numeric values") from error
+        if corners.shape != (4, 2):
+            raise ValueError("tag corners must be a 4x2 array")
+        if not np.isfinite(corners).all():
+            raise ValueError("tag corners must be finite")
+        corners = np.ascontiguousarray(corners)
+        corners.setflags(write=False)
+        object.__setattr__(self, "corners", corners)
+
+        try:
+            center = tuple(float(value) for value in self.center)
+        except (TypeError, ValueError) as error:
+            raise ValueError("tag center must contain numeric values") from error
+        if len(center) != 2 or not all(math.isfinite(value) for value in center):
+            raise ValueError("tag center must contain two finite values")
+        object.__setattr__(self, "center", center)
+        if self.hamming is not None and (
+            isinstance(self.hamming, bool)
+            or not isinstance(self.hamming, int)
+            or self.hamming < 0
+        ):
+            raise ValueError("tag hamming distance must be a non-negative integer")
+        if self.decision_margin is not None and (
+            not math.isfinite(self.decision_margin) or self.decision_margin < 0
+        ):
+            raise ValueError("tag decision margin must be finite and non-negative")
+
 
 @dataclass(frozen=True)
 class TagPose:
@@ -102,6 +243,31 @@ class TagPose:
     translation_m: tuple[float, float, float]
     distance_m: float
     reprojection_error_px: float
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.tag_id, bool)
+            or not isinstance(self.tag_id, int)
+            or self.tag_id < 0
+        ):
+            raise ValueError("tag_id must be a non-negative integer")
+        if len(self.rotation_vector) != 3 or not all(
+            math.isfinite(value) for value in self.rotation_vector
+        ):
+            raise ValueError("rotation_vector must contain three finite values")
+        if len(self.translation_m) != 3 or not all(
+            math.isfinite(value) for value in self.translation_m
+        ):
+            raise ValueError("translation_m must contain three finite values")
+        if self.translation_m[2] <= 0:
+            raise ValueError("tag translation must have positive camera depth")
+        if not math.isfinite(self.distance_m) or self.distance_m <= 0:
+            raise ValueError("tag distance must be finite and positive")
+        if (
+            not math.isfinite(self.reprojection_error_px)
+            or self.reprojection_error_px < 0
+        ):
+            raise ValueError("reprojection error must be finite and non-negative")
 
 
 class Detector(Protocol):
@@ -130,6 +296,7 @@ class NativeAprilTagDetector:
         threads: int = 4,
         decimate: float = 1.0,
     ) -> None:
+        _validate_detector_options(family, threads=threads, decimate=decimate)
         try:
             import apriltag  # ty: ignore[unresolved-import]
         except ImportError as error:
@@ -140,7 +307,7 @@ class NativeAprilTagDetector:
 
         self._detector = apriltag.apriltag(
             family,
-            threads=max(1, threads),
+            threads=threads,
             decimate=decimate,
             blur=0.0,
             refine_edges=True,
@@ -173,6 +340,7 @@ class OpenCvAprilTagDetector:
     backend_name = "opencv-aruco"
 
     def __init__(self, family: str = "tag36h11", *, threads: int = 4) -> None:
+        _validate_detector_options(family, threads=threads)
         if family != "tag36h11":
             raise ValueError("the OpenCV backend currently supports tag36h11 only")
         try:
@@ -180,7 +348,7 @@ class OpenCvAprilTagDetector:
         except ImportError as error:
             raise RuntimeError("OpenCV is unavailable") from error
 
-        cv2.setNumThreads(max(1, threads))
+        cv2.setNumThreads(threads)
         dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
         parameters = cv2.aruco.DetectorParameters()
         parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
@@ -214,6 +382,7 @@ def create_detector(
     """Create the requested backend, preferring native AprilTag in auto mode."""
     if backend not in {"auto", "native", "opencv"}:
         raise ValueError("backend must be auto, native, or opencv")
+    _validate_detector_options(family, threads=threads, decimate=decimate)
     if backend in {"auto", "native"}:
         try:
             return NativeAprilTagDetector(
@@ -236,8 +405,9 @@ def estimate_pose(
     image_height: int,
 ) -> TagPose:
     """Estimate metric pose using square-IPPE and report pixel reprojection error."""
-    if tag_size_m <= 0:
-        raise ValueError("tag_size_m must be positive")
+    if not math.isfinite(tag_size_m) or tag_size_m <= 0:
+        raise ValueError("tag_size_m must be finite and positive")
+    camera_matrix, distortion = calibration.arrays_for(image_width, image_height)
     try:
         import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
     except ImportError as error:
@@ -245,7 +415,6 @@ def estimate_pose(
             "OpenCV is required for calibrated pose estimation"
         ) from error
 
-    camera_matrix, distortion = calibration.arrays_for(image_width, image_height)
     half = tag_size_m / 2.0
     object_points = np.asarray(
         [
@@ -275,6 +444,8 @@ def estimate_pose(
     ):
         rotation = np.asarray(rotation, dtype=np.float64).reshape(3, 1)
         translation = np.asarray(translation, dtype=np.float64).reshape(3, 1)
+        if not np.isfinite(rotation).all() or not np.isfinite(translation).all():
+            continue
         if float(translation[2, 0]) <= 0:
             continue
         projected, _jacobian = cv2.projectPoints(
@@ -284,8 +455,12 @@ def estimate_pose(
             camera_matrix,
             distortion,
         )
+        if not np.isfinite(projected).all():
+            continue
         residual = projected.reshape(4, 2) - image_points
         error = float(np.sqrt(np.mean(np.sum(residual * residual, axis=1))))
+        if not math.isfinite(error):
+            continue
         candidates.append((error, rotation, translation))
 
     if not candidates:

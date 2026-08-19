@@ -1,316 +1,267 @@
-"""Ausführbares MAVLink-Steuerungstool für den Raspberry Pi und lokale Bench-Tests.
-
-Ermöglicht das passive Überwachen der Sensorik (`status`), einen autonomen Schwebeflug (`hover`)
-sowie das Testen der Body-Frame-Geschwindigkeitssteuerung (`velocity-test`) für autonomes Fliegen.
-"""
+"""Single command surface for passive status and guarded flight tests."""
 
 from __future__ import annotations
 
 import argparse
 import logging
-import sys
+import math
 import time
+from collections.abc import Sequence
 
-from ai_drone.controller import DroneController
+from ai_drone.controller import DroneController, FlightSafetyError
 from ai_drone.follower import AutonomousFollower
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("control_drone")
+FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
+FOLLOW_CONFIRMATION = "CAMERA_RIGID_AND_CALIBRATED"
+logger = logging.getLogger(__name__)
+
+
+class _SimulationController:
+    """No-I/O target for the pure person-follow simulation."""
+
+    battery_voltage: float | None = 16.0
+    current_altitude: float | None = 0.0
+    max_altitude: float = 0.8
+    is_flying: bool = False
+    is_armed: bool = False
+
+    def update_telemetry(self) -> None:
+        return
+
+    def emergency_stop(self) -> None:
+        return
+
+    def send_velocity_body(
+        self, vx: float, vy: float, vz: float, yaw_rate_deg: float = 0.0
+    ) -> None:
+        return
+
+
+def _bounded(value: float, name: str, minimum: float, maximum: float) -> float:
+    number = float(value)
+    if not math.isfinite(number) or not minimum <= number <= maximum:
+        raise ValueError(
+            f"{name} must be finite and between {minimum:g} and {maximum:g}"
+        )
+    return number
+
+
+def _validate_common(args: argparse.Namespace) -> None:
+    if isinstance(args.baud, bool) or not 1 <= args.baud <= 4_000_000:
+        raise ValueError("--baud must be between 1 and 4000000")
+    _bounded(args.max_alt, "--max-alt", 0.1, 10.0)
+    if hasattr(args, "takeoff_alt"):
+        _bounded(args.takeoff_alt, "--takeoff-alt", 0.15, args.max_alt)
+    _bounded(args.duration, "--duration", 0.1, 3_600.0)
+
+
+def _require_flight_confirmation(args: argparse.Namespace) -> None:
+    if args.confirm_flight != FLIGHT_CONFIRMATION:
+        raise ValueError(
+            f"--confirm-flight must be exactly {FLIGHT_CONFIRMATION}; this confirms "
+            "the aircraft is complete, props are secure, the area is clear, and a pilot can take over"
+        )
+
+
+def _controller(args: argparse.Namespace) -> DroneController:
+    return DroneController(
+        device=args.device,
+        baud=args.baud,
+        max_altitude=args.max_alt,
+    )
+
+
+def _monitor(drone: DroneController, duration: float) -> None:
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        drone.update_telemetry()
+        if not drone.altitude_is_fresh() or not drone.heartbeat_is_fresh():
+            raise FlightSafetyError("flight telemetry became stale")
+        time.sleep(0.05)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Passives Sensor-Monitoring ohne Arming (Sicherheits-Check am Boden)."""
-    logger.info("Starte passives Monitoring für %.1f Sekunden...", args.duration)
-    try:
-        with DroneController(
-            device=args.device,
-            baud=args.baud,
-            max_altitude=args.max_alt,
-        ) as drone:
-            started = time.monotonic()
-            last_print = 0.0
-            while time.monotonic() - started < args.duration:
-                drone.update_telemetry()
-                now = time.monotonic()
-                if now - last_print >= 1.0:
-                    alt_str = (
-                        f"{drone.current_altitude:.2f} m"
-                        if drone.current_altitude is not None
-                        else "Keine Daten"
-                    )
-                    bat_str = (
-                        f"{drone.battery_voltage:.2f} V"
-                        if drone.battery_voltage is not None
-                        else "Keine Daten"
-                    )
-                    logger.info(
-                        "Status: Modus=%s | Armed=%s | Höhe=%s | Batterie=%s",
-                        drone.flight_mode or "Unbekannt",
-                        "JA" if drone.is_armed else "NEIN",
-                        alt_str,
-                        bat_str,
-                    )
-                    last_print = now
-                time.sleep(0.05)
-    except KeyboardInterrupt:
-        logger.info("Monitoring durch Benutzer beendet.")
-    except Exception as exc:
-        logger.error("Fehler im Status-Monitoring: %s", exc)
-        return 1
+    with _controller(args) as drone:
+        deadline = time.monotonic() + args.duration
+        next_report = 0.0
+        while time.monotonic() < deadline:
+            drone.update_telemetry()
+            now = time.monotonic()
+            if now >= next_report:
+                altitude = (
+                    f"{drone.current_altitude:.2f} m downward"
+                    if drone.current_altitude is not None
+                    else "unavailable"
+                )
+                battery = (
+                    f"{drone.battery_voltage:.2f} V"
+                    if drone.battery_voltage is not None
+                    else "unavailable"
+                )
+                print(
+                    f"mode={drone.flight_mode or 'unknown'} armed={drone.is_armed} "
+                    f"altitude={altitude} battery={battery}"
+                )
+                next_report = now + 1.0
+            time.sleep(0.05)
     return 0
 
 
 def cmd_hover(args: argparse.Namespace) -> int:
-    """Autonomer Schwebeflug-Test mit Sicherheitsüberwachung."""
-    logger.info(
-        "Starte Schwebeflug-Test (Takeoff: %.2f m, Dauer: %.1f s, Max-Alt: %.2f m)...",
-        args.takeoff_alt,
-        args.duration,
-        args.max_alt,
-    )
-    try:
-        with DroneController(
-            device=args.device,
-            baud=args.baud,
-            max_altitude=args.max_alt,
-        ) as drone:
-            drone.takeoff(target_alt=args.takeoff_alt)
-
-            logger.info("Halte Position für %.1f Sekunden...", args.duration)
-            started = time.monotonic()
-            last_print = 0.0
-            while time.monotonic() - started < args.duration:
-                drone.update_telemetry()
-                now = time.monotonic()
-                if now - last_print >= 1.0:
-                    alt_str = (
-                        f"{drone.current_altitude:.2f} m"
-                        if drone.current_altitude is not None
-                        else "?"
-                    )
-                    logger.info(
-                        "Schwebe... Höhe: %s | Batterie: %.2f V",
-                        alt_str,
-                        drone.battery_voltage or 0.0,
-                    )
-                    last_print = now
-                time.sleep(0.05)
-
-            drone.land()
-    except KeyboardInterrupt:
-        logger.warning("Abbruch durch Benutzer! Context-Manager löst Notlandung aus...")
-        return 130
-    except Exception as exc:
-        logger.error("Flugfehler aufgetreten: %s", exc)
-        return 1
+    _require_flight_confirmation(args)
+    with _controller(args) as drone:
+        drone.takeoff(args.takeoff_alt)
+        _monitor(drone, args.duration)
+        drone.land()
     return 0
 
 
 def cmd_velocity_test(args: argparse.Namespace) -> int:
-    """Testet die Body-Frame-Geschwindigkeitssteuerung für autonome Kamera-Missionen."""
-    logger.info(
-        "Starte Velocity-Test (Takeoff: %.2f m, Dauer: %.1f s, vx=%.2f, yaw_rate=%.1f°/s)...",
-        args.takeoff_alt,
-        args.duration,
-        args.vx,
-        args.yaw_rate,
-    )
-    try:
-        with DroneController(
-            device=args.device,
-            baud=args.baud,
-            max_altitude=args.max_alt,
-        ) as drone:
-            drone.takeoff(target_alt=args.takeoff_alt)
-
-            logger.info("Sende Body-Frame-Geschwindigkeitsbefehle...")
-            started = time.monotonic()
-            last_cmd = 0.0
-            last_print = 0.0
-            while time.monotonic() - started < args.duration:
+    _require_flight_confirmation(args)
+    _bounded(args.vx, "--vx", -1.0, 1.0)
+    _bounded(args.vy, "--vy", -1.0, 1.0)
+    _bounded(args.vz, "--vz", -0.5, 0.5)
+    _bounded(args.yaw_rate, "--yaw-rate", -45.0, 45.0)
+    with _controller(args) as drone:
+        drone.takeoff(args.takeoff_alt)
+        deadline = time.monotonic() + args.duration
+        try:
+            while time.monotonic() < deadline:
                 drone.update_telemetry()
-                now = time.monotonic()
-
-                if now - last_cmd >= 0.2:
-                    drone.send_velocity_body(
-                        vx=args.vx,
-                        vy=args.vy,
-                        vz=args.vz,
-                        yaw_rate_deg=args.yaw_rate,
-                    )
-                    last_cmd = now
-
-                if now - last_print >= 1.0:
-                    alt_str = (
-                        f"{drone.current_altitude:.2f} m"
-                        if drone.current_altitude is not None
-                        else "?"
-                    )
-                    logger.info("Velocity Bewegung aktiv... Höhe: %s", alt_str)
-                    last_print = now
-
-                time.sleep(0.05)
-
-            logger.info("Stoppe Bewegung (0 m/s)...")
-            drone.send_velocity_body(0.0, 0.0, 0.0, 0.0)
-            time.sleep(1.0)
-
-            drone.land()
-    except KeyboardInterrupt:
-        logger.warning("Abbruch durch Benutzer! Notlandung wird eingeleitet...")
-        return 130
-    except Exception as exc:
-        logger.error("Fehler im Velocity-Test: %s", exc)
-        return 1
+                if not drone.altitude_is_fresh() or not drone.heartbeat_is_fresh():
+                    raise FlightSafetyError("flight telemetry became stale")
+                drone.send_velocity_body(args.vx, args.vy, args.vz, args.yaw_rate)
+                time.sleep(0.2)
+        finally:
+            try:
+                drone.send_velocity_body(0.0, 0.0, 0.0, 0.0)
+            except (OSError, RuntimeError):
+                logger.warning("could not send final zero-velocity setpoint")
+        drone.land()
     return 0
 
 
 def cmd_follow(args: argparse.Namespace) -> int:
-    """Autonomes Verfolgen einer Person mit IMX500 Kamera oder als Simulation."""
-    logger.info(
-        "Starte Follow-Person-Modus (Target-Dist: %.1fm, Max-Speed: %.2fm/s, Sim: %s)...",
-        args.target_dist,
-        args.max_speed,
-        args.sim_target,
+    follower = AutonomousFollower(
+        _SimulationController(),
+        target_dist_m=args.target_dist,
+        max_vx=args.max_speed,
+        max_yaw_rate_deg=args.max_yaw,
     )
-    try:
-        with DroneController(
-            device=args.device,
-            baud=args.baud,
-            max_altitude=args.max_alt,
-        ) as drone:
-            follower = AutonomousFollower(
-                drone=drone,
-                target_dist_m=args.target_dist,
-                max_vx=args.max_speed,
-            )
-            if args.sim_target:
-                follower.run_simulated_tracking(duration_s=args.duration)
-            else:
-                drone.arm()
-                drone.takeoff(target_alt=args.takeoff_alt)
-                time.sleep(2.0)
-                follower.run_live_tracking(
-                    max_duration_s=args.duration if args.duration > 0 else None
-                )
-                drone.land()
-    except KeyboardInterrupt:
-        logger.warning("Follow-Modus durch Benutzer beendet!")
-        return 130
-    except Exception as exc:
-        logger.error("Fehler im Follow-Modus: %s", exc)
-        return 1
+    if args.simulate:
+        follower.run_simulated_tracking(args.duration)
+        return 0
+
+    _require_flight_confirmation(args)
+    if args.confirm_live_follow != FOLLOW_CONFIRMATION:
+        raise ValueError(
+            f"--confirm-live-follow must be exactly {FOLLOW_CONFIRMATION}; the current "
+            "loosely cable-held camera does not satisfy this gate"
+        )
+    if args.focal_length_px is None:
+        raise ValueError("live follow requires measured --focal-length-px")
+    _bounded(args.confidence, "--confidence", 0.0, 1.0)
+    _bounded(args.focal_length_px, "--focal-length-px", 1.0, 100_000.0)
+    _bounded(args.person_height, "--person-height", 0.5, 2.5)
+    with _controller(args) as drone:
+        live_follower = AutonomousFollower(
+            drone,
+            target_dist_m=args.target_dist,
+            max_vx=args.max_speed,
+            max_yaw_rate_deg=args.max_yaw,
+        )
+        drone.takeoff(args.takeoff_alt)
+        live_follower.run_live_tracking(
+            confidence=args.confidence,
+            max_duration_s=args.duration,
+            focal_length_px=args.focal_length_px,
+            person_height_m=args.person_height,
+        )
+        drone.land()
     return 0
 
 
-def main() -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MAVLink-Steuerungstool für die autonome AI-Drone",
+        description="Canonical ArduPilot status and guarded flight-test command",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default=None,
-        help="Pfad zum Serial-/USB-Gerät (z. B. /dev/serial0 oder /dev/ttyACM0). Falls nicht angegeben, wird auto-detektiert.",
-    )
-    parser.add_argument(
-        "--baud",
-        type=int,
-        default=115200,
-        help="Baudrate der seriellen Schnittstelle (Standard: 115200 für Pi UART4).",
-    )
-    parser.add_argument(
-        "--takeoff-alt",
-        type=float,
-        default=0.4,
-        help="Zielhöhe für Takeoff in Metern.",
-    )
-    parser.add_argument(
-        "--max-alt",
-        type=float,
-        default=0.8,
-        help="Sicherheits-Höhenlimit in Metern (löst bei Überschreitung Notlandung aus).",
-    )
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    subparsers = parser.add_subparsers(
-        dest="subcommand", required=True, help="Aktions-Modus"
-    )
+    status = commands.add_parser("status", help="passively monitor vehicle state")
+    _add_common_options(status, include_takeoff=False)
+    status.add_argument("--duration", type=float, default=5.0)
+    status.set_defaults(handler=cmd_status)
 
-    p_status = subparsers.add_parser(
-        "status", help="Passives Sensor-Monitoring ohne Motorschärfung"
+    hover = commands.add_parser(
+        "hover",
+        aliases=["takeoff"],
+        help="take off, hold GUIDED position, then land",
     )
-    p_status.add_argument(
-        "--duration", type=float, default=5.0, help="Monitoring-Dauer in Sekunden."
-    )
-    p_status.set_defaults(func=cmd_status)
+    _add_common_options(hover, include_takeoff=True)
+    hover.add_argument("--duration", type=float, default=5.0)
+    hover.add_argument("--confirm-flight")
+    hover.set_defaults(handler=cmd_hover)
 
-    p_hover = subparsers.add_parser(
-        "hover", help="Autonomer Schwebeflug-Test (Takeoff -> Halten -> Landen)"
+    velocity = commands.add_parser(
+        "velocity-test", help="take off, send bounded body velocity, then land"
     )
-    p_hover.add_argument(
-        "--duration", type=float, default=5.0, help="Schwebeflug-Dauer in Sekunden."
-    )
-    p_hover.set_defaults(func=cmd_hover)
+    _add_common_options(velocity, include_takeoff=True)
+    velocity.add_argument("--duration", type=float, default=4.0)
+    velocity.add_argument("--vx", type=float, default=0.2)
+    velocity.add_argument("--vy", type=float, default=0.0)
+    velocity.add_argument("--vz", type=float, default=0.0)
+    velocity.add_argument("--yaw-rate", type=float, default=10.0)
+    velocity.add_argument("--confirm-flight")
+    velocity.set_defaults(handler=cmd_velocity_test)
 
-    p_vel = subparsers.add_parser(
-        "velocity-test", help="Testet Body-Frame-Geschwindigkeitssteuerung im Flug"
+    follow = commands.add_parser(
+        "follow", help="simulate or run experimental live person following"
     )
-    p_vel.add_argument(
-        "--duration",
-        type=float,
-        default=4.0,
-        help="Dauer des Bewegungs-Tests in Sekunden.",
+    _add_common_options(follow, include_takeoff=True)
+    follow.add_argument("--duration", type=float, default=15.0)
+    follow.add_argument("--target-dist", type=float, default=2.0)
+    follow.add_argument("--max-speed", type=float, default=0.3)
+    follow.add_argument("--max-yaw", type=float, default=20.0)
+    follow.add_argument("--confidence", type=float, default=0.4)
+    follow.add_argument("--focal-length-px", type=float)
+    follow.add_argument("--person-height", type=float, default=1.7)
+    follow.add_argument(
+        "--simulate", "--sim-target", dest="simulate", action="store_true"
     )
-    p_vel.add_argument(
-        "--vx", type=float, default=0.2, help="Vorwärts-Geschwindigkeit in m/s."
-    )
-    p_vel.add_argument(
-        "--vy", type=float, default=0.0, help="Seitwärts-Geschwindigkeit in m/s."
-    )
-    p_vel.add_argument(
-        "--vz", type=float, default=0.0, help="Vertikal-Geschwindigkeit in m/s."
-    )
-    p_vel.add_argument(
-        "--yaw-rate",
-        type=float,
-        default=10.0,
-        help="Gier-Rate (Drehung) in Grad/Sekunde.",
-    )
-    p_vel.set_defaults(func=cmd_velocity_test)
+    follow.add_argument("--confirm-flight")
+    follow.add_argument("--confirm-live-follow")
+    follow.set_defaults(handler=cmd_follow)
+    return parser
 
-    p_follow = subparsers.add_parser(
-        "follow", help="Autonomes Verfolgen von Personen mit AI-Kamera (oder simuliert)"
-    )
-    p_follow.add_argument(
-        "--duration",
-        type=float,
-        default=15.0,
-        help="Maximale Tracking-Dauer in Sekunden.",
-    )
-    p_follow.add_argument(
-        "--target-dist",
-        type=float,
-        default=2.0,
-        help="Gewünschter Halteabstand zur Person in Metern.",
-    )
-    p_follow.add_argument(
-        "--max-speed", type=float, default=0.3, help="Maximale Geschwindigkeit in m/s."
-    )
-    p_follow.add_argument(
-        "--sim-target",
-        action="store_true",
-        help="Simulierter Test am Schreibtisch ohne Kamera.",
-    )
-    p_follow.set_defaults(func=cmd_follow)
 
-    args = parser.parse_args()
-    return args.func(args)
+def _add_common_options(
+    parser: argparse.ArgumentParser, *, include_takeoff: bool
+) -> None:
+    """Add one shared set of connection/flight-limit options to a subcommand."""
+
+    parser.add_argument("--device", help="MAVLink serial path or network endpoint")
+    parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--max-alt", type=float, default=0.8)
+    if include_takeoff:
+        parser.add_argument("--takeoff-alt", type=float, default=0.4)
+
+
+def main(arguments: Sequence[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    try:
+        _validate_common(args)
+        return int(args.handler(args))
+    except KeyboardInterrupt:
+        logger.warning(
+            "operator interrupted command; controller cleanup requested LAND"
+        )
+        return 130
+    except (OSError, RuntimeError, ValueError) as error:
+        logger.error("%s", error)
+        return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

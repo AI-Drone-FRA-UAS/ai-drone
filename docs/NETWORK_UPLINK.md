@@ -52,7 +52,7 @@ password. A phone-hotspot profile can be used instead:
 ```bash
 sudo scripts/setup-pi-dual-network.sh \
   --uplink-interface wlan1 \
-  --source-profile "Espresso Macchiato" \
+  --source-profile "<PHONE-HOTSPOT>" \
   --uplink-profile phone-uplink \
   --apply
 ```

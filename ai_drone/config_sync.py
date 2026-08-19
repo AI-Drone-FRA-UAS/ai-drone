@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shlex
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ai_drone import deploy
 from ai_drone.config_snapshot import (
+    ParameterRecord,
     parameter_sha256,
     records_from_json,
     render_parameter_file,
 )
+from ai_drone.durability import atomic_write_text
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,7 +76,59 @@ def remote_export_command(
     return deploy.remote_command(target, command)
 
 
-def snapshot_paths(bundle: dict[str, Any], repo_root: Path) -> tuple[Path, Path]:
+def _validated_bundle(
+    bundle: Mapping[str, Any],
+) -> tuple[list[ParameterRecord], datetime, Mapping[str, Any]]:
+    """Validate the untrusted JSON object returned over SSH."""
+
+    if bundle.get("schema_version") != 1:
+        raise ValueError("Unsupported or missing snapshot schema_version")
+
+    captured_value = bundle.get("captured_at")
+    if not isinstance(captured_value, str):
+        raise ValueError("Snapshot captured_at must be an ISO-8601 string")
+    try:
+        captured = datetime.fromisoformat(captured_value)
+    except ValueError as error:
+        raise ValueError("Snapshot captured_at is not valid ISO-8601") from error
+    if captured.tzinfo is None:
+        raise ValueError("Snapshot captured_at must include a timezone")
+
+    source = bundle.get("source")
+    if not isinstance(source, Mapping):
+        raise ValueError("Snapshot source must be an object")
+    endpoint = source.get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        raise ValueError("Snapshot source endpoint must be a non-empty string")
+    if len(endpoint) > 512 or any(
+        ord(character) < 32 or ord(character) == 127 for character in endpoint
+    ):
+        raise ValueError(
+            "Snapshot source endpoint contains control characters or is too long"
+        )
+    baud = source.get("baud")
+    if not isinstance(baud, int) or isinstance(baud, bool) or baud <= 0:
+        raise ValueError("Snapshot source baud must be a positive integer")
+
+    vehicle = bundle.get("vehicle")
+    if not isinstance(vehicle, Mapping) or vehicle.get("armed") is not False:
+        raise ValueError("Snapshot must explicitly report a disarmed vehicle")
+
+    items = bundle.get("parameters")
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise ValueError("Snapshot parameters must be a list of objects")
+    records = records_from_json(items)
+
+    count = bundle.get("parameter_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count != len(records):
+        raise ValueError("Snapshot parameter_count does not match its payload")
+    calculated_hash = parameter_sha256(records)
+    if bundle.get("parameter_sha256") != calculated_hash:
+        raise ValueError("Remote parameter payload failed its SHA-256 validation")
+    return records, captured, source
+
+
+def snapshot_paths(bundle: Mapping[str, Any], repo_root: Path) -> tuple[Path, Path]:
     """Choose stable tracked paths for a remote snapshot bundle."""
 
     captured = datetime.fromisoformat(str(bundle["captured_at"]))
@@ -86,31 +142,35 @@ def snapshot_paths(bundle: dict[str, Any], repo_root: Path) -> tuple[Path, Path]
 def write_snapshot(bundle: dict[str, Any], repo_root: Path) -> tuple[Path, Path]:
     """Validate the transfer and write the parameter file plus metadata."""
 
-    records = records_from_json(list(bundle["parameters"]))
+    records, captured, source = _validated_bundle(bundle)
     calculated_hash = parameter_sha256(records)
-    if calculated_hash != bundle.get("parameter_sha256"):
-        raise ValueError("Remote parameter payload failed its SHA-256 validation")
 
     parameter_path, metadata_path = snapshot_paths(bundle, repo_root)
-    parameter_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
     header = (
-        f"# Captured from {bundle['source']['endpoint']} at "
-        f"{bundle['source']['baud']} baud\n"
-        f"# UTC: {bundle['captured_at']}\n"
+        f"# Captured from {source['endpoint']} at {source['baud']} baud\n"
+        f"# UTC: {captured.isoformat()}\n"
         "# Vehicle was DISARMED\n"
-        f"# Received {len(records)} of {bundle['parameter_count']} advertised "
+        f"# Received {len(records)} of {len(records)} advertised "
         "parameters\n"
         f"# Parameter SHA-256: {calculated_hash}\n"
     )
-    parameter_path.write_text(header + render_parameter_file(records))
+    parameter_content = header + render_parameter_file(records)
 
     metadata = dict(bundle)
     metadata.pop("parameters", None)
     metadata["parameter_file"] = str(parameter_path.relative_to(repo_root))
-    metadata_path.write_text(
-        json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    metadata_content = (
+        json.dumps(
+            metadata,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
     )
+
+    atomic_write_text(parameter_path, parameter_content)
+    atomic_write_text(metadata_path, metadata_content)
     return parameter_path, metadata_path
 
 
@@ -174,8 +234,10 @@ def main(arguments: list[str] | None = None) -> int:
     )
     args = parser.parse_args(arguments)
 
-    if args.timeout <= 0:
-        parser.error("--timeout must be greater than zero")
+    if args.baud <= 0:
+        parser.error("--baud must be greater than zero")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout must be finite and greater than zero")
     if args.publish:
         _ensure_clean_repository(REPO_ROOT)
 

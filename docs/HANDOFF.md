@@ -1,6 +1,6 @@
 # AI drone project handoff
 
-Last verified: **2026-08-18, Europe/Berlin**
+Last verified: **2026-08-19, Europe/Berlin**
 
 This is the starting document for a later development session. Read it before
 connecting to the live vehicle or changing flight-controller parameters.
@@ -24,16 +24,31 @@ been validated. No autonomous or armed flight has been validated.
 
 - Repository: `AI-Drone-FRA-UAS/ai-drone`
 - Working branch: `experimental`
-- Baseline implementation commit immediately before this handoff: `9c8774f`.
-  Use `git log -1` for the later documentation-only handoff commit.
+- Functional-parity baseline for the cleanup:
+  `2c3fab2e637bac87ec131e83e82b12bb8131b1d5`. Capabilities present there or in
+  later work must survive even when duplicate wrappers or entry points are
+  consolidated.
+- The later safe-hardware implementation immediately before the original
+  handoff was `9c8774f`; use `git log -1` for the current tree.
 - Pull request: <https://github.com/AI-Drone-FRA-UAS/ai-drone/pull/7>
 - PR target: `main`
 - PR state at handoff: open, draft, and mergeable
 - `experimental` already contains all commits from `main`, including the
-  eduroam documentation and Raspberry Pi requirements.
+  eduroam documentation and Raspberry Pi dependency work. The cleanup makes
+  `pyproject.toml` plus `uv.lock` the single dependency source and removes the
+  redundant generated `requirements-raspi.txt` export.
 - Do not merge PR #7 into `main` unless the user explicitly approves the
   release. The PR was deliberately left as a draft because it includes
   hardware-control tooling.
+
+The current working tree also contains a repository cleanup performed on
+2026-08-18. It consolidates automatic flight behind one guarded
+`drone-control` entry point, removes duplicate flight and root wrappers,
+centralizes shared parsing/platform/MAVLink helpers, and hardens deployment and
+actuator guards. The takeoff/hover, velocity, and person-follow sequences retain
+their arming, landing, and cleanup capabilities even though they have not yet
+passed live flight validation. Check `git status` and review this complete
+change set before committing or updating the draft PR.
 
 GitHub CLI authentication is available outside the restricted sandbox as user
 `Jannik99F`. If sandboxed `gh` or SSH reports a misleading authentication or
@@ -41,7 +56,13 @@ network failure, follow the elevated retry instructions in `AGENTS.md`.
 
 ## Live access
 
-The Pi's own access point is normally reachable at:
+Prefer the Pi's Tailscale MagicDNS name whenever Tailscale is online:
+
+```bash
+ssh -F /dev/null seb@seb-is-pm
+```
+
+If the Pi has fallen back to its own `AI-Drone-Zero` access point, use:
 
 ```bash
 ssh -F /dev/null seb@192.168.4.1
@@ -51,11 +72,21 @@ Useful environment for host-side commands:
 
 ```bash
 export SSH_CONFIG=/dev/null
-export PI_HOST=seb@192.168.4.1
+export PI_HOST=seb@seb-is-pm
 ```
 
-Do not place passwords, eduroam credentials, hotspot credentials, or GitHub
-tokens in commands, logs, state files, or commits.
+Do not place passwords, eduroam credentials, hotspot credentials, radio binding
+phrases, or GitHub tokens in commands, logs, state files, or commits.
+
+Literal hotspot, SSH, and radio-binding credentials were removed from the
+maintained files during the cleanup. Because old values remain recoverable from
+Git history and may still be active, rotate the hotspot and SSH credentials and
+rebind the radio system with a new private phrase before treating those paths
+as secure. The hotspot setup script accepts a hidden prompt or a root-owned,
+root-only password file and never accepts the passphrase as its own command-line
+argument. The NetworkManager path still passes it to the child `nmcli` process
+as an argument while applying the profile, so use the script only on a trusted
+Pi.
 
 ## Non-negotiable hardware safety state
 
@@ -67,8 +98,14 @@ tokens in commands, logs, state files, or commits.
   300 m radius are not useful indoor containment, and no polygon is uploaded.
 - Do not blindly enable the fence indoors; configure a meaningful boundary,
   localization source, and breach action first.
-- The camera is loose on its ribbon cable. Do not fly until it has a rigid,
-  strain-relieved mount.
+- The camera is held only by a small cable and currently faces forward. It is
+  not a rigid, strain-relieved nadir mount. Do not fly or trust floor-tag
+  geometry in this state.
+- The payload servo is not connected to the Pi/vehicle output. Do not run the
+  servo utility until its power, signal path, mechanical limits, and fail-safe
+  position have been bench-verified with the propellers removed.
+- The forward MT-15 rangefinder is not connected or tested, and usable physical
+  mounting/wiring space on the aircraft has not been confirmed.
 - No propeller-removal confirmation was received during the work recorded here.
 - No motor-test, arm, throttle, flight-mode, mission, parameter-write, or servo
   command was sent during the live sessions.
@@ -76,6 +113,29 @@ tokens in commands, logs, state files, or commits.
 The guarded motor utility intentionally refuses to run while
 `ARMING_CHECK=0`. Its presence in the repository does not mean the vehicle is
 ready for a motor test.
+
+## Current test envelope
+
+Keep the vehicle stationary and disarmed for every currently allowed hardware
+check. Power only what a specific read-only check needs.
+
+| Activity | Current status | Boundary |
+| --- | --- | --- |
+| Offline unit, lint, type, and SITL work | Allowed | No real hardware side effects |
+| MAVLink health and configuration export | Allowed | Read-only; verify the heartbeat remains disarmed |
+| Downward MTF-01P range/flow recording | Allowed | Existing sensor only; transport data does not validate altitude hold |
+| Camera stream/person detection | Limited | Stationary only; physically support the loose camera and ribbon |
+| AprilTag pixel detection/throughput | Limited | A visible tag may be tested; no floor geometry or metric pose claims with the current forward, uncalibrated mount |
+| Integrated disarmed recording | Limited | Support the camera; stop on any armed heartbeat |
+| Servo movement | Blocked | Servo is disconnected; later requires props off, secured frame, safe power/common ground, clear linkage, limits, and explicit confirmation |
+| Forward MT-15 telemetry | Blocked | Sensor is disconnected, untested, and has no confirmed installation space or wiring |
+| Motor test | Blocked | `ARMING_CHECK=0`; props-off and all guarded prerequisites are also required |
+| Arming, takeoff, hover, velocity control, person follow, navigation, tag approach, payload drop | Implemented, currently blocked on hardware | The guarded control paths remain in the toolbox, but no real-flight path is validated and camera/localization/obstacle prerequisites are absent |
+
+Restoring `ARMING_CHECK=1` is a configuration change, not an actuator test. It
+can be done in a separately authorized, propellers-off configuration session to
+observe and resolve every `PreArm:` failure. It is necessary but not sufficient
+for a motor test or flight.
 
 ## Verified hardware topology
 
@@ -96,13 +156,17 @@ ready for a motor test.
   115200 baud, `SERIAL5_OPTIONS=1024`.
 - Flight-controller IMU, barometer, compass, GPS, battery, RC input, and EKF
   state are forwarded to the Pi through MAVLink.
-- Planned payload servo is associated with a PWM/GPIO path but was not
-  actuated during these sessions.
+- The planned payload servo is currently disconnected. The repository's servo
+  utility drives Raspberry Pi BCM GPIO 12 directly; it does not use MAVLink or
+  a flight-controller servo output. It now requires an explicit mode plus the
+  exact `--confirm-actuation SERVO_CLEAR` acknowledgement before GPIO setup.
 
 ### Planned forward rangefinder
 
-The MicoAir MT-15 is not connected. The proposed connection is the unused
-full-duplex FC UART7:
+The MicoAir MT-15 is not connected, has never been functionally tested here,
+and does not yet have confirmed physical space on the aircraft. The proposed
+electrical connection is the unused full-duplex **flight-controller UART7**,
+not a Pi UART or Pi GPIO header:
 
 ```text
 MT-15 5V  -> regulated FC 5V
@@ -129,18 +193,61 @@ hall mapping or obstacle avoidance. See [sensor recording and wiring](SENSOR_REC
 For reliable time after long offline storage, give the Pi periodic NTP access
 or add a hardware RTC.
 
+Verified on 2026-08-19 and treated as an invariant: **no systemd unit, timer,
+or crontab on the Pi starts anything that talks to the flight controller at
+boot.** `scripts/setup-pi-power-resilience.sh` re-checks this and refuses to
+finish if a vehicle-control unit is ever enabled. An unexpected reboot must
+never bring up a command path to the vehicle.
+
+## Power-loss resilience
+
+The Pi is powered from the airframe and is disconnected without a clean
+shutdown routinely. On **2026-08-18** an unattended `apt-get full-upgrade` of
+150+ packages was interrupted that way and required a manual rescue on
+2026-08-19; the machine has since recovered completely.
+
+Applied on 2026-08-19 with `sudo scripts/setup-pi-power-resilience.sh`:
+
+- `apt-daily.timer` and `apt-daily-upgrade.timer` are **masked**. Upgrade only
+  through `sudo scripts/pi-safe-upgrade.sh`, on a bench supply.
+- The journal is **persistent and capped at 64 MB**, so a power cut now leaves
+  a post-mortem instead of discarding every log.
+- The hardware watchdog is pinned at 1 minute (the vendor value, deliberately
+  not tightened).
+- The root filesystem is set to `errors=remount-ro`, effective at next mount.
+- The interrupted-upgrade recovery unit is installed but disabled; only
+  `pi-safe-upgrade.sh` arms it.
+
+The root filesystem stays writable by design; an overlay read-only root was
+rejected because `drone-deploy` and the recorders both need a writable card.
+
+A controlled reboot on 2026-08-19 at 13:57 confirmed that the journal history
+accumulates across boots and that the live mount adopts `errors=remount-ro`.
+All five measures survived the reboot and the Pi rejoined Tailscale in about
+five seconds. None of this has been exercised against a real power cut.
+
+Recorded data has its own policy in `ai_drone/durability.py`: small artifacts
+are replaced atomically, and the JSONL streams flush every record while
+fsyncing on a bounded interval (`drone-record --sync-interval`, default 5 s).
+
+See [Pi power resilience](PI_POWER_RESILIENCE.md).
+
 ## Current network configuration
 
 The onboard `wlan0` operates in one mode at a time:
 
-- phone hotspots `Xyz` and `Espresso Macchiato`: priority `100`;
+- saved phone hotspots (names redacted from the repository): priority `100`;
 - `eduroam`: priority `5`;
 - fallback `Hotspot` / `AI-Drone-Zero`: priority `-10`.
 
-At the last check, `wlan0` was the hotspot, there was no default internet route,
-`usb0` had no carrier, no `wlan1` existed, and Tailscale was logged out/offline.
-The eduroam profile and valid DFN CA certificate remain installed on the Pi;
-the password is intentionally not in the repository.
+As verified on 2026-08-19, `wlan0` is a **client** on a saved phone hotspot at
+`10.189.46.25/24` with a working default route, and Tailscale is **online** at
+`100.84.84.2`. This supersedes the 2026-08-18 capture, which recorded `wlan0`
+serving `AI-Drone-Zero` at `192.168.4.1` with no route and Tailscale logged out;
+the documented priority fallback behaved exactly as designed. `usb0` still has
+no carrier and no `wlan1` exists. The eduroam profile and valid DFN CA
+certificate remain installed on the Pi; the password is intentionally not in
+the repository.
 
 For simultaneous internet and `AI-Drone-Zero`, attach a second supported USB
 Wi-Fi adapter or provide a USB Ethernet/tethering uplink. Keep `wlan0` as the
@@ -267,6 +374,20 @@ An eight-second dataset is retained locally at
 laptop occupying nearly the whole image, so zero tag detections did not test the
 detector's physical range.
 
+### Consolidated flight control
+
+- Core: `ai_drone/controller.py` and `ai_drone/follower.py`
+- CLI: `ai_drone/cli/control.py`
+- Entry point: `drone-control`
+
+This single command retains passive `status`, `hover` (`takeoff` alias),
+`velocity-test`, and `follow`. Each live flight sequence owns its arming,
+stopping, landing, and cleanup; simulated follow is fully offline. Dedicated
+follow and linear-flight wrappers are folded into this one command. The control
+capability is implemented but has not been validated in live flight; its
+presence does not override the current hardware blocks in the test envelope
+above.
+
 ### Complete configuration snapshot
 
 - Read-only Pi exporter: `ai_drone/cli/config_export.py`
@@ -301,7 +422,7 @@ and the parameter file is
 The utility uses only ArduPilot `MAV_CMD_DO_MOTOR_TEST`; it does not send the
 normal arm command. It requires exact propeller-removal and vehicle-secured
 confirmations, a countdown, disarmed starting state, contiguous configured
-motor outputs, and `ARMING_CHECK != 0`. It caps each motor at 10% and one
+motor outputs, and exactly `ARMING_CHECK=1`. It caps each motor at 10% and one
 second, sends a stop request in cleanup, and waits for a disarmed heartbeat.
 
 The program was unit-tested but deliberately not run on the real motors. Follow
@@ -355,8 +476,9 @@ hazards or build a 2D map. Reliable hall autonomy will likely require:
    orientation, and downward rangefinder accuracy.
 6. Run the guarded motor test with props removed, one motor at a time, then
    confirm numbering and rotation.
-7. Develop the tag approach/release state machine in ArduPilot SITL first, with
-   strict velocity/altitude/time limits and no payload actuation.
+7. Exercise every existing `drone-control` mode in ArduPilot SITL, then develop
+   the tag approach/release state machine there with strict
+   velocity/altitude/time limits and no payload actuation.
 8. Add a comprehensive preflight-health command that refuses flight on stale or
    missing EKF, range, flow, battery, RC, camera-calibration, and tag-map data.
 9. Select and integrate the forward/hall navigation sensor and companion
@@ -367,14 +489,17 @@ hazards or build a 2D map. Reliable hall autonomy will likely require:
 Run before committing later changes:
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check .
-UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .
-UV_CACHE_DIR=/tmp/uv-cache uv run ty check
-UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q
-bash -n scripts/setup-pi-dual-network.sh
+UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --group dev
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev ruff format --check .
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev ruff check .
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev ty check .
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev pytest -q
+bash -n scripts/setup-pi-hotspot.sh scripts/setup-pi-dual-network.sh \
+  scripts/setup-pi-power-resilience.sh scripts/pi-safe-upgrade.sh
 git diff --check
 ```
 
-Last complete result: **70 passed, 1 skipped**. The skipped host test requires
-the Pi's OpenCV pose environment; synthetic pose solving was separately checked
-on the Pi earlier.
+Last complete result after cleanup: **305 passed, 1 skipped** on the supported
+Python 3.12 environment, including a deprecation-warning-as-error pass. The
+skipped host test requires the Pi's OpenCV pose environment; synthetic pose
+solving was separately checked on the Pi earlier.

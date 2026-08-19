@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import NoReturn, Sequence
+from typing import NoReturn
 
 from ai_drone.mavlink_devices import (
     STABLE_FLIGHT_CONTROLLER_DEVICE,

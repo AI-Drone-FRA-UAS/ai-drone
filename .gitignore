@@ -21,6 +21,9 @@ mav.parm
 .vscode/
 .idea/
 
+# Shared repository guidance (may be globally ignored by local tooling)
+!CLAUDE.md
+
 # OS
 .DS_Store
 

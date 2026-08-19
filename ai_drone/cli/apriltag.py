@@ -4,33 +4,61 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
 from ai_drone.apriltags import CameraCalibration, create_detector, estimate_pose
+from ai_drone.cli_parsing import parse_even_resolution
+from ai_drone.platform import is_raspberry_pi
+
+_TAG36H11_MAX_ID = 586
 
 
-def _is_raspberry_pi() -> bool:
-    try:
-        model = Path("/proc/device-tree/model").read_text()
-    except (FileNotFoundError, PermissionError):
-        return False
-    return "raspberry pi" in model.lower()
+class _CameraCleanup(Protocol):
+    def stop(self) -> object: ...
+
+    def close(self) -> object: ...
 
 
-def _resolution(value: str) -> tuple[int, int]:
-    try:
-        width_text, height_text = value.lower().split("x", 1)
-        width, height = int(width_text), int(height_text)
-    except (ValueError, TypeError) as error:
-        raise argparse.ArgumentTypeError(
-            "resolution must look like 1280x960"
-        ) from error
-    if width <= 0 or height <= 0 or width % 2 or height % 2:
-        raise argparse.ArgumentTypeError(
-            "resolution dimensions must be positive even integers"
+class _ServerCleanup(Protocol):
+    def shutdown(self) -> object: ...
+
+    def server_close(self) -> object: ...
+
+
+def _cleanup_resources(
+    camera: _CameraCleanup | None,
+    server: _ServerCleanup | None,
+) -> list[Exception]:
+    """Attempt every cleanup action and return failures in call order."""
+    actions: list[tuple[str, Callable[[], object]]] = []
+    if camera is not None:
+        actions.extend(
+            (
+                ("camera stop", camera.stop),
+                ("camera close", camera.close),
+            )
         )
-    return width, height
+    if server is not None:
+        actions.extend(
+            (
+                ("stream server shutdown", server.shutdown),
+                ("stream server close", server.server_close),
+            )
+        )
+
+    errors: list[Exception] = []
+    for label, action in actions:
+        try:
+            action()
+        except Exception as error:
+            errors.append(error)
+            print(f"WARNING: {label} failed: {error}", file=sys.stderr, flush=True)
+    return errors
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,7 +71,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backend", choices=("auto", "native", "opencv"), default="auto"
     )
-    parser.add_argument("--resolution", type=_resolution, default=(1280, 960))
+    parser.add_argument("--resolution", type=parse_even_resolution, default=(1280, 960))
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--decimate", type=float, default=1.0)
     parser.add_argument("--target-id", type=int)
@@ -58,23 +86,45 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.threads <= 0:
+        parser.error("--threads must be positive")
+    if not math.isfinite(args.decimate) or args.decimate < 1.0:
+        parser.error("--decimate must be finite and at least 1.0")
+    if not math.isfinite(args.tag_size) or args.tag_size <= 0:
+        parser.error("--tag-size must be finite and positive")
+    if (
+        not math.isfinite(args.max_reprojection_error)
+        or args.max_reprojection_error <= 0
+    ):
+        parser.error("--max-reprojection-error must be finite and positive")
+    if not math.isfinite(args.duration) or args.duration < 0:
+        parser.error("--duration must be finite and not negative")
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    if args.target_id is not None and not 0 <= args.target_id <= _TAG36H11_MAX_ID:
+        parser.error(
+            f"--target-id must be between 0 and {_TAG36H11_MAX_ID} for tag36h11"
+        )
+    if args.exposure_us is not None and args.exposure_us <= 0:
+        parser.error("--exposure-us must be positive")
+    if args.analogue_gain is not None and (
+        not math.isfinite(args.analogue_gain) or args.analogue_gain <= 0
+    ):
+        parser.error("--analogue-gain must be finite and positive")
+
+
+def _serialize_payload(payload: dict[str, object]) -> str:
+    """Encode one standards-compliant detection payload."""
+    return json.dumps(payload, allow_nan=False, sort_keys=True)
+
+
 def run(arguments: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(arguments)
+    _validate_args(parser, args)
     width, height = args.resolution
-    if args.threads <= 0:
-        parser.error("--threads must be positive")
-    if args.decimate < 1.0:
-        parser.error("--decimate must be at least 1.0")
-    if args.tag_size <= 0:
-        parser.error("--tag-size must be positive")
-    if args.duration < 0:
-        parser.error("--duration must not be negative")
-    if args.exposure_us is not None and args.exposure_us <= 0:
-        parser.error("--exposure-us must be positive")
-    if args.analogue_gain is not None and args.analogue_gain <= 0:
-        parser.error("--analogue-gain must be positive")
-    if not _is_raspberry_pi():
+    if not is_raspberry_pi():
         raise SystemExit(
             "drone-apriltag is Pi-only. Deploy it from the laptop with "
             "'uv run drone-deploy --apriltag'."
@@ -82,7 +132,9 @@ def run(arguments: list[str] | None = None) -> int:
 
     import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
     import numpy as np
-    from picamera2 import Picamera2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+    from picamera2 import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+        Picamera2,
+    )
 
     detector = create_detector(
         args.backend,
@@ -103,35 +155,36 @@ def run(arguments: list[str] | None = None) -> int:
     if args.analogue_gain is not None:
         controls["AnalogueGain"] = args.analogue_gain
 
-    camera = Picamera2()
-    camera.configure(
-        camera.create_video_configuration(
-            main={"format": "YUV420", "size": (width, height)},
-            raw={"size": (2028, 1520)},
-            controls=controls,
-            buffer_count=4,
-            queue=False,
-        )
-    )
-
+    camera = None
     server = None
-    if args.output == "stream":
-        from ai_drone.stream import start_server
-
-        server = start_server(port=args.port)
-        print(f"AprilTag stream: http://0.0.0.0:{args.port}/", flush=True)
-
-    print(
-        f"backend={detector.backend_name} resolution={width}x{height} "
-        f"tag_size={args.tag_size:.3f}m",
-        flush=True,
-    )
-    camera.start()
-    started = time.monotonic()
-    last_status = started
-    frame_count = 0
-    detection_count = 0
     try:
+        camera = Picamera2()
+        camera.configure(
+            camera.create_video_configuration(
+                main={"format": "YUV420", "size": (width, height)},
+                raw={"size": (2028, 1520)},
+                controls=controls,
+                buffer_count=4,
+                queue=False,
+            )
+        )
+
+        if args.output == "stream":
+            from ai_drone.stream import start_server
+
+            server = start_server(port=args.port)
+            print(f"AprilTag stream: http://0.0.0.0:{args.port}/", flush=True)
+
+        print(
+            f"backend={detector.backend_name} resolution={width}x{height} "
+            f"tag_size={args.tag_size:.3f}m",
+            flush=True,
+        )
+        camera.start()
+        started = time.monotonic()
+        last_status = started
+        frame_count = 0
+        detection_count = 0
         while args.duration == 0 or time.monotonic() - started < args.duration:
             request = camera.capture_request()
             try:
@@ -177,7 +230,7 @@ def run(arguments: list[str] | None = None) -> int:
                         pose.reprojection_error_px <= args.max_reprojection_error
                     )
                 payloads.append(payload)
-                print(json.dumps(payload, sort_keys=True), flush=True)
+                print(_serialize_payload(payload), flush=True)
 
             frame_count += 1
             detection_count += len(detections)
@@ -224,11 +277,11 @@ def run(arguments: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("AprilTag detection stopped.", flush=True)
     finally:
-        camera.stop()
-        camera.close()
-        if server is not None:
-            server.shutdown()
-            server.server_close()
+        cleanup_errors = _cleanup_resources(camera, server)
+        if cleanup_errors and sys.exception() is None:
+            raise RuntimeError("AprilTag resource cleanup failed") from cleanup_errors[
+                0
+            ]
     return 0
 
 

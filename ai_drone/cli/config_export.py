@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,16 +14,21 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.config_snapshot import (
+    ParameterRecord,
     download_all_parameters,
-    heartbeat_is_armed,
     parameter_sha256,
     records_to_json,
 )
+from ai_drone.durability import atomic_write_text
 from ai_drone.mavlink_devices import resolve_mavlink_endpoint
+from ai_drone.mavlink_safety import (
+    heartbeat_is_armed,
+    require_fresh_disarmed_heartbeat,
+)
 
 
 def build_bundle(
-    records: list[Any],
+    records: list[ParameterRecord],
     heartbeat: Any,
     *,
     endpoint: str,
@@ -33,7 +39,7 @@ def build_bundle(
 
     return {
         "schema_version": 1,
-        "captured_at": captured_at or datetime.now(timezone.utc).isoformat(),
+        "captured_at": captured_at or datetime.now(UTC).isoformat(),
         "source": {
             "endpoint": endpoint,
             "baud": baud,
@@ -61,8 +67,7 @@ def _write_bundle(bundle: dict[str, Any], output: Path | None) -> None:
     if output is None:
         sys.stdout.write(payload)
         return
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(payload)
+    atomic_write_text(output, payload)
     print(f"Saved snapshot bundle to {output}", file=sys.stderr)
 
 
@@ -76,6 +81,12 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--download-timeout", type=float, default=180.0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(arguments)
+    if args.baud <= 0:
+        parser.error("--baud must be greater than zero")
+    if not math.isfinite(args.heartbeat_timeout) or args.heartbeat_timeout <= 0:
+        parser.error("--heartbeat-timeout must be finite and greater than zero")
+    if not math.isfinite(args.download_timeout) or args.download_timeout <= 0:
+        parser.error("--download-timeout must be finite and greater than zero")
 
     endpoint = resolve_mavlink_endpoint(args.device, include_pi_uart=True)
     print(
@@ -101,9 +112,20 @@ def main(arguments: list[str] | None = None) -> int:
             connection,
             timeout=args.download_timeout,
         )
+        try:
+            final_heartbeat = require_fresh_disarmed_heartbeat(
+                connection,
+                system_id=int(connection.target_system),
+                component_id=int(connection.target_component),
+                timeout=args.heartbeat_timeout,
+            )
+        except (RuntimeError, TimeoutError) as error:
+            raise SystemExit(
+                f"Cannot certify a final disarmed state: {error}"
+            ) from error
         bundle = build_bundle(
             records,
-            heartbeat,
+            final_heartbeat,
             endpoint=endpoint,
             baud=args.baud,
         )

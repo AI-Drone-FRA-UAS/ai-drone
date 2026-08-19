@@ -12,12 +12,16 @@ does not test flight control.
 4. Turn on the RC transmitter and keep a second person ready to disconnect the
    LiPo.
 5. Restore `ARMING_CHECK=1` and resolve every reported pre-arm problem. The
-   utility intentionally refuses to run while `ARMING_CHECK=0`.
+   utility intentionally refuses to run with any other value, including a
+   partial check mask.
+
+The commands below prefer Tailscale MagicDNS. When Tailscale is offline and the
+laptop is joined to `AI-Drone-Zero`, use `PI_HOST=seb@192.168.4.1` instead.
 
 Test one motor for half a second at 7%:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@192.168.4.1 \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --motor-test \
   --motor 1 \
   --duration 0.5 \
@@ -29,7 +33,7 @@ SSH_CONFIG=/dev/null PI_HOST=seb@192.168.4.1 \
 After validating motors individually, test all configured motors sequentially:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@192.168.4.1 \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --motor-test \
   --all-motors \
   --duration 0.5 \

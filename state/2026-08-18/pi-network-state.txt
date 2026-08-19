@@ -15,8 +15,8 @@ Active connection:
 - no default route; internet connectivity limited
 
 Installed safe profile metadata:
-- Espresso Macchiato: autoconnect yes, priority 100, bound to wlan0
-- Xyz: autoconnect yes, priority 100, bound to wlan0
+- [second phone hotspot SSID redacted]: autoconnect yes, priority 100, bound to wlan0
+- [phone hotspot SSID redacted]: autoconnect yes, priority 100, bound to wlan0
 - eduroam: autoconnect yes, priority 5, bound to wlan0
 - Hotspot: autoconnect yes, priority -10, bound to wlan0
 

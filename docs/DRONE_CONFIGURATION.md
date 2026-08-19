@@ -14,13 +14,30 @@ Verified on 2026-06-09.
 
 ### Meaning of the disabled safety parameters
 
-`ARMING_CHECK` controls the pre-arm gate. The live value `0` disables optional
-pre-arm checks, so ArduPilot can permit arming despite problems such as an
-uncalibrated/inconsistent IMU, unhealthy compass or GPS, bad battery level,
-invalid parameters, missing rangefinder data, RC failure, or unavailable
-logging. The normal safe value on Copter 4.6 is `1`, meaning perform all checks.
-It should be restored only after each reported failure is diagnosed; the
-individual warnings should not be bypassed to make the vehicle arm.
+`ARMING_CHECK` controls which optional pre-arm categories gate an arm request.
+It is a bitmask with one deliberately special value: `1` means **run every
+available check**, not merely "enable bit 0". Other non-zero masks select
+categories such as barometer, compass, GPS, INS, RC, board voltage, battery,
+logging, system, mission, and configured rangefinders. The live value `0`
+skips those optional categories, so ArduPilot can permit arming despite serious
+calibration, configuration, sensor, power, RC, or logging problems. Some
+mandatory checks still run even at `0`; that does not make `0` safe for flight.
+
+Setting `ARMING_CHECK=1` does not arm the aircraft, spin motors, calibrate a
+sensor, or prove the physical build is safe. It restores the software gate:
+ArduPilot runs the checks while disarmed and again when arming is requested,
+blocks the request on failure, and reports `PreArm:`/`Arm:` status text. Set it
+to `1`, read and resolve every reported failure, and do not replace it with a
+partial mask merely to make the vehicle arm.
+
+The checks only cover sensors and features that ArduPilot knows are configured.
+They cannot detect the loose forward-facing Pi camera, an unplugged Pi GPIO
+servo, absent propellers/guards, unsafe surroundings, or an unconfigured and
+disconnected forward MT-15. Ongoing EKF, battery, RC, and link failsafes are
+also separate from this one pre-arm parameter.
+
+References: [ArduPilot pre-arm safety checks](https://ardupilot.org/copter/docs/common-prearm-safety-checks.html)
+and the [Copter 4.6 parameter list](https://ardupilot.org/copter/docs/parameters-Copter-stable-V4.6.0.html).
 
 `FENCE_ENABLE` is independent: it turns the configured geofence behavior on or
 off after the vehicle is operating. With `0`, ArduPilot will not enforce the

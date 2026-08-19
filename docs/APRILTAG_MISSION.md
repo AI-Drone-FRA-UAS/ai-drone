@@ -59,9 +59,12 @@ cd ~/ai-drone
 Or deploy and start it from the developer machine:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@192.168.4.1 \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --apriltag --backend auto --tag-size 0.160
 ```
+
+If Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, replace
+`seb-is-pm` with the hotspot fallback `192.168.4.1`.
 
 Use `--tag-size 0.224` for the supplied A3 tags. Print at 100% and use the
 measured black-border square size, converted to metres.

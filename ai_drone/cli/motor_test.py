@@ -8,6 +8,7 @@ outputs while the command is active and restores them when its timeout expires.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from typing import Any
@@ -15,8 +16,13 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone.config_snapshot import decode_parameter_name, heartbeat_is_armed
 from ai_drone.mavlink_devices import resolve_mavlink_endpoint
+from ai_drone.mavlink_parameters import request_parameter
+from ai_drone.mavlink_safety import (
+    heartbeat_is_armed,
+    is_vehicle_message,
+    require_fresh_disarmed_heartbeat,
+)
 
 MAX_THROTTLE_PERCENT = 10.0
 MAX_DURATION_SECONDS = 1.0
@@ -24,35 +30,32 @@ MOTOR_FUNCTIONS = frozenset(range(33, 41))
 ACCEPTED = mavlink.MAV_RESULT_ACCEPTED
 
 
-def _request_parameter(connection: Any, name: str, timeout: float = 3.0) -> float:
-    connection.mav.param_request_read_send(
-        connection.target_system,
-        connection.target_component,
-        name.encode("ascii"),
-        -1,
-    )
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        message = connection.recv_match(
-            type=["PARAM_VALUE", "HEARTBEAT"], blocking=True, timeout=0.25
-        )
-        if message is None:
-            continue
-        if message.get_type() == "HEARTBEAT":
-            if heartbeat_is_armed(message):
-                raise RuntimeError("Vehicle became ARMED before the motor test")
-            continue
-        if decode_parameter_name(message.param_id) == name:
-            return float(message.param_value)
-    raise TimeoutError(f"Flight controller did not return {name}")
+# Private compatibility name retained for focused tests and downstream imports;
+# the implementation is shared with the flight controller.
+_request_parameter = request_parameter
 
 
 def _configured_motor_count(connection: Any) -> int:
-    functions = {
-        round(_request_parameter(connection, f"SERVO{index}_FUNCTION"))
-        for index in range(1, 9)
-    }
-    configured = sorted(functions & MOTOR_FUNCTIONS)
+    assignments: dict[int, int] = {}
+    for output in range(1, 9):
+        raw_function = float(_request_parameter(connection, f"SERVO{output}_FUNCTION"))
+        if not math.isfinite(raw_function) or not raw_function.is_integer():
+            raise RuntimeError(
+                f"SERVO{output}_FUNCTION is not a finite integer: {raw_function!r}"
+            )
+        function = int(raw_function)
+        if function not in MOTOR_FUNCTIONS:
+            continue
+        previous_output = assignments.get(function)
+        if previous_output is not None:
+            motor = function - min(MOTOR_FUNCTIONS) + 1
+            raise RuntimeError(
+                f"Motor{motor} is assigned to both SERVO{previous_output} and "
+                f"SERVO{output} outputs"
+            )
+        assignments[function] = output
+
+    configured = sorted(assignments)
     if not configured:
         raise RuntimeError("No Motor1..Motor8 output functions are configured")
     expected = list(range(33, max(configured) + 1))
@@ -94,6 +97,12 @@ def _wait_for_ack(connection: Any, timeout: float = 4.0) -> Any:
         )
         if message is None:
             continue
+        if not is_vehicle_message(
+            message,
+            system_id=int(connection.target_system),
+            component_id=int(connection.target_component),
+        ):
+            continue
         message_type = message.get_type()
         if message_type == "STATUSTEXT":
             print(f"ArduPilot: {message.text}")
@@ -124,11 +133,66 @@ def _stop_motor_test(connection: Any, motor: int) -> None:
 
 def _wait_until_disarmed(connection: Any, timeout: float = 4.0) -> bool:
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        heartbeat = connection.recv_match(type="HEARTBEAT", blocking=True, timeout=0.5)
-        if heartbeat is not None and not heartbeat_is_armed(heartbeat):
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            require_fresh_disarmed_heartbeat(
+                connection,
+                system_id=int(connection.target_system),
+                component_id=int(connection.target_component),
+                timeout=remaining,
+            )
+        except RuntimeError:
+            # A fresh armed heartbeat is expected while ArduPilot is stopping
+            # the temporary motor test; keep waiting within the same deadline.
+            continue
+        except TimeoutError:
+            return False
+        else:
             return True
     return False
+
+
+def _cleanup_motor_test(
+    connection: Any,
+    *,
+    started: bool,
+    first_motor: int,
+) -> bool:
+    """Stop a started test, verify disarm, and always close the connection."""
+
+    disarmed_observed = not started
+    if started:
+        try:
+            _stop_motor_test(connection, first_motor)
+        except Exception as error:
+            print(
+                f"WARNING: could not send the motor-test stop command: {error}",
+                file=sys.stderr,
+            )
+        else:
+            try:
+                disarmed_observed = _wait_until_disarmed(connection)
+            except Exception as error:
+                print(
+                    f"WARNING: could not verify that the vehicle disarmed: {error}",
+                    file=sys.stderr,
+                )
+
+    try:
+        connection.close()
+    except Exception as error:
+        disarmed_observed = False
+        print(
+            f"WARNING: could not close the MAVLink connection: {error}", file=sys.stderr
+        )
+
+    if started and not disarmed_observed:
+        print(
+            "WARNING: no disarmed heartbeat was observed. Disconnect the LiPo "
+            "before approaching the vehicle.",
+            file=sys.stderr,
+        )
+    return disarmed_observed
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -149,6 +213,8 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--confirm-vehicle-secured", required=True)
     args = parser.parse_args(arguments)
 
+    if args.baud <= 0:
+        parser.error("--baud must be greater than zero")
     if args.confirm_props_removed != "PROPS_REMOVED":
         parser.error("--confirm-props-removed must be exactly PROPS_REMOVED")
     if args.confirm_vehicle_secured != "VEHICLE_SECURED":
@@ -172,6 +238,7 @@ def main(arguments: list[str] | None = None) -> int:
     )
     started = False
     first_motor = 1
+    cleanup_confirmed = False
     try:
         heartbeat = connection.wait_heartbeat(timeout=15)
         if heartbeat is None:
@@ -181,11 +248,11 @@ def main(arguments: list[str] | None = None) -> int:
         connection.target_system = heartbeat.get_srcSystem()
         connection.target_component = heartbeat.get_srcComponent()
 
-        arming_check = round(_request_parameter(connection, "ARMING_CHECK"))
-        if arming_check == 0:
+        arming_check = float(_request_parameter(connection, "ARMING_CHECK"))
+        if arming_check != 1.0:
             raise SystemExit(
-                "ARMING_CHECK=0. Restore and pass the pre-arm safety checks before "
-                "using this motor-test utility."
+                f"ARMING_CHECK={arming_check:g}. Set ARMING_CHECK=1 (all checks) and "
+                "resolve every pre-arm failure before using this utility."
             )
 
         motor_count = _configured_motor_count(connection)
@@ -216,6 +283,16 @@ def main(arguments: list[str] | None = None) -> int:
             print(f"Starting in {remaining} ...", flush=True)
             time.sleep(1)
 
+        require_fresh_disarmed_heartbeat(
+            connection,
+            system_id=int(connection.target_system),
+            component_id=int(connection.target_component),
+            timeout=2.5,
+        )
+
+        # Treat the command as active before writing it: a serial write can fail
+        # after the controller received enough bytes to start the bounded test.
+        started = True
         _send_motor_test(
             connection,
             first_motor=first_motor,
@@ -223,7 +300,6 @@ def main(arguments: list[str] | None = None) -> int:
             duration=args.duration,
             motor_count=requested_count,
         )
-        started = True
         acknowledgement = _wait_for_ack(connection)
         result = int(acknowledgement.result)
         if result != ACCEPTED:
@@ -242,18 +318,16 @@ def main(arguments: list[str] | None = None) -> int:
         print("Cancelled; requesting immediate motor-test stop.", file=sys.stderr)
         return 130
     finally:
-        if started:
-            _stop_motor_test(connection, first_motor)
-            if not _wait_until_disarmed(connection):
-                print(
-                    "WARNING: no disarmed heartbeat was observed. Disconnect the LiPo "
-                    "before approaching the vehicle.",
-                    file=sys.stderr,
-                )
-        connection.close()
+        cleanup_confirmed = _cleanup_motor_test(
+            connection,
+            started=started,
+            first_motor=first_motor,
+        )
 
-    print("Motor test complete; a disarmed heartbeat was observed.")
-    return 0
+    if cleanup_confirmed:
+        print("Motor test complete; a disarmed heartbeat was observed.")
+        return 0
+    return 2
 
 
 if __name__ == "__main__":

@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from pymavlink.dialects.v10 import ardupilotmega as mavlink
+from ai_drone.mavlink_safety import heartbeat_is_armed, is_vehicle_message
+
+PARAMETER_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,15}\Z")
+MIN_MAV_PARAM_TYPE = 1
+MAX_MAV_PARAM_TYPE = 10
+MAX_PARAMETER_COUNT = 65_535
 
 
 @dataclass(frozen=True)
@@ -20,12 +26,6 @@ class ParameterRecord:
     param_type: int
     index: int
     count: int
-
-
-def heartbeat_is_armed(message: Any) -> bool:
-    """Return whether a HEARTBEAT has the safety-armed flag set."""
-
-    return bool(message.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
 
 
 def decode_parameter_name(value: str | bytes) -> str:
@@ -51,6 +51,9 @@ def render_parameter_file(records: list[ParameterRecord]) -> str:
     """Return a deterministic ArduPilot-compatible comma-separated file."""
 
     ordered = sorted(records, key=lambda record: record.name)
+    for record in ordered:
+        if PARAMETER_NAME_PATTERN.fullmatch(record.name) is None:
+            raise ValueError(f"Invalid ArduPilot parameter name {record.name!r}")
     return "".join(
         f"{record.name},{format_parameter_value(record.value)}\n" for record in ordered
     )
@@ -70,19 +73,58 @@ def records_to_json(
     return [asdict(record) for record in sorted(records, key=lambda item: item.index)]
 
 
+def _json_integer(item: dict[str, Any], field: str, position: int) -> int:
+    value = item.get(field)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"Snapshot parameter {position} {field} must be an integer")
+    return value
+
+
 def records_from_json(items: list[dict[str, Any]]) -> list[ParameterRecord]:
     """Validate and reconstruct records from a remote export bundle."""
 
-    records = [
-        ParameterRecord(
-            name=str(item["name"]),
-            value=float(item["value"]),
-            param_type=int(item["param_type"]),
-            index=int(item["index"]),
-            count=int(item["count"]),
+    records: list[ParameterRecord] = []
+    for position, item in enumerate(items):
+        name = item.get("name")
+        if not isinstance(name, str) or PARAMETER_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError(
+                f"Snapshot parameter {position} has an invalid ArduPilot name"
+            )
+        raw_value = item.get("value")
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
+            raise ValueError(
+                f"Snapshot parameter {position} value must be a JSON number"
+            )
+        value = float(raw_value)
+        if not math.isfinite(value):
+            raise ValueError("Snapshot contains a non-finite parameter value")
+        param_type = _json_integer(item, "param_type", position)
+        index = _json_integer(item, "index", position)
+        count = _json_integer(item, "count", position)
+        if not MIN_MAV_PARAM_TYPE <= param_type <= MAX_MAV_PARAM_TYPE:
+            raise ValueError(
+                f"Snapshot parameter {position} param_type must be between "
+                f"{MIN_MAV_PARAM_TYPE} and {MAX_MAV_PARAM_TYPE}"
+            )
+        if index < 0:
+            raise ValueError(
+                f"Snapshot parameter {position} index must not be negative"
+            )
+        if not 1 <= count <= MAX_PARAMETER_COUNT:
+            raise ValueError(
+                f"Snapshot parameter {position} count must be between 1 and "
+                f"{MAX_PARAMETER_COUNT}"
+            )
+        records.append(
+            ParameterRecord(
+                name=name,
+                value=value,
+                param_type=param_type,
+                index=index,
+                count=count,
+            )
         )
-        for item in items
-    ]
+
     expected = len(records)
     if not records:
         raise ValueError("Snapshot contains no parameters")
@@ -90,24 +132,19 @@ def records_from_json(items: list[dict[str, Any]]) -> list[ParameterRecord]:
         raise ValueError("Snapshot contains duplicate parameter names")
     if len({record.index for record in records}) != expected:
         raise ValueError("Snapshot contains duplicate parameter indexes")
+    indexes = {record.index for record in records}
+    expected_indexes = set(range(expected))
+    if indexes != expected_indexes:
+        raise ValueError(
+            "Snapshot parameter indexes must be contiguous from 0 to "
+            f"{expected - 1}; received {sorted(indexes)}"
+        )
     announced = {record.count for record in records}
     if announced != {expected}:
         raise ValueError(
             f"Snapshot is incomplete: received {expected}, announced {sorted(announced)}"
         )
     return records
-
-
-def _from_target(message: Any, connection: Any) -> bool:
-    source_system = getattr(message, "get_srcSystem", lambda: 0)()
-    source_component = getattr(message, "get_srcComponent", lambda: 0)()
-    target_system = int(connection.target_system)
-    target_component = int(connection.target_component)
-    component_matches = target_component == 0 or source_component in (
-        0,
-        target_component,
-    )
-    return source_system in (0, target_system) and component_matches
 
 
 def download_all_parameters(
@@ -142,7 +179,11 @@ def download_all_parameters(
         )
         now = time.monotonic()
 
-        if message is not None and _from_target(message, connection):
+        if message is not None and is_vehicle_message(
+            message,
+            system_id=target_system,
+            component_id=target_component,
+        ):
             message_type = message.get_type()
             if message_type == "HEARTBEAT":
                 if heartbeat_is_armed(message):

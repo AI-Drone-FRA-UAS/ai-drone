@@ -7,7 +7,7 @@ Pi username: seb
 Pi hostname: seb-is-pm
 Pi USB IP:   192.168.7.2
 Host USB IP: 192.168.7.1
-SSH command: ssh seb@192.168.7.2
+SSH command: ssh -F /dev/null seb@192.168.7.2
 ```
 
 Use the Pi Zero 2 WH micro-USB port labeled `USB` for the PC connection. The `PWR IN` port is power-only.
@@ -49,7 +49,7 @@ FLASH
 
 Then enter:
 
-- the phone hotspot password for `Xyz`
+- the password for the selected phone hotspot (SSID not stored here)
 - the new SSH password for Pi user `seb`
 
 Wait until the script prints `Done`.
@@ -73,21 +73,28 @@ Now remove the storage from the PC.
 2. Connect the PC to the Pi USB gadget port with a data-capable cable
    (Zero 2 WH: micro-USB port labeled `USB`).
 3. Wait 1-3 minutes.
-4. Run:
+4. Identify the new Pi USB gadget network interface (`ip link` is useful),
+   verify it is the adapter that appeared when the Pi was connected, and name
+   it explicitly. For example, if the verified interface is `usb0`, run:
 
 ```bash
 cd /home/abaris/ai-drone
+export USB_IFACE=usb0       # replace with the verified Pi gadget interface
 uv run autoconnect          # tries Tailscale, then AI-Drone-Zero, then USB
 # or, to go straight to the cable:
 uv run manuconnect          # then choose 3) USB cable
 ```
+
+The live helper deliberately refuses to reconfigure an automatically guessed
+USB interface. Use `--dry-run` before the live command if you want to inspect
+the proposed network and SSH commands.
 
 When SSH asks for a password, enter the Pi password you chose during flashing.
 
 Manual SSH command:
 
 ```bash
-ssh seb@192.168.7.2
+ssh -F /dev/null seb@192.168.7.2
 ```
 
 Confirm login:
@@ -125,25 +132,29 @@ Then run in PowerShell:
 
 ```powershell
 ping 192.168.7.2
-ssh seb@192.168.7.2
+ssh -F NUL seb@192.168.7.2
 ```
 
-From a checkout of this repo, the cross-platform helper can auto-detect the
-adapter, configure it, and open SSH from native Windows. Run PowerShell or
-Windows Terminal as Administrator so the adapter IP can be changed:
+From a checkout of this repo, the cross-platform helper can configure a
+**user-identified** adapter and open SSH from native Windows. It deliberately
+does not trust broad USB-network auto-detection for privileged changes. Run
+PowerShell or Windows Terminal as Administrator so the adapter IP can be
+changed:
 
 ```powershell
-uv run autoconnect
+$env:USB_IFACE = "Ethernet 4"; uv run autoconnect
 ```
 
 `autoconnect` first tries Tailscale (`seb@seb-is-pm`), then the Pi's own AP
-`AI-Drone-Zero` (`192.168.4.1`), and finally configures USB. To skip straight to
-the cable, use `uv run manuconnect` and choose `3) USB cable`.
+`AI-Drone-Zero` (`192.168.4.1`), and finally configures USB only when
+`USB_IFACE` names the verified Pi gadget adapter. To skip straight to the
+cable, set `USB_IFACE`, use `uv run manuconnect`, and choose `3) USB cable`.
 
 Use `uv run autoconnect --dry-run` to preview every transport's commands,
 including the PowerShell and `netsh` USB commands, before changing adapter
-settings. If USB auto-detection fails, name the adapter with the `USB_IFACE`
-environment variable:
+settings. Live setup deliberately refuses to reconfigure an adapter selected
+only by a broad USB-network heuristic. Verify the Pi gadget interface first,
+then name it explicitly with the `USB_IFACE` environment variable:
 
 ```powershell
 $env:USB_IFACE = "Ethernet 4"; uv run manuconnect   # then choose 3
@@ -171,14 +182,20 @@ Then run in Terminal:
 
 ```bash
 ping 192.168.7.2
-ssh seb@192.168.7.2
+ssh -F /dev/null seb@192.168.7.2
 ```
 
-Or use the repo helper:
+Or identify the adapter's BSD interface name first (`networksetup
+-listallhardwareports` can help), verify it is the Pi gadget, and pass that
+name explicitly. For example, if the verified interface is `en7`:
 
 ```bash
+export USB_IFACE=en7        # replace with the verified Pi gadget interface
 uv run autoconnect
 ```
+
+The helper does not perform a live USB setup from broad macOS auto-detection.
+Set `USB_IFACE` before selecting USB in `uv run manuconnect` as well.
 
 ## Notes
 
@@ -192,5 +209,6 @@ uv run autoconnect
 ssh-keygen -R 192.168.7.2
 ```
 
-The legacy `./connect-pi-usb-ssh.sh` script remains as a compatibility wrapper
-around `uv run autoconnect`.
+Use `uv run autoconnect` from the repository root. If USB fallback is intended,
+set `USB_IFACE` to the verified Pi gadget interface first. The former root-level
+shell wrapper has been removed.

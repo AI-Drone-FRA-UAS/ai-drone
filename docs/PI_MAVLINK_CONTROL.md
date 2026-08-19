@@ -1,124 +1,118 @@
-# Autonomous MAVLink Drone Control via Raspberry Pi
+# Consolidated MAVLink control
 
-This documentation describes the architecture, control interfaces, and safety guidelines for the modular MAVLink control system developed for the autonomous university drone project.
+`drone-control` is the single CLI for flight-controller status,
+takeoff/hover, body-frame velocity, and person following. Its flight sequences
+manage arming, stop, landing, and cleanup. Dedicated follow and linear-flight
+wrappers are folded into these modes, so the capability has one maintained
+implementation and command surface.
 
-The primary objective is to link the FlywooF745 flight controller (running ArduPilot Copter 4.6.3) with the IMX500 AI Camera on the Raspberry Pi to enable visually guided, autonomous flight maneuvers—such as person tracking, collision avoidance, and dynamic obstacle navigation—in both indoor and outdoor environments.
+The control code is implemented, but no live arm, takeoff, altitude hold,
+velocity flight, or person-follow flight has been validated on this aircraft.
+Read [the handoff](HANDOFF.md) before using it. The current vehicle has
+`ARMING_CHECK=0`, a loose forward-facing camera, no useful indoor fence, a
+disconnected servo, and no forward MT-15; those conditions block live flight.
 
----
+## Run the command
 
-## 1. System Overview & Hardware Configuration
+Deploy and open a Pi shell from the developer machine:
 
-The system architecture cleanly decouples high-level computer vision sensing from low-level flight stabilization:
-
-```text
-+---------------------+        UART (/dev/serial0)        +------------------------+
-|  Raspberry Pi 4 /   | <-------------------------------> |   FlywooF745 (GOKU)    |
-|     Zero 2 W        |        115200 Baud MAVLink 2      |  ArduPilot Copter 4.6  |
-+---------------------+                                   +------------------------+
-  |               ^                                         |                  ^
-  |               | I2C/CSI                                 | SERIAL5          | Motors
-  v               |                                         v                  |
-+---------------------+                                   +------------------------+
-| IMX500 AI-Camera    |                                   |  MicoAir MTF-01P       |
-| (NanoDet Person Det)|                                   | (Lidar & Optical Flow) |
-+---------------------+                                   +------------------------+
+```bash
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy --ssh
 ```
 
-### Components & Interfaces
-1. **Flight Controller**: Flywoo GOKU GN745 AIO / FlywooF745 running ArduPilot Copter 4.6.3.
-2. **Position & Altitude Hold (Indoor GPS-Denied)**:
-   * **MicoAir MTF-01P**: Connected to ArduPilot via `SERIAL5` (`SERIAL5_PROTOCOL=1`, `SERIAL5_BAUD=115`).
-   * **EKF3 Fusion**: ArduPilot fuses the downward-facing Optical Flow sensor for horizontal velocity estimation and the integrated LiDAR rangefinder for vertical altitude hold (`FLOW_TYPE=5`, `RNGFND1_TYPE=10`).
-3. **Raspberry Pi MAVLink Link**:
-   * On the physical drone build, MAVLink communication operates over the hardware UART on the Pi GPIO header: `/dev/serial0` (Pin 8/10 TX/RX) at **115200 baud** (`SERIAL4_PROTOCOL=2`, `SERIAL4_BAUD=115`).
-   * For bench testing on a developer laptop, the flight controller can be connected via USB (automatically detected under `/dev/ttyACM0` or `/dev/serial/by-id/...`).
+When Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, use
+`PI_HOST=seb@192.168.4.1` instead. On the Pi:
 
----
+```bash
+cd ~/ai-drone
+uv run drone-control --help
+```
 
-## 2. Architecture: Why `DroneController`?
+The command groups the following behaviors:
 
-The legacy script `fly_and_land.py` was linear and sequential, making it unsuitable for reactive, real-time control loops driven by continuous AI camera feeds.
+| Mode | Behavior | Current state |
+| --- | --- | --- |
+| `status` | Passive altitude, battery, mode, and armed-state monitoring | Disarmed bench use is possible |
+| `hover` (`takeoff` alias) | Guided takeoff, timed altitude hold, then land | Implemented; SITL and restrained-flight validation required |
+| `velocity-test` | Bounded body-frame velocity/yaw command, then stop and land | Implemented; SITL and restrained-flight validation required |
+| `follow` | Offline simulation or IMX500 person-follow flight | Simulation available; live flight blocked by mounting/calibration/flight gates |
 
-The **`ai_drone.controller.DroneController`** class introduces a modern, object-oriented MAVLink control interface with critical operational advantages:
-* **Automatic Device Discovery (`_find_device`)**: Automatically locates the correct connection path (`/dev/serial0` on the Pi, `/dev/ttyACM*` on USB, or network sockets like `udp:127.0.0.1:14550` for SITL and simulations).
-* **High-Frequency MAVLink 2 Streaming**: Requests continuous background telemetry feeds (`LOCAL_POSITION_NED`, `RANGEFINDER`, `ATTITUDE`, `SYS_STATUS`) using `MAV_CMD_SET_MESSAGE_INTERVAL`.
-* **Non-Blocking State Tracking**: Parses incoming messages in a background thread and updates attributes such as `current_altitude`, `battery_voltage`, `flight_mode`, and `is_armed` in real time without blocking main execution.
-* **Verified Mode Transitions**: Does not send blind commands; it actively waits for confirmation in the FC's `HEARTBEAT` before arming motors or executing takeoff maneuvers.
-* **Integrated Safety Traps**: Prevents uncontrolled flight or flyaways if unhandled exceptions or user interruptions occur.
+Use each subcommand's `--help` output for its exact confirmation token and
+limits. Do not bypass those gates in wrappers or documentation.
 
----
+The two non-actuating starting points are:
 
-## 3. Autonomous Flight & AI Integration (Body-Frame Velocity)
-
-For autonomous flight based on visual sensors (such as person detection from `ai_drone/nearest_person.py`), navigating to static GPS waypoints is impractical. Bounding boxes and depth estimation from a camera are inherently relative to the drone's **current orientation (Body Frame)**.
-
-To facilitate this, `DroneController` implements **`send_velocity_body(vx, vy, vz, yaw_rate_deg)`**:
-* Sends `SET_POSITION_TARGET_LOCAL_NED` using the `MAV_FRAME_BODY_NED` coordinate frame.
-* Configures the bitmask (`0x05C7`) to control velocity vectors and yaw rate exclusively.
-
-### Body-Frame Coordinate Axes
-* $+v_x$: Fly **Forward** | $-v_x$: Fly **Backward** (m/s)
-* $+v_y$: Strafe **Right** | $-v_y$: Strafe **Left** (m/s)
-* $+v_z$: **Descend** | $-v_z$: **Ascend** (m/s — Note: Z points downwards in NED conventions!)
-* $\text{yaw\_rate\_deg}$: Yaw rotation velocity in degrees per second ($+$ rotates **Right**, $-$ rotates **Left**).
-
-### Autonomous Person Tracking Module (`ai_drone/follower.py`)
-
-The project includes a dedicated autonomous follower module (**`ai_drone.follower.AutonomousFollower`**) that links bounding box detections directly to flight maneuvers:
-1. **Target Extraction & Distance Estimation (`get_person_target`)**: Filters detections for COCO class `0` (person), calculates pixel offsets from the image center (`offset_x_px`, `offset_y_px`), and estimates metric distance using a simplified pinhole camera model based on bounding box height.
-2. **Proportional Control (`compute_velocity_command`)**: Converts target distance and horizontal pixel offsets into smooth body-frame velocity commands ($v_x$ for maintaining distance, $\text{yaw\_rate}$ for centering the target). Includes deadzones to eliminate oscillation and velocity clamping for safety.
-3. **Safety Guardrails (`check_safety_guardrails`)**: Continuously monitors flight altitude and LiPo battery voltage. If the voltage drops below critical thresholds (default: `14.4 V`) or the altitude limit is breached, it immediately triggers an emergency landing.
-4. **Target-Loss Protection**: If visual contact is lost during tracking, the drone automatically switches to hover (`0 m/s`) after 3 seconds.
-
----
-
-## 4. CLI Tools (`drone-control` & `drone-follow`)
-
-Two command-line tools are provided for bench diagnostics, safety verification, and autonomous flight missions without requiring manual code edits.
-
-### 1. General Flight Control (`drone-control`)
-
-#### Passive Sensor Monitoring (`status`)
-Connects to the flight controller and streams real-time LiDAR altitude, LiPo voltage, and flight mode. **Motors remain disarmed.** Ideal for bench testing sensor calibration.
 ```bash
 uv run drone-control status --duration 10
+uv run drone-control follow --simulate --duration 15
 ```
 
-#### Autonomous Hover Test (`hover`)
-Arms the motors, ascends to `--takeoff-alt`, maintains a stable hover for the specified duration, and lands autonomously.
-```bash
-uv run drone-control hover --takeoff-alt 0.4 --duration 5 --max-alt 0.8
+Simulation exercises the follow control math without a camera, arming, or
+takeoff. It is not a full ArduPilot dynamics test; use Copter SITL for mode,
+arming, telemetry-loss, takeoff, velocity, and landing behavior.
+
+Every live flight mode requires the exact acknowledgement:
+
+```text
+--confirm-flight FLIGHT_TEST_READY
 ```
 
-#### Body-Frame Velocity Demonstrator (`velocity-test`)
-Demonstrates flight maneuverability by issuing body-frame velocity vectors during flight.
-```bash
-# Ascends to 0.4m, rotates right at 10 deg/s for 4 seconds, and lands
-uv run drone-control velocity-test --takeoff-alt 0.4 --duration 4 --vx 0.0 --yaw-rate 10.0
+Live `follow` additionally requires a measured `--focal-length-px` and:
+
+```text
+--confirm-live-follow CAMERA_RIGID_AND_CALIBRATED
 ```
 
-### 2. Autonomous Person Tracking (`drone-follow`)
+The current loose forward-facing camera cannot truthfully satisfy that gate.
 
-A standalone executable script for running the complete AI tracking pipeline:
-```bash
-# Run simulated person tracking on your desktop (no takeoff, no camera required)
-uv run drone-follow --sim-target --duration 15
+## Control architecture
 
-# Run live autonomous person tracking with the IMX500 AI camera in a flight safety net
-uv run drone-follow --device /dev/serial0 --takeoff-alt 0.5 --target-dist 2.0 --max-alt 0.8
-```
-*(Alternatively, use the subcommand via `uv run drone-control follow --sim-target`.)*
+`ai_drone.controller.DroneController` owns the MAVLink connection and the
+arm/mode/takeoff/velocity/land state transitions. `ai_drone.follower` owns
+person-target extraction and bounded follow-control math. The CLI only parses
+operator intent and sequences those reusable components.
 
----
+The flight controller remains responsible for attitude stabilization and EKF3
+fusion. The connected MTF-01P supplies downward range and optical-flow data;
+the Pi sends higher-level body-frame velocity requests.
 
-## 5. Safety Guidelines (Safety First!)
+Body-frame velocity uses NED conventions:
 
-Because current ArduPilot parameters on the drone have `ARMING_CHECK=0` and `FENCE_ENABLE=0` configured for testing purposes, operational safety relies entirely on software safeguards and pilot vigilance. The following rules must be strictly observed before any physical flight:
+- positive `vx`: forward; negative: backward;
+- positive `vy`: right; negative: left;
+- positive `vz`: down; negative: up; and
+- positive yaw rate: turn right.
 
-1. **Flight Safety Net / Enclosure**: All initial flight tests with autonomous control loops must be conducted inside a protective flight safety net or an indoor arena free of obstacles and personnel.
-2. **Hardware RC Kill-Switch**: A safety pilot must hold a physical RC transmitter linked to the drone at all times. If any unexpected flight behavior or oscillation occurs, the pilot must immediately flip the RC kill-switch or override the flight mode to `LOITER` / `LAND`.
-3. **Automated Software Traps**:
-   * **Context Manager Protection**: All flight operations should be wrapped inside `with DroneController(...) as drone:`. If an unhandled exception, syntax error, or `Ctrl+C` keyboard interrupt occurs, the `__exit__` block automatically triggers `emergency_stop()` (`LAND` or `DISARM`).
-   * **Altitude Guard**: If vibrations or optical flow drift cause the drone to exceed `max_altitude`, the controller immediately overrides velocity commands and lands.
-   * **Battery Guard**: Never take off with a low LiPo battery. The automated follower aborts missions immediately if battery voltage drops below `14.4 V` (for a 4S battery).
-4. **Pre-Flight Check**: Always run `uv run drone-control status` before arming to verify that LiDAR altitude reads ~0.00 m on the ground and LiPo battery voltage is above `15.0 V`.
+The controller filters telemetry to the selected vehicle, rejects stale
+heartbeats and altitude samples, requires exactly `ARMING_CHECK=1` before an
+arm path, verifies mode/armed transitions, caps command values, and uses bounded
+timeouts. Cleanup lands only a flight started by that controller instance and
+disarms an arm started by it; passive observation of an already armed vehicle
+does not itself send a command.
+
+## Staged validation
+
+1. Run unit tests and every control mode in ArduPilot Copter SITL, including
+   rejected arm, stale telemetry, target loss, low battery, over-altitude,
+   interruption, and landing timeout cases.
+2. Rigidly mount the airframe sensors and camera. Calibrate the IMU, compass,
+   optical-flow scale/orientation, downward rangefinder, and camera geometry.
+3. Restore `ARMING_CHECK=1` in a separately authorized configuration session
+   and resolve every `PreArm:`/`Arm:` message. Configure an appropriate indoor
+   boundary and recovery behavior; do not simply enable the current 100 m /
+   300 m fence.
+4. With every propeller removed and the frame secured, validate motor numbering
+   and direction using only the [guarded motor utility](BENCH_MOTOR_TEST.md).
+5. With a safety pilot, RC override/kill path, protective enclosure, fresh
+   battery, and clear area, perform the smallest restrained hover/altitude-hold
+   test. Verify range/flow and EKF behavior from the recording before expanding
+   the envelope.
+6. Validate bounded velocity one axis at a time. Test loss-of-link and stale
+   localization before enabling any camera-driven command.
+7. Enable person-follow flight only after the camera is rigid and its geometry
+   is measured, the target-loss behavior passes SITL and restrained tests, and
+   people are outside the vehicle's possible path.
+
+The forward MT-15 is an additional stop-ahead sensor, not a prerequisite that
+the current follow loop already consumes and not a substitute for a protected
+flight area or wider obstacle sensing.

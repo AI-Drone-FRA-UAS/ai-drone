@@ -11,9 +11,12 @@ cd ~/ai-drone
 From the developer machine:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@192.168.4.1 \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --record --duration 15
 ```
+
+If Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, replace
+`seb-is-pm` with the hotspot fallback `192.168.4.1`.
 
 The duration begins after the MAVLink heartbeat, camera setup, and configurable
 camera warm-up have completed. The output directory contains:
@@ -38,7 +41,7 @@ and calibration at the selected resolution.
 | MicoAir MTF-01P | Flight controller UART5 (`SERIAL5`, MAVLink1, 115200) | Range and optical flow forwarded by ArduPilot over the companion link |
 | Flight-controller IMU, barometer, compass, GPS, battery, EKF and RC state | Directly to the FlywooF745 | Requested MAVLink telemetry over UART4 |
 | Raspberry Pi companion link | Pi GPIO14/15 `/dev/serial0` to FC R4/T4 (`SERIAL4`, MAVLink2, 115200) | All FC telemetry in `.tlog` and `.jsonl` |
-| Servo | Planned/assigned through a flight-controller PWM output; not driven by this program | Output state only, if ArduPilot publishes it |
+| Servo | Currently disconnected; the separate guarded utility targets Pi BCM12 directly | Not driven by this program; FC output telemetry may still be recorded |
 
 The recorder requests bounded message rates that fit the verified 115200-baud
 UART4 link. This activates telemetry streaming, not motors. Sensors that require

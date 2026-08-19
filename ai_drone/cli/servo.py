@@ -3,31 +3,31 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
-from pathlib import Path
+
+from ai_drone.platform import is_raspberry_pi
+
+ACTUATION_CONFIRMATION = "SERVO_CLEAR"
+SERVO_GPIO_PIN = 12
+ABSOLUTE_MIN_PULSE_US = 750
+ABSOLUTE_MAX_PULSE_US = 2250
 
 WIRING_DIAGRAM = """
 [Raspberry Pi Zero 2 WH Header (40 Pins)]
 =========================================
-  Pin 2:  5V Power (Red Wire) -------> [Servo VCC] (WARNING: see below)
-  Pin 6:  GND (Brown Wire) ---------> [Servo GND]
+  Regulated external 5V -------------> [Servo VCC]
+  Supply GND + Pi Pin 6 (GND) -------> [Servo GND / common ground]
   Pin 32: BCM GPIO 12 (Yellow/Orange) -> [Servo Signal]
 
 WARNING ON POWER:
 The SG90 servo can draw 400mA-1600mA. Running it directly from the Raspberry Pi's
 5V pin can cause voltage drops and sudden Pi reboots/brownouts under load.
-For light testing without load, the Pi's 5V pin is usually fine, but for any load,
-use an external 5V power supply and connect its ground to the Pi's ground (GND).
+Use a suitably rated regulated 5V supply and connect its ground to Pi ground.
+Do not use the Pi header as servo power unless the complete shared 5V power
+budget, wiring, protection, and transient behavior have first been validated.
 """
-
-
-def _is_raspberry_pi() -> bool:
-    try:
-        model = Path("/proc/device-tree/model").read_text()
-    except (FileNotFoundError, PermissionError):
-        return False
-    return "raspberry pi" in model.lower()
 
 
 def _target_value_from_input(
@@ -49,12 +49,12 @@ def _target_value_from_input(
 
     if command.endswith("deg"):
         degrees = float(command.removesuffix("deg").strip())
-        if not -60.0 <= degrees <= 60.0:
+        if not math.isfinite(degrees) or not -60.0 <= degrees <= 60.0:
             raise ValueError("angle must be between -60 and +60 degrees")
         return degrees / 60.0
 
     target = float(command)
-    if not -1.0 <= target <= 1.0:
+    if not math.isfinite(target) or not -1.0 <= target <= 1.0:
         raise ValueError("value must be between -1.0 and 1.0")
     return target
 
@@ -72,8 +72,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pin",
         type=int,
-        default=12,
-        help="BCM GPIO pin number (default: 12, physical pin 32)",
+        choices=[SERVO_GPIO_PIN],
+        default=SERVO_GPIO_PIN,
+        help="fixed BCM GPIO pin (12, physical pin 32)",
     )
     parser.add_argument(
         "--min-us",
@@ -90,8 +91,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         choices=["sweep", "manual", "center"],
-        default="sweep",
+        required=True,
         help="Command mode: sweep (continuous), manual (interactive CLI), center (hold neutral)",
+    )
+    parser.add_argument(
+        "--confirm-actuation",
+        choices=[ACTUATION_CONFIRMATION],
+        required=True,
+        help=(f"Required physical-safety acknowledgement: {ACTUATION_CONFIRMATION}"),
     )
     parser.add_argument(
         "--sweep-delay",
@@ -108,13 +115,36 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = _parser().parse_args()
+def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if not args.min_us < 1500 < args.max_us:
+        parser.error("pulse geometry must satisfy --min-us < 1500 < --max-us")
+    if args.min_us < ABSOLUTE_MIN_PULSE_US:
+        parser.error(
+            f"--min-us must be at least the absolute software limit "
+            f"{ABSOLUTE_MIN_PULSE_US}"
+        )
+    if args.max_us > ABSOLUTE_MAX_PULSE_US:
+        parser.error(
+            f"--max-us must be at most the absolute software limit "
+            f"{ABSOLUTE_MAX_PULSE_US}"
+        )
+    if not math.isfinite(args.sweep_delay) or args.sweep_delay < 0:
+        parser.error("--sweep-delay must be a finite, non-negative number")
+    if not math.isfinite(args.sweep_step) or not 0 < args.sweep_step <= 1:
+        parser.error("--sweep-step must be finite and greater than 0 and at most 1")
 
-    if not _is_raspberry_pi():
+
+def main(arguments: list[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    _validate_args(parser, args)
+
+    if not is_raspberry_pi():
         print("ERROR: This command must be run on a Raspberry Pi.", file=sys.stderr)
         print(
-            "Run it via 'uv run drone-deploy --servo' from the laptop.", file=sys.stderr
+            "Run it via 'uv run drone-deploy --servo --mode <mode> "
+            f"--confirm-actuation {ACTUATION_CONFIRMATION}' from the laptop.",
+            file=sys.stderr,
         )
         print(f"Wiring details for reference:\n{WIRING_DIAGRAM}", file=sys.stderr)
         return 1
@@ -131,6 +161,7 @@ def main() -> int:
             args.pin,
             min_pulse_width=args.min_us / 1_000_000.0,
             max_pulse_width=args.max_us / 1_000_000.0,
+            initial_value=None,
         )
     except Exception as error:
         print(
