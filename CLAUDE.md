@@ -61,8 +61,15 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev ruff format --check .
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev ruff check .
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev ty check .
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev pytest -q
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev lint-imports
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --group dev deptry .
 git diff --check
 ```
+
+`lint-imports` enforces the `.importlinter` contracts that encode the package
+layering described under *Code organization*; `deptry` checks declared versus
+imported dependencies. Both must stay green. Their configuration carries the
+reason for every ignore — extend the reasons rather than widening the ignores.
 
 The base dependency set is intentionally laptop-light. Pi vision dependencies
 live in the `raspi` group. Picamera2, libcamera, gpiozero, and other Pi-native
@@ -75,7 +82,7 @@ to module scope merely to simplify annotations. Keep `default-groups = []`.
   USB and/or Pi `/dev/serial0`.
 - `drone-lidar`: disarmed recording of existing MTF-01P range/flow telemetry.
 - `drone-record`: disarmed camera, AprilTag, and MAVLink dataset capture.
-- `drone-apriltag` and `drone-picam`: stationary vision diagnostics only.
+- `drone-apriltag`: stationary vision diagnostics only.
 - `drone-config-export` / `drone-config-sync`: read-only parameter capture;
   only `drone-config-sync --publish` intentionally writes to Git.
 - `drone-console`: launches an interactive MAVProxy console. MAVProxy is
@@ -93,8 +100,8 @@ to module scope merely to simplify annotations. Keep `default-groups = []`.
   actuator/flight paths require explicit confirmation and must fail closed when
   their health, controller, localization, or physical prerequisites are absent.
 - `autoconnect` / `manuconnect`: choose Tailscale, the Pi access point, or USB.
-  Transport selection belongs in `connect.py`; `pi_usb_ssh.py` implements only
-  the USB transport.
+  Transport selection belongs in `link/connect.py`; `link/usb_ssh.py`
+  implements only the USB transport.
 - `drone-deploy`: synchronize the explicit runtime allowlist, create a Pi venv
   with `--system-site-packages`, install the `raspi` group, and optionally run
   one selected mode. Preserve secret exclusions and remote-path validation.
@@ -112,23 +119,37 @@ package entry points and `scripts/` directly; do not add duplicate wrappers.
 
 ## Code organization
 
-- `ai_drone/cli/`: thin hardware-facing command adapters.
-- `apriltags.py`, `nearest_person.py`, `recording.py`, `stream.py`: reusable
-  vision/recording logic with hardware imports kept lazy.
-- `controller.py` / `follower.py`: reusable MAVLink flight control and
-  person-follow state. `cli/control.py` is the only command adapter for them.
-- `config_snapshot.py` / `config_sync.py`: deterministic configuration capture
-  and host synchronization.
-- `mavlink_devices.py` / `mavlink_safety.py`: shared endpoint, source, and
-  armed-state rules. Do not duplicate MAVLink bit decoding in CLIs.
-- `durability.py`: the canonical atomic-write and bounded-fsync helpers.
-  Artifacts must be written through it; do not add a second atomic-write or
-  sync implementation.
-- `platform.py` / `cli_parsing.py`: shared Pi detection and argument parsers.
-- `connect.py`, `pi_targets.py`, `pi_wifi.py`, `pi_usb_ssh.py`, `deploy.py`:
-  cross-platform connection and deployment components.
+The package is grouped by concern. Subpackages carry the namespace, so module
+names inside them do not repeat it (`link/wifi.py`, not `link/pi_wifi.py`).
+
+- `ai_drone/cli/`: thin hardware-facing command adapters. Nothing outside
+  `cli/` may import from `cli/`.
+- `ai_drone/link/`: getting the development machine to the Pi.
+  `connect.py` owns transport selection (Tailscale, access point, USB);
+  `wifi.py` and `usb_ssh.py` implement one transport each; `targets.py` holds
+  the shared host/address facts; `deploy.py` pushes the runtime allowlist.
+  These are cross-platform (Linux, macOS, Windows): keep the pure command
+  builders separate from the subprocess calls so both stay testable offline.
+- `ai_drone/mavlink/`: everything that speaks to the flight controller but is
+  not flight control. `devices.py` and `safety.py` hold the shared endpoint,
+  source, and armed-state rules — do not duplicate MAVLink bit decoding in
+  CLIs. `parameters.py`, `console.py`, and `health.py` build on them.
+- `ai_drone/vision/`: `apriltags.py` and `stream.py`, camera-facing logic with
+  hardware imports kept lazy.
+- `ai_drone/flight/`: `controller.py` and `follower.py`, the MAVLink flight
+  control and person-follow state. `cli/control.py` is their only adapter.
+- `ai_drone/config/`: `snapshot.py` / `sync.py`, deterministic configuration
+  capture and host synchronization.
+- Shared leaves at package root, imported by everything and importing nothing
+  internal: `durability.py` (the canonical atomic-write and bounded-fsync
+  helpers — artifacts must be written through it; do not add a second
+  implementation), `platform.py`, `cli_parsing.py`, and `recording.py`.
 - `tests/`: offline tests. Hardware-specific behavior must be expressed behind
   injectable boundaries so it remains testable without a Pi or vehicle.
+
+Dependencies run one way: `cli/` → concern packages → shared leaves. A shared
+leaf must not import a concern package, and no concern package may import
+`cli/`. There are no import cycles in `ai_drone`; keep it that way.
 
 Prefer small typed functions, immutable dataclasses for validated settings,
 finite numeric validation at CLI/file boundaries, bounded queues and shutdowns,

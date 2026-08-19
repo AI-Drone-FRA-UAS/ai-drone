@@ -40,7 +40,6 @@ flight commands are intentionally not maintained.
 | `drone-health` | Read-only heartbeat and parameter round-trip over USB and Pi UART |
 | `drone-console` | Interactive MAVProxy console for expert inspection |
 | `drone-lidar` | Record rangefinder and optical-flow MAVLink telemetry while disarmed |
-| `drone-picam` | Stream IMX500 person detections without controlling the aircraft |
 | `drone-apriltag` | Detect AprilTags; metric pose requires camera calibration |
 | `drone-record` | Record synchronized camera, AprilTag, and MAVLink data while disarmed |
 | `drone-servo` | Guarded direct-BCM12 payload-servo bench test |
@@ -114,7 +113,6 @@ arms, or moves the aircraft.
 Run the forward-facing camera diagnostics:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy --picam
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --apriltag --backend auto --tag-size 0.160
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
