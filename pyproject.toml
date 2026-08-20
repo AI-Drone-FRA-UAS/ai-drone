@@ -73,7 +73,7 @@ exclude = ["attic"]
 # be treated as a development-only group.
 # aitrios-rpi-sample-apps/ is a vendored third-party sample tree (already in
 # deploy.EXCLUDE_NAMES); tests/ legitimately import the dev group.
-exclude = ["attic", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
+exclude = ["artifacts", "attic", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
 non_dev_dependency_groups = ["raspi"]
 
 [tool.deptry.per_rule_ignores]
