@@ -11,6 +11,7 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.mavlink import arming_checks
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
@@ -60,6 +61,8 @@ class DroneController:
         self.current_altitude: float | None = None
         self.local_position_altitude: float | None = None
         self.battery_voltage: float | None = None
+        self.ekf_flags: int | None = None
+        self._yaw_rad: float | None = None
         self.flight_mode: str | None = None
         self.is_armed = False
         self.is_flying = False
@@ -91,8 +94,15 @@ class DroneController:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
-            if self._flight_started_by_controller and not self._landing_commanded:
-                self.emergency_stop()
+            if self._flight_started_by_controller:
+                # This controller put the aircraft in the air, so it does not
+                # get to hang up until the aircraft says it is disarmed.
+                if not self.ensure_landed():
+                    logger.error(
+                        "VEHICLE DID NOT CONFIRM DISARM. It may still be flying. "
+                        "LAND was requested repeatedly and never acknowledged. "
+                        "Do not approach it; cut power only from a safe distance."
+                    )
             elif self._arm_command_sent or self._armed_by_controller:
                 self._request_disarm()
         except Exception as error:
@@ -143,6 +153,7 @@ class DroneController:
                 mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR: float(rate_hz),
                 mavlink.MAVLINK_MSG_ID_SYS_STATUS: 2.0,
                 mavlink.MAVLINK_MSG_ID_ATTITUDE: float(rate_hz),
+                mavlink.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 2.0,
             },
         )
 
@@ -196,6 +207,10 @@ class DroneController:
         if message_type in {"ATTITUDE", "LOCAL_POSITION_NED"}:
             timestamp = getattr(message, "time_boot_ms", None)
             timestamp_ok = self._timestamp_is_fresh(timestamp, now)
+            if message_type == "ATTITUDE" and timestamp_ok:
+                yaw = float(message.yaw)
+                if math.isfinite(yaw):
+                    self._yaw_rad = yaw
             if message_type == "LOCAL_POSITION_NED" and timestamp_ok:
                 altitude = -float(message.z)
                 if math.isfinite(altitude):
@@ -225,6 +240,8 @@ class DroneController:
                 return
             self.current_altitude = altitude
             self.last_telemetry_time = now
+        elif message_type == "EKF_STATUS_REPORT":
+            self.ekf_flags = int(message.flags)
         elif message_type == "SYS_STATUS":
             voltage = float(message.voltage_battery) / 1_000.0
             if math.isfinite(voltage) and voltage > 0.0:
@@ -294,11 +311,9 @@ class DroneController:
         self._process_message(heartbeat, time.monotonic())
 
     def verify_arming_checks(self) -> None:
-        value = request_parameter(self._connection(), "ARMING_CHECK")
-        if value != 1.0:
-            raise FlightSafetyError(
-                f"ARMING_CHECK={value:g}; flight requires exact value 1 (all checks)"
-            )
+        value = request_parameter(self._connection(), arming_checks.PARAMETER)
+        if not arming_checks.is_acceptable(value):
+            raise FlightSafetyError(arming_checks.describe(value))
 
     def verify_onboard_logging(self) -> None:
         backend = float(request_parameter(self._connection(), "LOG_BACKEND_TYPE"))
@@ -332,7 +347,7 @@ class DroneController:
             time.sleep(0.05)
         raise TimeoutError(f"flight controller did not confirm {requested} mode")
 
-    def arm(self, timeout: float = 10.0) -> None:
+    def arm(self, timeout: float = 10.0, mode: str = "GUIDED") -> None:
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         self.update_telemetry()
         if self.is_armed and not self._armed_by_controller:
@@ -345,23 +360,62 @@ class DroneController:
         self.verify_onboard_logging()
         if self.wait_for_altitude(timeout=min(timeout, 3.0)) is None:
             raise FlightSafetyError("no fresh downward DISTANCE_SENSOR altitude")
-        self.set_mode("GUIDED")
+        self.set_mode(mode)
         self._fresh_disarmed()
         if not self.altitude_is_fresh():
             raise FlightSafetyError("downward altitude became stale before arming")
         self._arm_command_sent = True
         self._connection().arducopter_arm()
+        armed, refusals = self._await_arm_confirmation(timeout)
+        if armed:
+            self._armed_by_controller = True
+            return
+        if refusals:
+            raise FlightSafetyError(
+                "flight controller refused to arm: " + "; ".join(refusals)
+            )
+        raise TimeoutError(
+            "flight controller did not confirm arming and gave no reason"
+        )
+
+    def _await_arm_confirmation(self, timeout: float) -> tuple[bool, list[str]]:
+        """Wait for the armed heartbeat, collecting whatever the vehicle says.
+
+        ArduPilot reports why it will not arm as STATUSTEXT.  Discarding those
+        lines and raising a bare timeout throws away the only explanation that
+        exists, which is exactly what an operator needs.
+
+        Returns whether arming was confirmed, and every distinct line the
+        vehicle sent while we waited.
+        """
+
+        refusals: list[str] = []
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             message = self._connection().recv_match(
-                type="HEARTBEAT", blocking=True, timeout=0.5
+                type=["HEARTBEAT", "STATUSTEXT", "COMMAND_ACK"],
+                blocking=True,
+                timeout=0.5,
             )
-            if message is not None:
-                self._process_message(message, time.monotonic())
+            if message is not None and self._matching_vehicle_message(message):
+                kind = message.get_type()
+                if kind == "HEARTBEAT":
+                    self._process_message(message, time.monotonic())
+                elif kind == "STATUSTEXT":
+                    line = str(message.text).strip()
+                    if line and line not in refusals:
+                        refusals.append(line)
+                elif int(getattr(message, "command", 0)) == (
+                    mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+                ):
+                    result = int(message.result)
+                    if result != mavlink.MAV_RESULT_ACCEPTED:
+                        line = f"arm command rejected (MAV_RESULT {result})"
+                        if line not in refusals:
+                            refusals.append(line)
             if self.is_armed:
-                self._armed_by_controller = True
-                return
-        raise TimeoutError("flight controller did not confirm arming")
+                return True, refusals
+        return False, refusals
 
     def _request_disarm(self) -> None:
         self._connection().arducopter_disarm()
@@ -444,7 +498,14 @@ class DroneController:
         )
 
     def emergency_stop(self) -> None:
-        """Command LAND without force-disarming a possibly airborne vehicle."""
+        """Request LAND without force-disarming a possibly airborne vehicle.
+
+        This is deliberately a single, fast, unverified request so a guard can
+        call it the instant something is wrong.  It is *not* sufficient on its
+        own: a request that was lost or refused leaves the aircraft flying.
+        Every caller must follow it with ``ensure_landed`` before giving up the
+        connection.
+        """
         if self.connection is None:
             return
         self._landing_commanded = True
@@ -456,6 +517,184 @@ class DroneController:
             mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mapping["LAND"],
         )
+
+    def ensure_landed(self, timeout: float = 60.0, retry_every: float = 1.0) -> bool:
+        """Keep commanding LAND until the vehicle confirms it has disarmed.
+
+        A single ``SET_MODE`` can be lost or refused, and an aircraft that never
+        received it keeps doing whatever it was last told to do.  This re-sends
+        the request on an interval and only reports success when the vehicle's
+        own heartbeat says it is disarmed.
+
+        Returns whether disarm was confirmed.  It never raises for a failed
+        landing and never closes the connection: the caller is expected to stay
+        connected and keep trying, because hanging up on an airborne aircraft
+        is the one thing that must not happen.
+        """
+
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=300.0)
+        finite_in_range(retry_every, "retry_every", minimum=0.1, maximum=10.0)
+        if self.connection is None:
+            return False
+
+        deadline = time.monotonic() + timeout
+        next_request = 0.0
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_request:
+                next_request = now + retry_every
+                try:
+                    self.emergency_stop()
+                except (OSError, RuntimeError, FlightSafetyError) as error:
+                    logger.error("could not request LAND: %s", error)
+            try:
+                self.update_telemetry()
+            except FlightSafetyError:
+                # An altitude-ceiling complaint while we are already landing
+                # tells us nothing new and must not stop the landing.
+                pass
+            except (OSError, RuntimeError) as error:
+                logger.error("telemetry failed while landing: %s", error)
+            if not self.is_armed:
+                self.is_flying = False
+                return True
+            time.sleep(0.1)
+        return False
+
+    # -- position-free flight ------------------------------------------
+
+    # SET_ATTITUDE_TARGET type mask: use the attitude quaternion and the
+    # thrust field, ignore the three body rate fields.
+    ATTITUDE_TARGET_MASK = 0b0000_0111
+    # With GUID_OPTIONS bit 3 clear -- the ArduPilot default -- the thrust
+    # field of SET_ATTITUDE_TARGET is a *climb rate*, not a throttle: 0.5
+    # holds altitude, 1.0 climbs at PILOT_SPEED_UP.  ArduPilot keeps the
+    # altitude loop, so this never commands raw motor power.
+    NEUTRAL_THRUST = 0.5
+    # Hard bounds on what this class will ever send, whatever it is asked for.
+    MIN_THRUST = 0.25
+    MAX_THRUST = 0.80
+    # The measured climb rate this class tolerates before it stops asking for a
+    # climb at all.  The meaning of the thrust field depends on the vehicle's
+    # GUID_OPTIONS; if that assumption is ever wrong, a "gentle" request becomes
+    # a fast climb and nothing else here would notice.  Measuring the aircraft
+    # instead of trusting the request is the only check that survives being
+    # wrong about the protocol.
+    MAX_MEASURED_CLIMB_MS = 0.45
+    # Short on purpose.  If the thrust field turns out to mean throttle, the
+    # climb is violent, and every extra tenth of a second of detection window
+    # is another tenth of a metre of altitude before anything reacts.
+    CLIMB_RATE_WINDOW_S = 0.2
+
+    def send_level_climb(self, climb: float) -> None:
+        """Command a level attitude and a normalized climb rate.
+
+        ``climb`` is -1.0 to 1.0, where 0.0 holds altitude and 1.0 is a climb
+        at ``PILOT_SPEED_UP``.  The vehicle must be in a GUIDED variant; the
+        flight controller retains attitude stabilization and altitude control.
+        """
+
+        rate = finite_in_range(climb, "climb", minimum=-1.0, maximum=1.0)
+        if not self.is_armed:
+            raise FlightSafetyError("climb commands require an armed vehicle")
+        thrust = min(
+            self.MAX_THRUST, max(self.MIN_THRUST, self.NEUTRAL_THRUST + rate / 2.0)
+        )
+        half_yaw = (self._yaw_rad or 0.0) / 2.0
+        self._connection().mav.set_attitude_target_send(
+            0,
+            self.target_system,
+            self.target_component,
+            self.ATTITUDE_TARGET_MASK,
+            [math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)],
+            0.0,
+            0.0,
+            0.0,
+            thrust,
+        )
+
+    def takeoff_without_position(
+        self,
+        target_alt: float,
+        *,
+        climb: float = 0.5,
+        timeout: float = 30.0,
+    ) -> None:
+        """Climb to ``target_alt`` in GUIDED_NOGPS, using the downward range.
+
+        This exists because a flow-only aircraft cannot arm in GUIDED at all:
+        EKF3 does not begin optical-flow navigation until it has detected a
+        takeoff, so the position estimate GUIDED requires does not exist while
+        the aircraft is on the floor.  GUIDED_NOGPS arms without one, and the
+        rangefinder is the altitude reference the whole way up.
+        """
+
+        target = finite_in_range(
+            target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
+        )
+        finite_in_range(climb, "climb", minimum=0.05, maximum=1.0)
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
+
+        if not self.is_armed:
+            self.arm(mode="GUIDED_NOGPS")
+        if not self._armed_by_controller:
+            raise FlightSafetyError("takeoff requires arming by this controller")
+        if self.wait_for_altitude(timeout=3.0) is None:
+            raise FlightSafetyError("no fresh downward altitude before takeoff")
+
+        self._flight_started_by_controller = True
+        self.is_flying = True
+        reference: tuple[float, float] | None = None
+        started = time.monotonic()
+        deadline = started + timeout
+        try:
+            while time.monotonic() < deadline:
+                self.update_telemetry()
+                now = time.monotonic()
+                if now - started > 2.0 and (
+                    not self.altitude_is_fresh() or not self.heartbeat_is_fresh()
+                ):
+                    self.emergency_stop()
+                    raise FlightSafetyError("telemetry became stale during takeoff")
+                altitude = self.current_altitude
+                if (
+                    self.last_telemetry_time >= started
+                    and altitude is not None
+                    and altitude >= target
+                ):
+                    return
+                if altitude is not None:
+                    if reference is None:
+                        reference = (now, altitude)
+                    elif now - reference[0] >= self.CLIMB_RATE_WINDOW_S:
+                        measured = (altitude - reference[1]) / (now - reference[0])
+                        if measured > self.MAX_MEASURED_CLIMB_MS:
+                            self.emergency_stop()
+                            raise FlightSafetyError(
+                                f"climbing at {measured:.2f} m/s, faster than the "
+                                f"{self.MAX_MEASURED_CLIMB_MS:.2f} m/s limit; the "
+                                "commanded climb is not producing the expected motion"
+                            )
+                        reference = (now, altitude)
+                self.send_level_climb(climb)
+                time.sleep(0.1)
+        except BaseException:
+            self.emergency_stop()
+            raise
+        self.emergency_stop()
+        raise TimeoutError("takeoff altitude was not reached")
+
+    def hold_altitude(self, duration: float, on_sample: Any = None) -> None:
+        """Hold the current altitude by commanding a zero climb rate."""
+
+        finite_in_range(duration, "duration", minimum=0.1, maximum=600.0)
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            self.update_telemetry()
+            if on_sample is not None:
+                on_sample(self)
+            self.send_level_climb(0.0)
+            time.sleep(0.1)
 
     def send_velocity_body(
         self,

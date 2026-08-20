@@ -12,9 +12,18 @@ from ai_drone.flight.controller import DroneController, FlightSafetyError
 from ai_drone.flight.dataflash import latest_dataflash_log
 from ai_drone.flight.guards import FlightGuardError, check_safety_guardrails
 from ai_drone.flight.recording import FlightRecorder
+from ai_drone.mavlink.preflight import (
+    assess,
+    describe_ekf_flags,
+    gather,
+    guided_takeoff_blockers,
+)
 from ai_drone.validation import finite_in_range
 
 FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
+# A separate phrase from FLIGHT_CONFIRMATION on purpose: this one asserts a
+# physical fact about the aircraft that nothing in software can verify.
+ARM_TEST_CONFIRMATION = "PROPELLERS_REMOVED"
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +38,15 @@ def _validate_common(args: argparse.Namespace) -> None:
     finite_in_range(args.duration, "--duration", minimum=0.1, maximum=3_600.0)
     if hasattr(args, "min_battery"):
         finite_in_range(args.min_battery, "--min-battery", minimum=0.0, maximum=60.0)
+
+
+def _require_arm_test_confirmation(args: argparse.Namespace) -> None:
+    if args.confirm_props_off != ARM_TEST_CONFIRMATION:
+        raise ValueError(
+            f"--confirm-props-off must be exactly {ARM_TEST_CONFIRMATION}; this "
+            "spins the motors, and no software check can see whether the "
+            "propellers are still fitted"
+        )
 
 
 def _require_flight_confirmation(args: argparse.Namespace) -> None:
@@ -62,10 +80,17 @@ def _flight_session(args: argparse.Namespace):
         except BaseException as error:
             record.finish(error)
             if drone.is_flying:
-                try:
-                    drone.emergency_stop()
-                except Exception:
-                    logger.exception("could not request emergency LAND")
+                # A guard already requested LAND, but a request is not a
+                # landing.  Stay connected and keep asking until the vehicle
+                # says it is disarmed; letting go here is what leaves an
+                # aircraft in the air with nobody talking to it.
+                landed = drone.ensure_landed()
+                record.event("emergency_landing", confirmed=landed)
+                if not landed:
+                    logger.error(
+                        "VEHICLE DID NOT CONFIRM DISARM. It may still be flying. "
+                        "Do not approach it; cut power only from a safe distance."
+                    )
             raise
         else:
             try:
@@ -120,6 +145,130 @@ def cmd_status(args: argparse.Namespace) -> int:
                 )
                 next_report = now + 1.0
             time.sleep(0.05)
+    return 0
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """Report every reason a guarded takeoff would refuse to start.
+
+    Read-only: this sends stream and parameter requests and nothing else.
+    """
+
+    with _controller(args) as drone:
+        snapshot = gather(drone._connection(), timeout=args.duration)
+
+    checks = assess(snapshot)
+    print(f"vehicle: {snapshot.mode or 'unknown mode'}, armed={snapshot.armed}")
+    if snapshot.ekf_flags is not None:
+        print(f"EKF: {describe_ekf_flags(snapshot.ekf_flags)}")
+    print()
+    for check in checks:
+        print(f"[{check.marker:7s}] {check.name}: {check.detail}")
+    for line in snapshot.statustexts:
+        print(f"[vehicle ] {line}")
+
+    blockers = guided_takeoff_blockers(checks)
+    print()
+    if not blockers:
+        print(
+            "GUIDED takeoff: no blocker found. Re-read the checks above before flying."
+        )
+        return 0
+    print("GUIDED takeoff: BLOCKED by " + ", ".join(check.name for check in blockers))
+    return 2
+
+
+def cmd_arm_test(args: argparse.Namespace) -> int:
+    """Arm in GUIDED, hold at idle, then disarm. Never commands a takeoff.
+
+    This is the rung between ``preflight`` and ``hover``: it exercises the exact
+    arming path a flight uses -- check verification, GUIDED mode, fresh
+    disarmed heartbeat, arm confirmation -- and stops there.  A vehicle that
+    cannot arm in GUIDED has no business being asked to take off, and finding
+    that out with the propellers off costs nothing.
+    """
+
+    _require_arm_test_confirmation(args)
+    with _flight_session(args) as (drone, record):
+        record.event("arm_test_started", mode=args.mode)
+        drone.arm(mode=args.mode)
+        record.event("armed", ekf_flags=drone.ekf_flags)
+        print(f"armed in {drone.flight_mode}; holding for {args.duration:.1f} s")
+        _watch_navigation(drone, args.duration, args.min_battery, record)
+        record.event("disarming", ekf_flags=drone.ekf_flags)
+        drone.disarm()
+        record.event("disarmed")
+        print("disarmed")
+    return 0
+
+
+def _watch_navigation(
+    drone: DroneController,
+    duration: float,
+    min_battery_v: float,
+    record: FlightRecorder,
+) -> None:
+    """Hold under the guards, reporting what the EKF makes of the world.
+
+    ``pred_horiz_pos_rel`` is the flag ArduPilot consults when a disarmed
+    vehicle asks to enter a mode that needs a position, so watching it appear
+    (or fail to) is the whole point of a bench arm test on this airframe.
+    """
+
+    deadline = time.monotonic() + duration
+    next_report = 0.0
+    while time.monotonic() < deadline:
+        drone.update_telemetry()
+        try:
+            check_safety_guardrails(drone, min_battery_v)
+        except FlightGuardError as error:
+            raise FlightSafetyError(str(error)) from error
+        now = time.monotonic()
+        if now >= next_report:
+            next_report = now + 0.5
+            flags = drone.ekf_flags
+            altitude = (
+                f"{drone.current_altitude:.2f} m"
+                if drone.current_altitude is not None
+                else "n/a"
+            )
+            print(
+                f"  alt={altitude} ekf={describe_ekf_flags(flags) if flags is not None else 'n/a'}"
+            )
+            record.event("navigation_sample", ekf_flags=flags)
+        time.sleep(0.05)
+
+
+def cmd_nogps_takeoff(args: argparse.Namespace) -> int:
+    """Take off, hold, and land without ever needing a position estimate.
+
+    The aircraft this exists for has no GPS and navigates from optical flow,
+    which EKF3 only starts fusing once it has detected a takeoff.  That makes a
+    GUIDED takeoff from the floor circular, so this climbs in GUIDED_NOGPS on
+    the downward rangefinder instead.  ArduPilot keeps attitude and altitude
+    control throughout; this only ever asks for a bounded climb rate.
+    """
+
+    _require_flight_confirmation(args)
+    with _flight_session(args) as (drone, record):
+        record.event("nogps_takeoff_started", target_alt_m=args.takeoff_alt)
+        print(f"climbing to {args.takeoff_alt:.2f} m in GUIDED_NOGPS")
+        drone.takeoff_without_position(args.takeoff_alt, climb=args.climb)
+        record.event("hover_started", ekf_flags=drone.ekf_flags)
+        print(f"holding for {args.duration:.1f} s")
+
+        def sample(controller: DroneController) -> None:
+            try:
+                check_safety_guardrails(controller, args.min_battery)
+            except FlightGuardError as error:
+                raise FlightSafetyError(str(error)) from error
+
+        drone.hold_altitude(args.duration, on_sample=sample)
+        record.event("landing_started", ekf_flags=drone.ekf_flags)
+        print("landing")
+        drone.land()
+        record.event("landed")
+        print("landed")
     return 0
 
 
@@ -184,6 +333,43 @@ def _parser() -> argparse.ArgumentParser:
     _add_common_options(status, include_takeoff=False)
     status.add_argument("--duration", type=float, default=5.0)
     status.set_defaults(handler=cmd_status)
+
+    preflight = commands.add_parser(
+        "preflight",
+        help="read-only: report what would block a guarded takeoff",
+    )
+    _add_common_options(preflight, include_takeoff=False)
+    preflight.add_argument("--duration", type=float, default=12.0)
+    preflight.set_defaults(handler=cmd_preflight)
+
+    arm_test = commands.add_parser(
+        "arm-test",
+        help="propellers off: arm in GUIDED, hold at idle, disarm. No takeoff.",
+    )
+    _add_common_options(arm_test, include_takeoff=True)
+    arm_test.add_argument("--duration", type=float, default=3.0)
+    arm_test.add_argument(
+        "--mode",
+        default="GUIDED",
+        help="mode to arm in; ALT_HOLD needs no position estimate",
+    )
+    arm_test.add_argument("--confirm-props-off")
+    arm_test.set_defaults(handler=cmd_arm_test)
+
+    nogps = commands.add_parser(
+        "nogps-takeoff",
+        help="climb, hold and land without a position estimate (GUIDED_NOGPS)",
+    )
+    _add_common_options(nogps, include_takeoff=True)
+    nogps.add_argument("--duration", type=float, default=3.0)
+    nogps.add_argument(
+        "--climb",
+        type=float,
+        default=0.5,
+        help="normalized climb rate, 1.0 being PILOT_SPEED_UP",
+    )
+    nogps.add_argument("--confirm-flight")
+    nogps.set_defaults(handler=cmd_nogps_takeoff)
 
     hover = commands.add_parser(
         "hover",

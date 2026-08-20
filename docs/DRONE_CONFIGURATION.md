@@ -33,10 +33,29 @@ guarantee that the physical build is unchanged.
 configurable pre-arm check. `0` skips those categories, while other non-zero
 values select only a subset.
 
-Never arm, fly, or run the motor utility unless the live value is exactly `1`
-and every reported `PreArm:` or `Arm:` failure has been resolved. Restoring the
-checks does not itself prove the airframe, camera, payload, surroundings, or
-failsafes safe.
+This project permits exactly two values, and `ai_drone.mavlink.arming_checks`
+is where they are defined:
+
+| Value | Meaning | When |
+| --- | --- | --- |
+| `1` | every configurable check | the default, and required whenever a GPS receiver is fitted |
+| `1043958` | every check except GPS lock and GPS configuration | this airframe, which has no GPS receiver at all |
+
+The GPS relaxation is not a convenience. This aircraft navigates from a
+downward rangefinder and the MTF-01P's optical flow; `GPS1_TYPE` is `0` because
+there is no receiver, and the two GPS checks can therefore never pass. Clearing
+exactly those two bits leaves the IMU, compass, barometer, battery, board
+voltage, logging, parameter, and rangefinder checks running and reporting.
+
+`ARMING_CHECK=0` is never acceptable. In that state ArduPilot emits no
+`PreArm:` message at all, so the aircraft cannot report what is wrong with it —
+which is how a misconfigured second rangefinder went unnoticed on this airframe
+until 2026-08-20.
+
+Never arm, fly, or run the motor utility unless the live value is one of the
+two permitted ones and every reported `PreArm:` or `Arm:` failure has been
+resolved. A permitted value does not itself prove the airframe, camera,
+payload, surroundings, or failsafes safe.
 
 Reference: [ArduPilot pre-arm safety checks](https://ardupilot.org/copter/docs/common-prearm-safety-checks.html).
 

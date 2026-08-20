@@ -16,6 +16,7 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.mavlink import arming_checks
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
@@ -248,11 +249,11 @@ def main(arguments: list[str] | None = None) -> int:
         connection.target_system = heartbeat.get_srcSystem()
         connection.target_component = heartbeat.get_srcComponent()
 
-        arming_check = float(_request_parameter(connection, "ARMING_CHECK"))
-        if arming_check != 1.0:
+        arming_check = float(_request_parameter(connection, arming_checks.PARAMETER))
+        if not arming_checks.is_acceptable(arming_check):
             raise SystemExit(
-                f"ARMING_CHECK={arming_check:g}. Set ARMING_CHECK=1 (all checks) and "
-                "resolve every pre-arm failure before using this utility."
+                f"{arming_checks.describe(arming_check)} Resolve every pre-arm "
+                "failure before using this utility."
             )
 
         motor_count = _configured_motor_count(connection)

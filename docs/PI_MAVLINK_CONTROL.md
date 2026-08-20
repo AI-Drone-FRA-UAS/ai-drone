@@ -12,6 +12,9 @@ this aircraft. Check the newest `state/` capture and `params/` dump before use.
 | Mode | Behavior | Hardware effect |
 | --- | --- | --- |
 | `status` | Read altitude, battery, mode, and armed state | Read-only |
+| `preflight` | Report what would block a guarded takeoff | Read-only |
+| `arm-test` | Arm in a chosen mode, hold at idle, disarm | Arms; no takeoff |
+| `nogps-takeoff` | Climb, hold and land with no position estimate | Arms and flies |
 | `hover` (`takeoff` alias) | Guided takeoff, timed hold, then land | Arms and flies |
 | `velocity-test` | Bounded body-frame velocity/yaw, then stop and land | Arms and flies |
 
@@ -30,7 +33,103 @@ The safe starting point is:
 uv run drone-control status --duration 10
 ```
 
-`status` sends no arm, mode-change, or setpoint command. Every live flight mode
+`status` sends no arm, mode-change, or setpoint command.
+
+## Pre-arm assessment
+
+`status` answers "is the link alive". `preflight` answers the question that
+actually blocks a flight test:
+
+```bash
+uv run drone-control preflight
+```
+
+It reads parameters, the EKF status report, the downward rangefinder, and the
+battery, then prints one verdict per check and names whatever would stop a
+GUIDED takeoff. It sends only stream and parameter requests: no arm, no mode
+change, no setpoint, and no parameter write. It exits `2` when a blocker
+remains, so it can gate a procedure.
+
+Two failures are worth recognizing on sight:
+
+- `arming_checks: ARMING_CHECK=0` means every pre-arm check is bypassed and the
+  vehicle will not report a single `PreArm:` failure. `DroneController` refuses
+  to arm in this state. Fix it with `drone-arming-checks restore`, adding
+  `--without-gps` on this airframe because it has no GPS receiver; see
+  [flight-controller configuration](DRONE_CONFIGURATION.md).
+- `horizontal_position` fails when the EKF is in constant-position mode with no
+  horizontal source. A GUIDED takeoff cannot work without one: `EK3_SRC1_POSXY`
+  must name a working source (GPS outdoors, or optical flow indoors) before
+  `hover` or `velocity-test` can do anything but be refused.
+
+## Flying without a position estimate
+
+This aircraft has no GPS receiver and navigates from the MTF-01P's optical
+flow. EKF3 does not begin fusing flow until it has detected a takeoff — it
+waits for the rangefinder to read about 5 cm more than it did at arming — so
+the position estimate GUIDED requires does not exist while the aircraft is on
+the floor. `hover` and `velocity-test` are therefore refused with
+`Arm: Need Position Estimate`, and no parameter changes that: it is ArduPilot's
+design, not a misconfiguration.
+
+`nogps-takeoff` is the way up:
+
+```bash
+uv run drone-control nogps-takeoff --takeoff-alt 0.3 --max-alt 0.5 \
+  --duration 3 --confirm-flight FLIGHT_TEST_READY
+```
+
+It arms in `GUIDED_NOGPS`, which needs no position, and climbs on the downward
+rangefinder. With `GUID_OPTIONS` bit 3 clear — the ArduPilot default — the
+`thrust` field of `SET_ATTITUDE_TARGET` is a *climb rate* rather than a
+throttle: `0.5` holds altitude and `1.0` climbs at `PILOT_SPEED_UP`. ArduPilot
+keeps both the attitude loop and the altitude loop; this command never asks for
+raw motor power, and `DroneController` clamps every thrust it sends to
+`[0.25, 0.80]` regardless of what it is asked for.
+
+Once the aircraft is off the ground the EKF starts flow navigation, so a later
+switch to `GUIDED` or `LOITER` becomes possible. That handover is not yet
+implemented.
+
+## Rehearsing a flight without an aircraft
+
+`drone-rehearse` runs the real `drone-control` command against
+`ai_drone.sim.vehicle`, a MAVLink double that answers like ArduPilot Copter.
+The flight code under test is the code that flies the aircraft -- same arming
+gate, same guards, same LAND cleanup, same flight recording. Only the vehicle
+is simulated, and the endpoint is always loopback, so a rehearsal cannot reach
+a serial port.
+
+```bash
+uv run drone-rehearse hover
+uv run drone-rehearse velocity-test
+uv run drone-rehearse preflight
+```
+
+The reason this exists is `--fault`. A guard nobody has watched stop an
+aircraft is a guard nobody should trust, and the only safe place to watch one
+trip is here:
+
+| `--fault` | What it proves |
+| --- | --- |
+| `refuse-arm` | An arm refusal aborts before anything spins |
+| `no-takeoff` | A takeoff that never climbs times out and lands |
+| `altitude-runaway` | The altitude ceiling stops an uncommanded climb |
+| `battery-sag` | The battery guard lands on a collapsing pack |
+| `stale-altitude` | A dead rangefinder stream lands the aircraft |
+| `heartbeat-loss` | A dead telemetry link lands the aircraft |
+| `refuse-land` | An ignored LAND is reported, and the controller still does not force-disarm an airborne vehicle |
+
+Every fault applies to `nogps-takeoff` as well as `hover`.
+
+```bash
+uv run drone-rehearse hover --fault battery-sag
+```
+
+A rehearsal with an injected fault succeeds when the fault was caught. The
+command prints what the simulated vehicle actually did, so the recovery -- LAND
+commanded, disarm refused while airborne, descent, disarm on the ground -- is
+visible rather than assumed. Every live flight mode
 requires the exact acknowledgement shown by its `--help`; do not bypass that
 gate in wrappers or documentation.
 
@@ -49,19 +148,21 @@ fusion. Body-frame velocity follows NED conventions:
 - positive yaw rate turns right.
 
 The controller filters telemetry to the selected vehicle, rejects stale data,
-requires exactly `ARMING_CHECK=1` before an arm path, verifies state
+requires a permitted `ARMING_CHECK` value before an arm path, verifies state
 transitions, caps commands, and uses bounded timeouts. Cleanup lands only a
 flight started by that controller instance.
 
 ## Required validation sequence
 
-1. Run the repository checks and every control mode in ArduPilot Copter SITL,
-   including rejected arm, stale telemetry, interruption, and landing timeout.
+1. Run the repository checks, then rehearse every control mode and every
+   `drone-rehearse --fault` case: rejected arm, stale telemetry, lost
+   heartbeat, altitude runaway, battery collapse, and landing timeout.
 2. Rigidly mount and calibrate the IMU, compass, optical flow, downward
    rangefinder, and any camera needed by later missions.
-3. In an authorized configuration session, restore `ARMING_CHECK=1`, resolve
-   every pre-arm message, and define an appropriate indoor boundary/recovery
-   behavior.
+3. In an authorized configuration session, set a permitted `ARMING_CHECK`, give the
+   EKF a working horizontal position source, resolve every pre-arm message, and
+   define an appropriate indoor boundary/recovery behavior. `drone-control
+   preflight` must report no blocker before this step is considered done.
 4. With all propellers removed and the frame secured, verify motor numbering
    and direction using the [guarded motor procedure](BENCH_MOTOR_TEST.md).
 5. With a safety pilot, tested RC override/kill path, protective enclosure,

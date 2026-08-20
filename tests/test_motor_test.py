@@ -94,7 +94,7 @@ def test_motor_test_requires_exact_physical_confirmations() -> None:
 
 
 @pytest.mark.parametrize("arming_check", [0.0, 1.4, 2.0])
-def test_motor_test_requires_exact_all_checks_value(
+def test_motor_test_refuses_an_unpermitted_check_set(
     monkeypatch, arming_check: float
 ) -> None:
     heartbeat = SimpleNamespace(
@@ -122,7 +122,7 @@ def test_motor_test_requires_exact_all_checks_value(
         lambda *_args: arming_check,
     )
 
-    with pytest.raises(SystemExit, match=r"ARMING_CHECK=.*ARMING_CHECK=1"):
+    with pytest.raises(SystemExit, match=r"ARMING_CHECK=.*This project flies with"):
         motor_test.main(
             [
                 "--motor",

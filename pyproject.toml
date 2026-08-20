@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 autoconnect = "ai_drone.link.connect:auto_main"
 drone-apriltag = "ai_drone.cli.apriltag:main"
+drone-arming-checks = "ai_drone.cli.arming:main"
 drone-config-export = "ai_drone.cli.config_export:main"
 drone-config-sync = "ai_drone.config.sync:main"
 drone-console = "ai_drone.mavlink.console:main"
@@ -24,7 +25,9 @@ drone-deploy = "ai_drone.link.deploy:main"
 drone-health = "ai_drone.mavlink.health:main"
 drone-lidar = "ai_drone.cli.lidar:main"
 drone-motor-test = "ai_drone.cli.motor_test:main"
+drone-param = "ai_drone.cli.parameters:main"
 drone-record = "ai_drone.cli.record:main"
+drone-rehearse = "ai_drone.cli.rehearse:main"
 drone-servo = "ai_drone.cli.servo:main"
 manuconnect = "ai_drone.link.connect:manual_main"
 

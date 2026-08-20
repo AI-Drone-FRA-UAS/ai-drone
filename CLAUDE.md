@@ -74,12 +74,31 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
 
 - Treat live vehicle access as disarmed and read-only unless the user asks for
   an actuator test.
-- Never arm, fly, or run a motor test while optional pre-arm checks are
-  bypassed (`ARMING_CHECK` other than exactly `1`). `drone-motor-test` enforces
-  this in code; do not weaken that gate.
+- Never arm, fly, or run a motor test with the pre-arm checks disabled or set
+  to an arbitrary subset. Exactly two `ARMING_CHECK` values are permitted:
+  `1` (every check) and `1043958` (every check except GPS lock and GPS
+  configuration). The second exists because this airframe carries no GPS
+  receiver and the project's purpose is indoor flight without one; every other
+  check stays enabled and stays able to report. `ARMING_CHECK=0` is never
+  acceptable: in that state the vehicle reports no `PreArm:` failure at all and
+  cannot say what is wrong with it. `ai_drone.mavlink.arming_checks` is the
+  single source of this policy and `drone-motor-test`, `DroneController`, and
+  `drone-control preflight` all enforce it; do not widen it per call site.
 - Sensor, camera, and recording paths must not send arm, disarm, flight-mode,
   throttle, RC override, mission-start, motor, servo, or parameter-write
   commands.
+- Never release the link to an aircraft this software put in the air. A LAND
+  request is not a landing: re-request it and wait for the vehicle's own
+  heartbeat to report disarmed before closing the connection or exiting.
+  `DroneController.ensure_landed` is that wait, and every teardown path must go
+  through it. On 2026-08-20 an unverified LAND plus an immediate disconnect left
+  an airborne aircraft with nobody commanding it; it was stopped by pulling the
+  battery.
+- A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
+  simulator, and the simulator encodes whatever was assumed when it was
+  written. It cannot validate an assumption about how the vehicle interprets a
+  message. Where a protocol assumption could produce dangerous motion, add a
+  check that measures the aircraft instead of trusting the request.
 - Filter MAVLink state by the selected vehicle source, reject armed heartbeats,
   use monotonic absolute deadlines, and close serial, camera, and output
   resources in `finally` blocks.

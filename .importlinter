@@ -11,6 +11,7 @@ type = independence
 modules =
     ai_drone.config
     ai_drone.flight
+    ai_drone.sim
     ai_drone.vision
 
 [importlinter:contract:layers]
@@ -29,6 +30,7 @@ source_modules =
     ai_drone.flight
     ai_drone.link
     ai_drone.mavlink
+    ai_drone.sim
     ai_drone.vision
     ai_drone.durability
     ai_drone.platform
@@ -53,4 +55,5 @@ forbidden_modules =
     ai_drone.flight
     ai_drone.link
     ai_drone.mavlink
+    ai_drone.sim
     ai_drone.vision
