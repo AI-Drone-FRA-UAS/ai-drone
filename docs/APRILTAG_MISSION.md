@@ -46,45 +46,21 @@ The IMX500 neural accelerator is not used for AprilTag decoding. AprilTag is a
 geometric fiducial detector, and accurate sub-pixel corners matter more than a
 neural bounding box.
 
-Run safe detection on the Pi:
-
-```bash
-cd ~/ai-drone
-.venv/bin/python -m ai_drone.cli.apriltag \
-  --backend auto \
-  --resolution 1280x960 \
-  --tag-size 0.160
-```
-
-Or deploy and start it from the developer machine:
+Run detection from the developer machine:
 
 ```bash
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
   uv run drone-deploy --apriltag --backend auto --tag-size 0.160
 ```
 
-If Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, replace
-`seb-is-pm` with the hotspot fallback `192.168.4.1`.
-
 Use `--tag-size 0.224` for the supplied A3 tags. Print at 100% and use the
 measured black-border square size, converted to metres.
 
 Without `--calibration`, the command intentionally reports IDs and corners but
-not metric distance. With a calibration JSON it reports camera-frame X/Y/Z,
-Euclidean distance, and pixel reprojection error:
-
-```json
-{
-  "image_width": 1280,
-  "image_height": 960,
-  "camera_matrix": [[0, 0, 0], [0, 0, 0], [0, 0, 1]],
-  "distortion_coefficients": [0, 0, 0, 0, 0]
-}
-```
-
-The zeros above are placeholders, not usable calibration. The runtime rejects
-non-positive focal lengths. A calibration is valid only for the same focus,
-sensor crop, and aspect ratio used in flight.
+not metric distance. With a valid calibration JSON it reports camera-frame
+position, Euclidean distance, and reprojection error. A calibration applies
+only to the same focus, sensor crop, resolution, and aspect ratio used in
+flight; never use placeholder intrinsics.
 
 ## Altitude and horizontal stability
 
@@ -93,10 +69,8 @@ provides downward range and optical-flow velocity; the companion computer
 should consume ArduPilot's fused attitude/local-motion estimate rather than
 independently double-fusing the same raw measurements.
 
-The live 2026-08-18 snapshot confirms `FLOW_TYPE=5`, `RNGFND1_TYPE=10`,
-`EK3_SRC1_VELXY=5`, and `EK3_SRC1_POSZ=2`. It does **not** prove flight-ready
-quality. Optical-flow quality was only 38-39/255 during the bench capture, and
-the vehicle was lying at a large roll/pitch angle.
+Use the newest parameter dump to confirm the EKF range and optical-flow sources.
+Configuration and received telemetry do not prove flight-ready quality.
 
 ## Mission state machine
 
@@ -145,7 +119,7 @@ Two realistic operating envelopes are:
 ## Required test sequence
 
 1. Printed-image and synthetic detector tests.
-2. Loose-camera live capture, with no flight commands.
+2. Camera-only live capture, with no flight commands.
 3. Rigid-mount focus and calibration.
 4. Disarmed tag pose comparison against tape-measured distances and angles.
 5. Propellers-off servo interlock tests with no payload.
@@ -155,8 +129,8 @@ Two realistic operating envelopes are:
 9. Dummy payload release over a soft, isolated test area.
 10. Only then, bounded search behavior.
 
-Do not proceed to an armed test while `ARMING_CHECK=0`, while no valid local
-position is available, or while the Pi clock is unsynchronized.
+Do not proceed to an armed test unless `ARMING_CHECK` is exactly `1`, a valid
+local position is available, and the Pi clock is synchronized.
 
 ## Primary references
 

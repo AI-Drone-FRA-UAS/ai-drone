@@ -1,93 +1,96 @@
-# Connected Drone Configuration
+# Flight-controller configuration
 
-Verified on 2026-06-09.
+This document records stable topology and configuration rules. It is not the
+source of truth for live parameter values. Before hardware or flight work,
+inspect the newest file under `params/` and its matching capture under
+`state/`.
 
-## Flight controller
+## Hardware topology
 
-- Flywoo GOKU GN745 AIO / FlywooF745 running ArduPilot Copter 4.6.3
-- USB serial: `/dev/ttyACM0`
-- Stable USB path:
-  `/dev/serial/by-id/usb-ArduPilot_FlywooF745_200023000451333436353531-if00`
-- Parameter backup: `params/flywoo-f745_copter-4.6.3_2026-06-09.param`
-- `ARMING_CHECK=0` and `FENCE_ENABLE=0` in that backup; both require review
-  before flight.
+| Component | Connection | Protocol |
+| --- | --- | --- |
+| Flywoo GOKU GN745 AIO | Developer USB | MAVLink, usually `/dev/serial/by-id/...` |
+| Raspberry Pi companion | FC UART4 ↔ Pi `/dev/serial0` | MAVLink2, 115200 baud |
+| MicoAir MTF-01P | FC UART5 | MAVLink1, 115200 baud |
+| IMX500 camera | Pi CSI | Picamera2/libcamera |
+| Payload servo | Pi BCM12 | Direct GPIO; not a flight-controller servo output |
 
-### Meaning of the disabled safety parameters
+The Pi UART wiring is:
 
-`ARMING_CHECK` controls which optional pre-arm categories gate an arm request.
-It is a bitmask with one deliberately special value: `1` means **run every
-available check**, not merely "enable bit 0". Other non-zero masks select
-categories such as barometer, compass, GPS, INS, RC, board voltage, battery,
-logging, system, mission, and configured rangefinders. The live value `0`
-skips those optional categories, so ArduPilot can permit arming despite serious
-calibration, configuration, sensor, power, RC, or logging problems. Some
-mandatory checks still run even at `0`; that does not make `0` safe for flight.
+```text
+Pi pin 8  / GPIO14 / TXD -> FC R4
+Pi pin 10 / GPIO15 / RXD <- FC T4
+Pi pin 6  / GND           -> FC GND
+```
 
-Setting `ARMING_CHECK=1` does not arm the aircraft, spin motors, calibrate a
-sensor, or prove the physical build is safe. It restores the software gate:
-ArduPilot runs the checks while disarmed and again when arming is requested,
-blocks the request on failure, and reports `PreArm:`/`Arm:` status text. Set it
-to `1`, read and resolve every reported failure, and do not replace it with a
-partial mask merely to make the vehicle arm.
+Confirm power capacity and the exact board revision before relying on any
+wiring description. Dated state captures record what was observed, not a
+guarantee that the physical build is unchanged.
 
-The checks only cover sensors and features that ArduPilot knows are configured.
-They cannot detect the loose forward-facing Pi camera, an unplugged Pi GPIO
-servo, absent propellers/guards, unsafe surroundings, or an unconfigured and
-disconnected forward MT-15. Ongoing EKF, battery, RC, and link failsafes are
-also separate from this one pre-arm parameter.
+## Arming checks
 
-References: [ArduPilot pre-arm safety checks](https://ardupilot.org/copter/docs/common-prearm-safety-checks.html)
-and the [Copter 4.6 parameter list](https://ardupilot.org/copter/docs/parameters-Copter-stable-V4.6.0.html).
+`ARMING_CHECK=1` has special meaning in ArduPilot: run every available
+configurable pre-arm check. `0` skips those categories, while other non-zero
+values select only a subset.
 
-`FENCE_ENABLE` is independent: it turns the configured geofence behavior on or
-off after the vehicle is operating. With `0`, ArduPilot will not enforce the
-configured maximum-altitude, home-centered radius, or uploaded polygon fence,
-and therefore will not run `FENCE_ACTION` on a breach. It does not prevent
-arming and it is not collision avoidance.
+Never arm, fly, or run the motor utility unless the live value is exactly `1`
+and every reported `PreArm:` or `Arm:` failure has been resolved. Restoring the
+checks does not itself prove the airframe, camera, payload, surroundings, or
+failsafes safe.
 
-The live values are `FENCE_TYPE=7` (maximum altitude, home circle, and
-polygon/inclusion-exclusion fences), `FENCE_ACTION=1` (RTL, falling back to
-LAND), `FENCE_ALT_MAX=100 m`, `FENCE_RADIUS=300 m`, and `FENCE_TOTAL=0`. Merely
-changing `FENCE_ENABLE` to `1` would not create a useful indoor containment
-area: there is no uploaded polygon, the limits are far larger than the hall,
-and the circle/RTL behavior needs a reliable home position. Define and test the
-intended indoor boundary and fallback action before enabling it.
+Reference: [ArduPilot pre-arm safety checks](https://ardupilot.org/copter/docs/common-prearm-safety-checks.html).
 
-## MicoAir MTF-01P
+## Geofence
 
-- Connected to ArduPilot `SERIAL5` / board UART5.
-- `SERIAL5_PROTOCOL=1`, `SERIAL5_BAUD=115`, `SERIAL5_OPTIONS=1024`
-- `FLOW_TYPE=5`, `RNGFND1_TYPE=10`
-- Range: 1-800 cm, downward orientation (`RNGFND1_ORIENT=25`)
-- EKF3 uses optical flow for horizontal velocity and rangefinder height.
+`FENCE_ENABLE` is independent of arming checks. Enabling it only activates the
+configured fence types and breach action; it does not create a useful indoor
+boundary or provide collision avoidance.
 
-The sensor requires drone battery power. `drone-lidar` does not power or
-arm anything; it only requests telemetry from ArduPilot and saves received
-range/flow messages.
+Before using a fence indoors, define and test an appropriate boundary,
+localization source, and recovery action. Do not blindly enable historical
+100 m altitude or 300 m radius settings.
 
-## Raspberry Pi companion link
+## Sensors
 
-- ArduPilot port: `SERIAL4` / physical UART4 (`T4` and `R4`)
-- `SERIAL4_PROTOCOL=2`, `SERIAL4_BAUD=115`, `SERIAL4_OPTIONS=0`
-- Pi device: `/dev/serial0` -> `/dev/ttyAMA0`
-- Pi pin 8 / GPIO14 / TXD -> FC `R4`
-- Pi pin 10 / GPIO15 / RXD -> FC `T4`
-- Pi pin 6 / GND -> FC GND
-- Pi pin 2 / 5V is powered from the FC regulated 5V supply
+The MTF-01P provides downward range and optical flow. Historical captures used
+`FLOW_TYPE=5`, `RNGFND1_TYPE=10`, and downward orientation, but transport data
+alone does not validate mounting, calibration, floor texture, lighting, EKF
+quality, or altitude hold.
 
-Run `uv run drone-health` on the developer machine to verify both the direct
-USB link and this Pi UART link.
+A planned forward MT-15 should remain distinct from the downward sensor. Verify
+its physical UART, regulated power, outgoing MAVLink sensor ID/orientation, and
+firmware support before writing `SERIALx`, `RNGFND2`, proximity, or avoidance
+parameters. One forward beam is not full obstacle avoidance.
 
-## Cameras
+See [sensor recording and wiring](SENSOR_RECORDING.md).
 
-The drone has two separate camera paths:
+## Capture the live configuration
 
-- RunCam Phoenix 2 analog FPV camera -> SpeedyBee TX800 at 5806 MHz.
-- Raspberry Pi IMX500 AI Camera -> CPU AprilTag detection on the Pi.
+`drone-config-sync` reads the complete indexed MAVLink parameter set through
+the Pi. It does not send `PARAM_SET`, change mode, arm, or drive an actuator.
 
-The repository only handles the Pi IMX500 path. It does not capture the
-analog FPV signal on the laptop. No camera tilt motor or ArduPilot gimbal is
-currently configured.
+```bash
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+  uv run drone-config-sync
+```
 
-For the complete Linux USB and MAVProxy procedure, see
-[Developer Machine Drone Connection](DEVELOPER_MACHINE_DRONE_CONNECTION.md).
+The command writes:
+
+```text
+params/flywoo-f745-live-YYYY-MM-DD.param
+state/YYYY-MM-DD/drone-config.json
+```
+
+It retries missing indexes, rejects duplicate names/indexes, and verifies the
+parameter-file checksum. To commit exactly the generated pair from a clean
+worktree and push the current branch:
+
+```bash
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+  uv run drone-config-sync --publish
+```
+
+Git credentials remain on the developer machine and are not copied to the Pi.
+
+For direct USB inspection and MAVProxy troubleshooting, see
+[Developer machine connection](DEVELOPER_MACHINE_DRONE_CONNECTION.md).

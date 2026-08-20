@@ -7,8 +7,7 @@ does not test flight control.
 
 1. Remove every propeller from every motor.
 2. Secure the frame to a stable, non-conductive bench.
-3. Keep hands, cables, the loose camera ribbon, and clothing outside all motor
-   bells.
+3. Keep hands, cables, the camera ribbon, and clothing outside all motor bells.
 4. Turn on the RC transmitter and keep a second person ready to disconnect the
    LiPo.
 5. Restore `ARMING_CHECK=1` and resolve every reported pre-arm problem. The
@@ -49,10 +48,10 @@ the outputs internally during this command; the utility never sends the normal
 vehicle-arm command. It sends a zero-duration stop request in cleanup and waits
 for a disarmed heartbeat.
 
-The current configuration has `MOT_PWM_MIN=1000`, `MOT_PWM_MAX=2000`, and
-`MOT_SPIN_MIN` around 6%, so the 7% default is intentionally near the lowest
-expected spin point. If a motor does not move, do not immediately raise the
-limit: first check its ESC signal, power, motor wiring, and ArduPilot status text.
+The 7% default is deliberately near the lowest expected spin point. Confirm
+the live `MOT_PWM_*` and `MOT_SPIN_MIN` values before testing. If a motor does
+not move, do not immediately raise the limit: first check its ESC signal,
+power, wiring, and ArduPilot status text.
 
 Official safety/setup reference:
 [ArduPilot motor range test](https://ardupilot.org/copter/docs/set-motor-range.html).

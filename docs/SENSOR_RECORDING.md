@@ -41,7 +41,7 @@ and calibration at the selected resolution.
 | MicoAir MTF-01P | Flight controller UART5 (`SERIAL5`, MAVLink1, 115200) | Range and optical flow forwarded by ArduPilot over the companion link |
 | Flight-controller IMU, barometer, compass, GPS, battery, EKF and RC state | Directly to the FlywooF745 | Requested MAVLink telemetry over UART4 |
 | Raspberry Pi companion link | Pi GPIO14/15 `/dev/serial0` to FC R4/T4 (`SERIAL4`, MAVLink2, 115200) | All FC telemetry in `.tlog` and `.jsonl` |
-| Servo | Currently disconnected; the separate guarded utility targets Pi BCM12 directly | Not driven by this program; FC output telemetry may still be recorded |
+| Servo | Separate guarded utility targets Pi BCM12 directly | Not driven by this program; FC output telemetry may still be recorded |
 
 The recorder requests bounded message rates that fit the verified 115200-baud
 UART4 link. This activates telemetry streaming, not motors. Sensors that require
@@ -49,9 +49,10 @@ the flight battery, including the MTF-01P, must already be powered.
 
 ## Planned forward MicoAir MT-15
 
-Use the currently unused full-duplex FlywooF745 UART7 rather than connecting the
-MT-15 to the Pi. A flight-controller connection keeps the immediate obstacle
-measurement available even if the companion process crashes.
+The proposed design uses a full-duplex FlywooF745 UART rather than connecting
+the MT-15 to the Pi. A flight-controller connection keeps the immediate
+measurement available if the companion process crashes. Confirm the live UART
+allocation before selecting a port.
 
 Proposed wiring, to be verified against the exact FC board revision before
 soldering:
@@ -59,18 +60,18 @@ soldering:
 ```text
 MT-15 5V  -> regulated FC 5V
 MT-15 GND -> FC GND
-MT-15 TX  -> FC R7
-MT-15 RX  -> FC T7
+MT-15 TX  -> selected FC RX
+MT-15 RX  -> selected FC TX
 ```
 
 MicoAir sensors use 3.3 V UART logic. Configure the MT-15 through MicoAssistant
 for ArduPilot MAVLink at 115200, forward orientation, and a MAVLink system ID
-different from 1. The likely ArduPilot starting point is:
+different from 1. After selecting the port, the likely starting point is:
 
 ```text
-SERIAL7_PROTOCOL = 1
-SERIAL7_BAUD = 115
-SERIAL7_OPTIONS = 1024
+SERIALx_PROTOCOL = 1
+SERIALx_BAUD = 115
+SERIALx_OPTIONS = 1024
 RNGFND2_TYPE = 10
 RNGFND2_ORIENT = 0
 ```
@@ -80,12 +81,10 @@ outgoing `DISTANCE_SENSOR.orientation` has been confirmed. ArduPilot's MAVLink
 rangefinder backend accepts a measurement only when the packet orientation
 matches `RNGFNDx_ORIENT`.
 
-For use as an avoidance source, the firmware must also expose `PRX1_TYPE`; set
-it to `4` for rangefinder-based proximity and include the proximity bit in
-`AVOID_ENABLE`. The current 4.6.3 build has `AVOID_ENABLE` but did not expose any
-`PRXx_TYPE` parameters in the live download, so firmware feature support must be
-confirmed before relying on the MT-15 for automatic braking. A single forward
-beam is a stop-ahead sensor, not safe 360-degree hall navigation.
+For use as an avoidance source, the firmware must expose and correctly
+configure the applicable proximity parameters. Confirm firmware support before
+relying on automatic braking. A single forward beam is a stop-ahead sensor, not
+safe 360-degree hall navigation.
 
 ## Safety behavior
 

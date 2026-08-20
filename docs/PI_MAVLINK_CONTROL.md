@@ -1,116 +1,74 @@
-# Consolidated MAVLink control
+# MAVLink control and staged flight testing
 
 `drone-control` is the single CLI for flight-controller status,
-takeoff/hover, and body-frame velocity. Its flight sequences manage arming,
-stop, landing, and cleanup. Dedicated linear-flight wrappers are folded into
-these modes, so the capability has one maintained
-implementation and command surface.
+takeoff/hover, and bounded body-frame velocity tests. Flight sequences own
+their arming, stopping, landing, and cleanup behavior.
 
-The control code is implemented, but no live arm, takeoff, altitude hold, or
-velocity flight has been validated on this aircraft. Check the newest capture
-under `state/` and the newest dump under `params/` for the controller's actual
-configuration before using it; `ARMING_CHECK` and `FENCE_ENABLE` in particular
-decide whether live flight is possible at all.
+No live arm, takeoff, altitude hold, or velocity flight has been validated on
+this aircraft. Check the newest `state/` capture and `params/` dump before use.
 
-## Run the command
+## Modes
 
-Deploy and open a Pi shell from the developer machine:
+| Mode | Behavior | Hardware effect |
+| --- | --- | --- |
+| `status` | Read altitude, battery, mode, and armed state | Read-only |
+| `hover` (`takeoff` alias) | Guided takeoff, timed hold, then land | Arms and flies |
+| `velocity-test` | Bounded body-frame velocity/yaw, then stop and land | Arms and flies |
+
+Open a Pi shell and inspect the authoritative command help:
 
 ```bash
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy --ssh
-```
-
-When Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, use
-`PI_HOST=seb@192.168.4.1` instead. On the Pi:
-
-```bash
+# On the Pi:
 cd ~/ai-drone
 uv run drone-control --help
 ```
 
-The command groups the following behaviors:
-
-| Mode | Behavior | Current state |
-| --- | --- | --- |
-| `status` | Passive altitude, battery, mode, and armed-state monitoring | Disarmed bench use is possible |
-| `hover` (`takeoff` alias) | Guided takeoff, timed altitude hold, then land | Implemented; SITL and restrained-flight validation required |
-| `velocity-test` | Bounded body-frame velocity/yaw command, then stop and land | Implemented; SITL and restrained-flight validation required |
-
-Use each subcommand's `--help` output for its exact confirmation token and
-limits. Do not bypass those gates in wrappers or documentation.
-
-The non-actuating starting point is:
+The safe starting point is:
 
 ```bash
 uv run drone-control status --duration 10
 ```
 
-`status` only reads telemetry: no arming, mode change, or setpoint is sent.
-There is no in-repository simulation of the flight modes; use Copter SITL for
-mode, arming, telemetry-loss, takeoff, velocity, and landing behavior.
+`status` sends no arm, mode-change, or setpoint command. Every live flight mode
+requires the exact acknowledgement shown by its `--help`; do not bypass that
+gate in wrappers or documentation.
 
-Every live flight mode requires the exact acknowledgement:
+## Control behavior
 
-```text
---confirm-flight FLIGHT_TEST_READY
-```
+`ai_drone.flight.controller.DroneController` owns the MAVLink connection and
+arm, mode, takeoff, velocity, stop, land, and cleanup transitions. Generic
+battery, altitude-ceiling, and telemetry-staleness guards live in
+`ai_drone.flight.guards` and apply to every flight mode.
 
-Live `follow` additionally requires a measured `--focal-length-px` and:
+The flight controller remains responsible for attitude stabilization and EKF
+fusion. Body-frame velocity follows NED conventions:
 
-```text
---confirm-live-follow CAMERA_RIGID_AND_CALIBRATED
-```
+- positive `vx` is forward and positive `vy` is right;
+- positive `vz` is down; and
+- positive yaw rate turns right.
 
-The current loose forward-facing camera cannot truthfully satisfy that gate.
+The controller filters telemetry to the selected vehicle, rejects stale data,
+requires exactly `ARMING_CHECK=1` before an arm path, verifies state
+transitions, caps commands, and uses bounded timeouts. Cleanup lands only a
+flight started by that controller instance.
 
-## Control architecture
+## Required validation sequence
 
-`ai_drone.flight.controller.DroneController` owns the MAVLink connection and the
-arm/mode/takeoff/velocity/land state transitions. `ai_drone.flight.follower` owns
-person-target extraction and bounded follow-control math. The CLI only parses
-operator intent and sequences those reusable components.
+1. Run the repository checks and every control mode in ArduPilot Copter SITL,
+   including rejected arm, stale telemetry, interruption, and landing timeout.
+2. Rigidly mount and calibrate the IMU, compass, optical flow, downward
+   rangefinder, and any camera needed by later missions.
+3. In an authorized configuration session, restore `ARMING_CHECK=1`, resolve
+   every pre-arm message, and define an appropriate indoor boundary/recovery
+   behavior.
+4. With all propellers removed and the frame secured, verify motor numbering
+   and direction using the [guarded motor procedure](BENCH_MOTOR_TEST.md).
+5. With a safety pilot, tested RC override/kill path, protective enclosure,
+   fresh battery, and clear area, perform the smallest restrained hover test.
+6. Review range, flow, EKF, and battery recordings before expanding the
+   envelope; then validate velocity one axis at a time.
 
-The flight controller remains responsible for attitude stabilization and EKF3
-fusion. The connected MTF-01P supplies downward range and optical-flow data;
-the Pi sends higher-level body-frame velocity requests.
-
-Body-frame velocity uses NED conventions:
-
-- positive `vx`: forward; negative: backward;
-- positive `vy`: right; negative: left;
-- positive `vz`: down; negative: up; and
-- positive yaw rate: turn right.
-
-The controller filters telemetry to the selected vehicle, rejects stale
-heartbeats and altitude samples, requires exactly `ARMING_CHECK=1` before an
-arm path, verifies mode/armed transitions, caps command values, and uses bounded
-timeouts. Cleanup lands only a flight started by that controller instance and
-disarms an arm started by it; passive observation of an already armed vehicle
-does not itself send a command.
-
-## Staged validation
-
-1. Run unit tests and every control mode in ArduPilot Copter SITL, including
-   rejected arm, stale telemetry, target loss, low battery, over-altitude,
-   interruption, and landing timeout cases.
-2. Rigidly mount the airframe sensors and camera. Calibrate the IMU, compass,
-   optical-flow scale/orientation, downward rangefinder, and camera geometry.
-3. Restore `ARMING_CHECK=1` in a separately authorized configuration session
-   and resolve every `PreArm:`/`Arm:` message. Configure an appropriate indoor
-   boundary and recovery behavior; do not simply enable the current 100 m /
-   300 m fence.
-4. With every propeller removed and the frame secured, validate motor numbering
-   and direction using only the [guarded motor utility](BENCH_MOTOR_TEST.md).
-5. With a safety pilot, RC override/kill path, protective enclosure, fresh
-   battery, and clear area, perform the smallest restrained hover/altitude-hold
-   test. Verify range/flow and EKF behavior from the recording before expanding
-   the envelope.
-6. Validate bounded velocity one axis at a time. Test loss-of-link and stale
-   localization before enabling any camera-driven command.
-7. Enable any camera-driven flight only after the camera is rigid and its
-   geometry is measured, the target-loss behavior passes SITL and restrained
-   tests, and people are outside the vehicle's possible path.
-
-The forward MT-15 is an additional stop-ahead sensor, not a prerequisite that
-the current follow loop already consumes and not a substitute for a protected
-flight area or wider obstacle sensing.
+AprilTag approach, autonomous search, and payload release are mission work,
+not existing `drone-control` modes. Their additional prerequisites are in the
+[AprilTag mission architecture](APRILTAG_MISSION.md).

@@ -9,8 +9,8 @@ Paths mirror their original location in the repository.
 ### Nearest-person detection (retired 2026-08-19)
 
 The IMX500 NanoDet person-detection pipeline and its `drone-picam` command.
-Removed because the capability is no longer needed; person-follow flight
-control in `ai_drone/follower.py` is independent and remains maintained.
+Removed because the capability is no longer needed. The related person-follow
+flight mode was subsequently retired as well.
 
 - `ai_drone/nearest_person.py` — detection, ByteTrack tracking, nearest-pair
   metric conversion, and MJPEG annotation.
@@ -46,13 +46,6 @@ previously had no battery or ceiling guard at all.
 Retiring this also removed the `modlib` dependency from the `raspi` group; it
 was the only importer. Restoring the capability means restoring that entry.
 
-### Session handoff document (retired 2026-08-19)
-
-`docs/HANDOFF.md`, the long-running verified-state and next-actions document.
-Retired because it duplicated the dated captures under `state/` and the
-parameter dumps under `params/`, and drifted out of date faster than either.
-Those captures are now the record of live vehicle and Pi state; the repository's
-own state is described in `docs/REPOSITORY_STATE.md`.
-
-- `docs/HANDOFF.md` — the last version, including the 2026-08-19 camera and
-  servo update.
+The former session handoff document was deleted rather than retained here: it
+duplicated dated captures, contained contradictory physical-state claims, and
+was already preserved in Git history.

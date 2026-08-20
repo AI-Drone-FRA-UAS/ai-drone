@@ -1,214 +1,114 @@
-# Raspberry Pi USB SSH: Flash Storage and Connect
+# Raspberry Pi Zero 2 W USB SSH
 
-## Target Setup
-
-```text
-Pi username: seb
-Pi hostname: seb-is-pm
-Pi USB IP:   192.168.7.2
-Host USB IP: 192.168.7.1
-SSH command: ssh -F /dev/null seb@192.168.7.2
-```
-
-Use the Pi Zero 2 WH micro-USB port labeled `USB` for the PC connection. The `PWR IN` port is power-only.
-
-## Historical Linux: Flash the Storage
-
-Status: the root helper scripts referenced in this section,
-`./prepare-and-flash-pi.sh` and `./enable-pi-usb-gadget.sh`, are not present in
-this checkout. Treat these flashing steps as historical notes until those
-helpers are restored or replaced. The connection sections below still document
-the current `uv run autoconnect` and `uv run manuconnect` commands.
-
-Insert the microSD card or USB boot stick into the PC. The scripts cannot flash or patch storage while it is inserted into the Pi.
-
-Check that the storage is `/dev/sda`:
-
-```bash
-lsblk -o NAME,PATH,SIZE,MODEL,TRAN,TYPE,FSTYPE,LABEL,MOUNTPOINTS
-```
-
-Flash and configure the card:
-
-```bash
-cd /home/abaris/ai-drone
-./prepare-and-flash-pi.sh
-```
-
-When prompted:
+The prepared Pi exposes a USB Ethernet gadget as a last-resort SSH path:
 
 ```text
-Type FLASH to continue:
+Pi USB address:   192.168.7.2/24
+Host USB address: 192.168.7.1/24
+SSH:              seb@192.168.7.2
 ```
 
-type:
+Use the Pi port labelled `USB`, not the power-only `PWR IN` port, and use a
+data-capable cable. These instructions assume the Pi image already has USB
+gadget networking configured; the obsolete flashing helpers formerly
+documented here are not present in this repository.
 
-```text
-FLASH
-```
+## Connection helper
 
-Then enter:
+Identify the network adapter that appears when the Pi is connected and pass it
+explicitly as `USB_IFACE`. The helper deliberately refuses to reconfigure an
+adapter selected only by a broad auto-detection heuristic.
 
-- the password for the selected phone hotspot (SSID not stored here)
-- the new SSH password for Pi user `seb`
-
-Wait until the script prints `Done`.
-
-## Historical Linux: Enable USB SSH on the storage
-
-Keep the storage in the PC and run:
+Preview first:
 
 ```bash
-cd /home/abaris/ai-drone
-./enable-pi-usb-gadget.sh
-sync
-sudo eject /dev/sda
+USB_IFACE=usb0 uv run autoconnect --dry-run
 ```
 
-Now remove the storage from the PC.
-
-## Linux: Boot and Connect
-
-1. Put the prepared storage into the Raspberry Pi.
-2. Connect the PC to the Pi USB gadget port with a data-capable cable
-   (Zero 2 WH: micro-USB port labeled `USB`).
-3. Wait 1-3 minutes.
-4. Identify the new Pi USB gadget network interface (`ip link` is useful),
-   verify it is the adapter that appeared when the Pi was connected, and name
-   it explicitly. For example, if the verified interface is `usb0`, run:
+Then connect through the normal transport sequence or select USB directly:
 
 ```bash
-cd /home/abaris/ai-drone
-export USB_IFACE=usb0       # replace with the verified Pi gadget interface
-uv run autoconnect          # tries Tailscale, then AI-Drone-Zero, then USB
-# or, to go straight to the cable:
-uv run manuconnect          # then choose 3) USB cable
+USB_IFACE=usb0 uv run autoconnect
+USB_IFACE=usb0 uv run manuconnect
 ```
 
-The live helper deliberately refuses to reconfigure an automatically guessed
-USB interface. Use `--dry-run` before the live command if you want to inspect
-the proposed network and SSH commands.
+Replace `usb0` with the adapter verified on the host. `autoconnect` tries
+Tailscale, the Pi hotspot, then USB.
 
-When SSH asks for a password, enter the Pi password you chose during flashing.
+## Linux
 
-Manual SSH command:
+Find the newly attached interface with `ip link`, then use the helper above.
+For a prepared static connection, the manual SSH command is:
 
 ```bash
 ssh -F /dev/null seb@192.168.7.2
 ```
 
-Confirm login:
+## Windows
 
-```bash
-hostname
-whoami
-ip addr show usb0
-```
-
-Expected:
+In Network Connections, identify the new USB/RNDIS adapter and set:
 
 ```text
-seb-is-pm
-seb
-192.168.7.2/24
+Address: 192.168.7.1
+Mask:    255.255.255.0
+Gateway: empty
+DNS:     empty
 ```
 
-## Windows: Connect to the Prepared Pi
+Run an elevated PowerShell terminal when allowing the helper to change adapter
+settings:
 
-1. Put the prepared microSD into the Pi.
-2. Connect Windows to the Pi port labeled `USB`.
-3. Wait 1-3 minutes.
-4. In `Network Connections`, find the USB/RNDIS Ethernet adapter.
-5. Set IPv4 manually:
-
-```text
-IP address: 192.168.7.1
-Subnet mask: 255.255.255.0
-Gateway: leave empty
-DNS: leave empty
+```powershell
+$env:USB_IFACE = "Ethernet 4"
+uv run autoconnect --dry-run
+uv run manuconnect
 ```
 
-Then run in PowerShell:
+Manual connection:
 
 ```powershell
 ping 192.168.7.2
 ssh -F NUL seb@192.168.7.2
 ```
 
-From a checkout of this repo, the cross-platform helper can configure a
-**user-identified** adapter and open SSH from native Windows. It deliberately
-does not trust broad USB-network auto-detection for privileged changes. Run
-PowerShell or Windows Terminal as Administrator so the adapter IP can be
-changed:
+If no adapter appears, select Microsoft's USB RNDIS/Remote NDIS driver in
+Device Manager.
 
-```powershell
-$env:USB_IFACE = "Ethernet 4"; uv run autoconnect
-```
+## macOS
 
-`autoconnect` first tries Tailscale (`seb@seb-is-pm`), then the Pi's own AP
-`AI-Drone-Zero` (`192.168.4.1`), and finally configures USB only when
-`USB_IFACE` names the verified Pi gadget adapter. To skip straight to the
-cable, set `USB_IFACE`, use `uv run manuconnect`, and choose `3) USB cable`.
-
-Use `uv run autoconnect --dry-run` to preview every transport's commands,
-including the PowerShell and `netsh` USB commands, before changing adapter
-settings. Live setup deliberately refuses to reconfigure an adapter selected
-only by a broad USB-network heuristic. Verify the Pi gadget interface first,
-then name it explicitly with the `USB_IFACE` environment variable:
-
-```powershell
-$env:USB_IFACE = "Ethernet 4"; uv run manuconnect   # then choose 3
-```
-
-If the USB network adapter does not appear, install/select the Microsoft `USB RNDIS Adapter` or `Remote NDIS Compatible Device` driver in Device Manager.
-
-## macOS: Connect to the Prepared Pi
-
-1. Put the prepared microSD into the Pi.
-2. Connect macOS to the Pi port labeled `USB`.
-3. Wait 1-3 minutes.
-4. Open `System Settings > Network`.
-5. Select the new USB Ethernet adapter.
-6. Set IPv4 manually:
-
-```text
-IP address: 192.168.7.1
-Subnet mask: 255.255.255.0
-Router: leave empty
-DNS: leave empty
-```
-
-Then run in Terminal:
+Identify the new USB Ethernet hardware port with
+`networksetup -listallhardwareports`. Configure it manually with address
+`192.168.7.1`, subnet mask `255.255.255.0`, and no router or DNS, or pass its
+verified BSD name to the helper:
 
 ```bash
-ping 192.168.7.2
+USB_IFACE=en7 uv run autoconnect --dry-run
+USB_IFACE=en7 uv run manuconnect
+```
+
+Manual connection:
+
+```bash
 ssh -F /dev/null seb@192.168.7.2
 ```
 
-Or identify the adapter's BSD interface name first (`networksetup
--listallhardwareports` can help), verify it is the Pi gadget, and pass that
-name explicitly. For example, if the verified interface is `en7`:
+## Troubleshooting
+
+- Wait up to three minutes for first boot and USB enumeration.
+- Try another known data-capable cable.
+- Connect one Pi at a time unless the adapter identity is unambiguous.
+- Internet sharing can replace the Pi's static USB address with a DHCP address;
+  in that mode, try `seb-is-pm.local` or inspect the sharing interface's leases.
+- After reflashing, remove a stale SSH host key with:
+
+  ```bash
+  ssh-keygen -R 192.168.7.2
+  ```
+
+After login, verify the expected machine and address:
 
 ```bash
-export USB_IFACE=en7        # replace with the verified Pi gadget interface
-uv run autoconnect
+hostname
+whoami
+ip -4 addr
 ```
-
-The helper does not perform a live USB setup from broad macOS auto-detection.
-Set `USB_IFACE` before selecting USB in `uv run manuconnect` as well.
-
-## Notes
-
-- Use a data-capable USB cable. Charge-only cables will not work for SSH.
-- Usually the Zero 2 WH can be powered from the same USB cable connected to the `USB` port.
-- Connect one Raspberry Pi at a time unless you explicitly choose the correct `USB_IFACE`.
-- If SSH warns about host authenticity on first connect, type `yes`.
-- If SSH host keys conflict after reflashing, run:
-
-```bash
-ssh-keygen -R 192.168.7.2
-```
-
-Use `uv run autoconnect` from the repository root. If USB fallback is intended,
-set `USB_IFACE` to the verified Pi gadget interface first. The former root-level
-shell wrapper has been removed.

@@ -1,230 +1,89 @@
-# AI Drone — Original Requirements and Hardware Inventory
+# Hardware inventory and project objective
 
-> This is a historical procurement/requirements brief, not the authoritative
-> live state or an operating procedure. Check the newest capture under `state/`
-> and the newest dump under `params/` before hardware, configuration, motor, or
-> flight work. The current vehicle runs ArduPilot and its Pi and downward sensor
-> links have been verified. Radio credentials have deliberately been removed; rotate
-> any binding phrase that was previously committed before relying on it.
+This is a stable inventory and requirements summary, not a live-state record or
+operating procedure. Check the newest capture under `state/` and parameter dump
+under `params/` before hardware, configuration, motor, or flight work.
 
----
+## Objective
 
-## Table of Contents
+Develop an indoor aircraft that can eventually:
 
-1. [Implementation Goals](#1-implementation-goals)
-2. [Available Software](#2-available-software)
-3. [Available Hardware — Provided Equipment](#3-available-hardware--provided-equipment)
-4. [Available Hardware — Drone Build Specifications](#4-available-hardware--drone-build-specifications)
+1. hold altitude and horizontal position using ArduPilot, downward range, and
+   optical flow;
+2. detect floor-mounted AprilTags with the Pi camera;
+3. approach a selected tag using calibrated geometry;
+4. release a payload through a guarded servo mechanism; and
+5. search a bounded space only after suitable localization and obstacle
+   sensing have been integrated.
 
----
+Disarmed sensing and software implementation do not establish flight readiness.
+Follow the staged procedures in [MAVLink control](PI_MAVLINK_CONTROL.md) and
+the [AprilTag mission architecture](APRILTAG_MISSION.md).
 
-## 1. Implementation Goals
+## Aircraft
 
-### 1.1 — Autopilot Integration
+| Item | Model/details |
+| --- | --- |
+| Frame | SpeedyBee BEE35 Pro 3.5-inch CineWhoop |
+| Flight controller | Flywoo GOKU GN745 AIO / STM32F745 / 45 A AM32 ESC |
+| Firmware baseline | ArduPilot Copter 4.6.3 custom build |
+| Motors | Four Emax Eco II 2004, 3000 KV |
+| Propellers | Gemfan D90-5, 3.5-inch ducted five-blade |
+| GPS/compass | HGLRC M100 |
+| Receiver | Radiomaster XR4 Gemini Xrossband ELRS |
+| FPV camera | RunCam Phoenix 2 analog |
+| Video transmitter | SpeedyBee TX800 with 5.8 GHz RHCP antenna |
 
-**ArduPilot Copter 4.6.3** is already installed on the flight controller and
-its disarmed MAVLink links have been verified. Configuration validation,
-pre-arm remediation, and later mission planning through **QGroundControl**
-remain staged work; no armed or autonomous flight has been validated.
+Radio binding credentials are intentionally not stored in the repository.
 
-### 1.2 — Position Hold and Altitude Hold (Indoor / GPS-Denied)
+## Companion computing and sensing
 
-Integrate stable Position Hold and Altitude Hold using the **MicroAir MTF-01P** sensor, which
-provides both:
+| Item | Intended role |
+| --- | --- |
+| Raspberry Pi Zero 2 WH | MAVLink companion computer |
+| Raspberry Pi IMX500 AI Camera | AprilTag detection and recording |
+| MicoAir MTF-01P | Downward range and optical flow |
+| MicoAir MT-15 | Candidate forward range sensor; one beam is not complete obstacle avoidance |
+| MacroSilicon MS210x USB grabber | Optional analog FPV capture |
+| CP2102 USB-UART adapter | Sensor configuration |
 
-- **LiDAR** — downward-facing distance measurement for altitude hold
-- **Optical Flow** — horizontal velocity estimation for position hold without GPS
+The mission camera should be rigidly mounted downward, focused at the intended
+working range, strain-relieved, and calibrated at its operating resolution.
+Camera mounting and calibration are live-state facts and must be confirmed
+rather than inferred from this inventory.
 
-The MTF-01P is connected to flight-controller UART5 and its telemetry transport
-has been verified. Permanent mounting, calibration, orientation, and power
-reliability still require validation (see 1.4).
+## Payload mechanism
 
-### 1.3 — Delivery / Payload Drop Mechanism
+Two micro servos are available for a custom release mechanism. The maintained
+utility targets Pi BCM12 directly. Before actuation, remove propellers, secure
+the aircraft, verify regulated power and common ground, establish safe pulse
+limits, clear the linkage, and use the CLI's exact confirmation gate.
 
-Design, build, and integrate a mechanism that can release a payload on command.
+The historical MS18-F reference range was 900–2100 µs with 1500 µs neutral,
+but datasheet values are not a substitute for cautious mechanism-specific
+calibration. Never drive a loaded servo from a supply that can brown out the
+Pi.
 
-- Use one of the provided **Micro Servo 9g** units as the actuator.
-- The current repository's guarded servo utility drives Raspberry Pi BCM12
-  directly. The servo is physically disconnected and its power, common ground,
-  limits, linkage, and fail-safe position have not been bench-validated.
-- 3D printing is available for custom brackets or mounts.
+## Ground equipment and tools
 
-### 1.4 — Frame Extension
+| Category | Equipment |
+| --- | --- |
+| Pilot/video | Radiomaster GX12 transmitter, Skyzone Cobra X goggles |
+| Batteries | Three flight packs; 18650 cells for controller/goggles |
+| Charging | SkyRC B6neo+, 27 W USB-C supply, 20,000 mAh power bank |
+| Fabrication | Tinkercad, UltiMaker Cura, 3D printer access |
+| Fasteners | M3×9 mm and M3×12 mm screws/standoffs |
+| Safety/service | Smoke stopper, SpeedyBee Adapter V3, hand tools |
+| Spares/storage | Replacement props, 32 GB microSD, card reader, carry case |
 
-Design and build a frame extension or replacement that integrates:
+Printable airframe assets are indexed in [hardware/README.md](../hardware/README.md).
 
-- The **MicroAir MTF-01P** sensor (must face downward, unobstructed)
-- The **delivery / payload mechanism** (servo + release arm)
-- Optionally: the **Raspberry Pi Zero 2 WH** and its camera module
+## Integration rules
 
-Use **Tinkercad** for CAD design and **UltiMaker Cura** for slicing. 3D printing is available.
-M3 standoffs and screws (M3×9 mm, M3×12 mm) are provided for mounting.
-
-### 1.5 — Raspberry Pi Integration (Computer Vision / AI)
-
-Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
-
-- The RPi is connected to flight-controller UART4 and `/dev/serial0` MAVLink
-  has been verified while disarmed.
-- Mount the **Raspberry Pi AI Camera Module** facing downward. The camera is
-  now connected and mounted; its orientation, rigidity, and intrinsic
-  calibration have not been recorded, so metric floor-tag geometry must not be
-  trusted until they are.
-- Run AI inference on the Pi. The current code uses CPU AprilTag detection.
-  Person detection and the `drone-control follow` mode have been retired to
-  `attic/`, along with the IMX500/modlib dependency;
-  AprilTag detection does not yet command a flight mission.
-- The **USB A/V Grabber (MacroSilicon MS210x)** can be used to capture the analog FPV camera
-  feed on the RPi as an additional video source.
-
----
-
-## 2. Available Software
-
-| Software | Purpose |
-|----------|---------|
-| **ArduPilot** | Flight controller firmware (autopilot, mission execution) |
-| **QGroundControl** | Ground control station, mission planning, parameter configuration |
-| **Raspberry Pi OS** | Operating system for the Raspberry Pi Zero 2 WH |
-| **TensorFlow Lite** | On-device AI inference (object detection, classification) |
-| **YOLO** | Real-time object detection alternative to TensorFlow Lite |
-| **Tinkercad** | Browser-based 3D CAD for frame / mount design |
-| **UltiMaker Cura** | Slicer for preparing 3D print files |
-
----
-
-## 3. Available Hardware — Provided Equipment
-
-### Flight System
-
-| Item | Details |
-|------|---------|
-| FPV Drone (3.5" CineWhoop) | Fully assembled, flight-ready, with propeller guards |
-| Skyzone Cobra X FPV Goggles | For first-person video monitoring |
-| Li-Ion Battery Packs | 3 × flight batteries |
-
-### Remote Control
-
-| Item | Details |
-|------|---------|
-| Radiomaster GX12 Remote Controller | ELRS Dual-Band Gemini-X, 868 MHz / 2.4 GHz |
-| Firmware | EdgeTX v2.11.5 |
-| Binding Phrase | Not stored in the repository; provision and rotate securely |
-
-### Computing & Sensing
-
-| Item | Details |
-|------|---------|
-| Raspberry Pi Zero 2 WH | Companion single-board computer |
-| RPi Zero 2 Cases | 2 different enclosures |
-| Raspberry Pi AI Camera Module | CSI camera for computer vision |
-| MicroAir MTF-01P | LiDAR (range) + Optical Flow sensor |
-| CP2102 USB-UART Adapter | For configuring the MicroAir MTF-01P |
-| USB A/V Grabber | MacroSilicon MS210x — captures analog FPV feed |
-
-### Cables & Adapters
-
-| Item |
-|------|
-| Mini-HDMI to standard HDMI cable |
-| Micro-USB (male) to USB Type-A (female) cable |
-| USB Type-A (male) to USB-C cable |
-| USB-C to USB-C cable |
-
-### Actuators & Electronics
-
-| Item | Details |
-|------|---------|
-| Micro Servo 9g | 2 × units — for payload drop mechanism |
-| Jumper wires | Female-to-female and female-to-male |
-| Smoke Stopper | Short-circuit protection plug |
-| Speedybee Adapter V3 | Flight controller configuration tool |
-
-### Charging & Power
-
-| Item | Details |
-|------|---------|
-| SkyRC B6neo+ Charger | For Li-Ion battery packs |
-| 18650 Cells | For remote controller and FPV goggles |
-| Power Bank | 20,000 mAh, PD 20 W |
-| USB-C Power Adapter | 27 W — charges goggles, remote, power bank; powers SkyRC B6neo+ |
-
-### Tools & Fasteners
-
-| Item | Details |
-|------|---------|
-| Hex / Allen Key Set | 1.5 mm, 2.0 mm, 4.0 mm, 5.5 mm, 8.0 mm |
-| Precision Screwdriver Set | 48-piece bit set |
-| M3 Standoffs & Screws | M3×9 mm, M3×12 mm |
-
-### Spares & Storage
-
-| Item | Details |
-|------|---------|
-| Replacement Propellers (3.5") | Gemfan D90-5 or HQProp DT90MMX5 |
-| MicroSD Card | 32 GB, with SD/MicroSD adapter |
-| USB Card Reader | For SD and MicroSD cards |
-| Aluminum Carry Case | Approx. 45 × 30 × 15 cm |
-
----
-
-## 4. Available Hardware — Drone Build Specifications
-
-### Airframe
-
-| Property | Value |
-|----------|-------|
-| **Frame** | SpeedyBee BEE35 Pro 3.5" CineWhoop Frame Kit |
-| **Propellers** | Gemfan 90mm D90-5 — 3.5", ducted, 5-blade |
-
-### Flight Controller (FC / AIO)
-
-| Property | Value |
-|----------|-------|
-| **Model** | Flywoo GOKU GN745 AIO |
-| **MCU** | STM32F745, 216 MHz, 1 MB Flash |
-| **ESC** | 45 A, 2–6S, AM32 |
-| **Current firmware** | ArduPilot Copter 4.6.3 (custom build) |
-
-### Radio Link
-
-| Property | Value |
-|----------|-------|
-| **Receiver** | Radiomaster XR4 Gemini Xrossband Dual-Band ELRS |
-| **Protocol** | ExpressLRS (ELRS) |
-| **Firmware** | ExpressLRS 4.0.0 |
-| **Binding Phrase** | Not stored in the repository; provision and rotate securely |
-
-### FPV Video System
-
-| Property | Value |
-|----------|-------|
-| **Camera** | RunCam Phoenix 2 — 1000 TVL, 155° FOV, analog |
-| **Video Transmitter (VTX)** | SpeedyBee TX800 |
-| **VTX Channel** | 5806 MHz (Raceband, Channel 5) |
-| **VTX Antenna** | TrueRC Singularity 5.8 GHz RHCP, SMA |
-
-### Propulsion
-
-| Property | Value |
-|----------|-------|
-| **Motors** | Emax Eco II 2004, 3–6S, 3000 KV (4 × units) |
-
-### Navigation
-
-| Property | Value |
-|----------|-------|
-| **GPS / Compass** | HGLRC M100 with integrated compass |
-
-### Current Physical Integration
-
-> The links below have been verified while disarmed. This does not validate
-> mounting, calibration, power reliability, altitude hold, or flight readiness.
-
-| Component | Status |
-|-----------|--------|
-| MicroAir MTF-01P (LiDAR / Optical Flow) | Connected on UART5; permanent mounting/power reliability still to verify |
-| Raspberry Pi Zero 2 WH | Connected on UART4; Pi `/dev/serial0` MAVLink verified |
-| Raspberry Pi AI Camera | Connected to Pi CSI; loosely cable-held and facing forward, not a calibrated nadir mount |
-| Payload servo | Disconnected; no actuation test is currently permitted |
-| Forward MT-15 rangefinder | Disconnected and untested; available mounting/wiring space is unconfirmed |
+- Keep the MTF-01P downward-facing and unobstructed.
+- Record the camera-to-body transform and payload release offset.
+- Confirm regulated power budgets for the Pi, camera, sensors, and servo.
+- Keep companion, RC, GPS, VTX, and sensor UART assignments distinct.
+- Do not claim autonomous hall navigation from downward flow/range plus a
+  single forward range beam; wider obstacle sensing and localization are
+  required.

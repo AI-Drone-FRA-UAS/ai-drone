@@ -92,20 +92,13 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
 - Metric output from vision requires a rigid mount and a supplied calibration.
   Without both, keep the output non-metric rather than inventing a scale.
 
-## Hardware and access facts
+## Hardware and access
 
-- Flywoo GOKU GN745 AIO, ArduPilot Copter 4.6.3.
-- Pi Zero 2 W companion link: FC UART4 to Pi `/dev/serial0`, MAVLink2 at
-  115200 baud.
-- Downward MTF-01P flow/range sensor: FC UART5, MAVLink1 at 115200 baud.
-- Preferred Pi access when Tailscale is online:
-  `ssh -F /dev/null seb@seb-is-pm` (MagicDNS).
-- Pi hotspot fallback: `ssh -F /dev/null seb@192.168.4.1`.
-- Pi network boot order is `Xyz`, other saved auto-connect profiles, then the
-  `AI-Drone-Zero` hotspot. Use `ai-drone-network status|list` and
-  `sudo ai-drone-network auto|connect|hotspot`; see `docs/pi-networking.md`.
-- Direct connection and health tools default to the platform null SSH config;
-  preserve `SSH_CONFIG` propagation so a broken host config cannot block them.
+Treat `AGENTS.md` as the concise access and hardware-safety reference. Stable
+topology is in `docs/DRONE_CONFIGURATION.md`, networking in
+`docs/pi-networking.md`, and live observations only in dated `state/` captures.
+Preserve `SSH_CONFIG` propagation so a broken host SSH config cannot block the
+connection and health tools.
 
 Do not put passwords, Wi-Fi/eduroam credentials, tokens, private keys, or real
 secret defaults in source, documentation, command lines, logs, deployment
