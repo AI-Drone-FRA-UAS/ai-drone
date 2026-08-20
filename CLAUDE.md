@@ -101,6 +101,9 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
 - Preferred Pi access when Tailscale is online:
   `ssh -F /dev/null seb@seb-is-pm` (MagicDNS).
 - Pi hotspot fallback: `ssh -F /dev/null seb@192.168.4.1`.
+- Pi network boot order is `Xyz`, other saved auto-connect profiles, then the
+  `AI-Drone-Zero` hotspot. Use `ai-drone-network status|list` and
+  `sudo ai-drone-network auto|connect|hotspot`; see `docs/pi-networking.md`.
 - Direct connection and health tools default to the platform null SSH config;
   preserve `SSH_CONFIG` propagation so a broken host config cannot block them.
 

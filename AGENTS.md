@@ -16,6 +16,15 @@
   has previously had permissions that prevented the default client config from
   loading.
 
+## Pi networking
+
+- `ai-drone-network.service` tries `Xyz`, other saved auto-connect profiles,
+  then the `AI-Drone-Zero` fallback hotspot. See `docs/pi-networking.md`.
+- On the Pi, use `ai-drone-network status` or `ai-drone-network list`; switch
+  with `sudo ai-drone-network auto`, `sudo ai-drone-network connect "PROFILE"`,
+  or `sudo ai-drone-network hotspot`.
+- Prefer Tailscale access with `ssh -F /dev/null seb@seb-is-pm` when online.
+
 ## Hardware safety
 
 - Treat all live-hardware inspection as disarmed/read-only unless the user
