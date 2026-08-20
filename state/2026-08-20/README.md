@@ -25,6 +25,18 @@ line; without that it would have been lost. Nobody was hurt.
 `GPS_PRIMARY` is still `0` and the vehicle complained `GPS 1: primary but TYPE 0`
 while the GPS checks were enabled. Clearing the two GPS check bits resolved it.
 
+`parameter-diff-since-2026-08-18.txt` holds the full comparison against the
+previous capture. It contains changes that were **not** made in this session
+and that nobody has accounted for:
+
+- `FS_THR_ENABLE` 3 -> 0. **The throttle failsafe is disabled.** This is a
+  safety setting and it was on two days ago.
+- `AVOID_ENABLE` 3 -> 2, `AVOID_BEHAVE` 0 -> 1, `AVOID_MARGIN` 2 -> 1.
+
+The unversioned `~/fly_and_land.py` writes parameters, which is the likeliest
+source. Establish who changed these and whether they should stay before the
+next flight.
+
 ## Sensors
 
 - Downward LiDAR (MTF-01P, `RNGFND1_TYPE=10`, orientation 25): healthy, 0.02 m
@@ -56,11 +68,20 @@ reading is wrong, the commanded 0.7 was ~70% power against a 26% hover thrust,
 and the 0.5 "hold" was still nearly double hover — which matches the observed
 climb exactly.
 
-**This must be settled from evidence before the next flight.** Either read the
-dataflash log from this flight, or bench it with the propellers removed:
-arm in `GUIDED_NOGPS`, send `thrust=0.9`, and watch `SERVO_OUTPUT_RAW`. A
-throttle interpretation drives the motors to ~90% immediately; a climb-rate
-interpretation runs the altitude controller instead.
+**This must be settled from evidence before the next flight**, and the bench is
+now the only way: with the propellers removed, arm in `GUIDED_NOGPS`, send
+`thrust=0.9`, and watch `SERVO_OUTPUT_RAW`. A throttle interpretation drives
+the motors to ~90% immediately; a climb-rate interpretation runs the altitude
+controller instead.
+
+The onboard log cannot answer it. All 6.24 MiB were downloaded over MAVLink
+except the first 64 KiB block, which reads as empty — and that block held the
+~95 `FMT` records that define every other message. Exactly one `FMT` header
+survives in the remainder, so nothing can decode the rest. The raw download is
+at `~/ai-drone-live/artifacts/logs/dataflash-log-1.bin` on the Pi; it is not
+committed because without the format definitions it is undecodable. Reading the
+chip over the developer USB link with a ground station would recover the whole
+log including that first block.
 
 ## Also here
 
