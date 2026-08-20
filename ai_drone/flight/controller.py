@@ -91,7 +91,7 @@ class DroneController:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
-            if self._flight_started_by_controller:
+            if self._flight_started_by_controller and not self._landing_commanded:
                 self.emergency_stop()
             elif self._arm_command_sent or self._armed_by_controller:
                 self._request_disarm()
@@ -300,6 +300,18 @@ class DroneController:
                 f"ARMING_CHECK={value:g}; flight requires exact value 1 (all checks)"
             )
 
+    def verify_onboard_logging(self) -> None:
+        backend = float(request_parameter(self._connection(), "LOG_BACKEND_TYPE"))
+        bitmask = float(request_parameter(self._connection(), "LOG_BITMASK"))
+        if (
+            not math.isfinite(backend)
+            or backend != int(backend)
+            or not int(backend) & 5
+        ):
+            raise FlightSafetyError("onboard file/dataflash logging is disabled")
+        if not math.isfinite(bitmask) or bitmask <= 0:
+            raise FlightSafetyError("LOG_BITMASK must be nonzero")
+
     def set_mode(self, mode_name: str, timeout: float = 5.0) -> None:
         finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
         connection = self._connection()
@@ -330,6 +342,7 @@ class DroneController:
         if self.is_armed:
             return
         self.verify_arming_checks()
+        self.verify_onboard_logging()
         if self.wait_for_altitude(timeout=min(timeout, 3.0)) is None:
             raise FlightSafetyError("no fresh downward DISTANCE_SENSOR altitude")
         self.set_mode("GUIDED")

@@ -6,9 +6,12 @@ import argparse
 import logging
 import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 from ai_drone.flight.controller import DroneController, FlightSafetyError
+from ai_drone.flight.dataflash import latest_dataflash_log
 from ai_drone.flight.guards import FlightGuardError, check_safety_guardrails
+from ai_drone.flight.recording import FlightRecorder
 from ai_drone.validation import finite_in_range
 
 FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
@@ -42,6 +45,42 @@ def _controller(args: argparse.Namespace) -> DroneController:
         baud=args.baud,
         max_altitude=args.max_alt,
     )
+
+
+@contextmanager
+def _flight_session(args: argparse.Namespace):
+    with _controller(args) as drone:
+        metadata = {
+            key: value
+            for key, value in vars(args).items()
+            if key not in {"confirm_flight", "handler"}
+            and isinstance(value, str | int | float | bool | type(None))
+        }
+        record = FlightRecorder(drone._connection(), metadata)
+        try:
+            yield drone, record
+        except BaseException as error:
+            record.finish(error)
+            if drone.is_flying:
+                try:
+                    drone.emergency_stop()
+                except Exception:
+                    logger.exception("could not request emergency LAND")
+            raise
+        else:
+            try:
+                dataflash_log = latest_dataflash_log(drone._connection())
+                record.set_dataflash_log(dataflash_log)
+                record.event(
+                    "dataflash_identified",
+                    found=dataflash_log is not None,
+                    **(dataflash_log or {}),
+                )
+            except Exception as error:
+                record.event("dataflash_unavailable", error=str(error))
+            record.finish()
+        finally:
+            record.close()
 
 
 def _monitor(drone: DroneController, duration: float, min_battery_v: float) -> None:
@@ -86,10 +125,14 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_hover(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
-    with _controller(args) as drone:
+    with _flight_session(args) as (drone, record):
+        record.event("takeoff_started", target_alt_m=args.takeoff_alt)
         drone.takeoff(args.takeoff_alt)
+        record.event("hover_started")
         _monitor(drone, args.duration, args.min_battery)
+        record.event("landing_started")
         drone.land()
+        record.event("landed")
     return 0
 
 
@@ -99,8 +142,16 @@ def cmd_velocity_test(args: argparse.Namespace) -> int:
     finite_in_range(args.vy, "--vy", minimum=-1.0, maximum=1.0)
     finite_in_range(args.vz, "--vz", minimum=-0.5, maximum=0.5)
     finite_in_range(args.yaw_rate, "--yaw-rate", minimum=-45.0, maximum=45.0)
-    with _controller(args) as drone:
+    with _flight_session(args) as (drone, record):
+        record.event("takeoff_started", target_alt_m=args.takeoff_alt)
         drone.takeoff(args.takeoff_alt)
+        record.event(
+            "velocity_started",
+            vx=args.vx,
+            vy=args.vy,
+            vz=args.vz,
+            yaw_rate_deg=args.yaw_rate,
+        )
         deadline = time.monotonic() + args.duration
         try:
             while time.monotonic() < deadline:
@@ -116,7 +167,9 @@ def cmd_velocity_test(args: argparse.Namespace) -> int:
                 drone.send_velocity_body(0.0, 0.0, 0.0, 0.0)
             except (OSError, RuntimeError):
                 logger.warning("could not send final zero-velocity setpoint")
+        record.event("landing_started")
         drone.land()
+        record.event("landed")
     return 0
 
 

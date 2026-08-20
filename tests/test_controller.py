@@ -110,6 +110,25 @@ def test_arming_checks_must_be_exactly_all(monkeypatch) -> None:
         controller.verify_arming_checks()
 
 
+@pytest.mark.parametrize(
+    ("parameters", "message"),
+    [
+        ({"LOG_BACKEND_TYPE": 2.0, "LOG_BITMASK": 1.0}, "onboard"),
+        ({"LOG_BACKEND_TYPE": 1.0, "LOG_BITMASK": 0.0}, "LOG_BITMASK"),
+    ],
+)
+def test_flight_requires_onboard_logging(monkeypatch, parameters, message) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    controller.connection = MagicMock()
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.request_parameter",
+        lambda _connection, name: parameters[name],
+    )
+
+    with pytest.raises(FlightSafetyError, match=message):
+        controller.verify_onboard_logging()
+
+
 def test_land_timeout_never_force_disarms(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
