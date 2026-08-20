@@ -1,0 +1,12 @@
+[Unit]
+Description=Select preferred AI Drone Wi-Fi or start fallback hotspot
+Wants=NetworkManager.service
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ai-drone-network --worker auto
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

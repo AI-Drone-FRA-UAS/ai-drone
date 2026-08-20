@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WIFI_INTERFACE="${AI_DRONE_WIFI_INTERFACE:-wlan0}"
+PREFERRED_PROFILE="${AI_DRONE_PREFERRED_PROFILE:-Xyz}"
+HOTSPOT_PROFILE="${AI_DRONE_HOTSPOT_PROFILE:-Hotspot}"
+
+usage() {
+    cat <<'EOF'
+Usage: ai-drone-network COMMAND [PROFILE]
+
+Commands:
+  auto                 Try Xyz, then other saved auto-connect Wi-Fi profiles,
+                       and start AI-Drone-Zero if none can be reached.
+  connect PROFILE      Connect to one specific saved Wi-Fi profile.
+  hotspot              Start the AI-Drone-Zero hotspot.
+  list                 List saved client Wi-Fi profiles.
+  status               Show the active network and available profiles.
+
+Network-changing commands are scheduled independently so they can safely be
+started from an SSH session that will disconnect during the Wi-Fi handover.
+EOF
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ $EUID -eq 0 ]] || die "run this command with sudo"
+}
+
+profile_property() {
+    nmcli -g "$2" connection show "$1" 2>/dev/null || true
+}
+
+is_client_wifi_profile() {
+    local profile="$1"
+    [[ "$(profile_property "$profile" connection.type)" == "802-11-wireless" ]] \
+        && [[ "$(profile_property "$profile" 802-11-wireless.mode)" != "ap" ]]
+}
+
+client_profiles() {
+    local profile
+    while IFS= read -r profile; do
+        [[ -n "$profile" ]] || continue
+        is_client_wifi_profile "$profile" && printf '%s\n' "$profile"
+    done < <(nmcli -g NAME connection show)
+}
+
+connect_profile() {
+    local profile="$1"
+    is_client_wifi_profile "$profile" || return 1
+    echo "Trying Wi-Fi profile '$profile' on $WIFI_INTERFACE ..."
+    nmcli connection up "$profile" ifname "$WIFI_INTERFACE"
+}
+
+start_hotspot() {
+    echo "No saved client network is reachable; starting $HOTSPOT_PROFILE."
+    nmcli connection up "$HOTSPOT_PROFILE" ifname "$WIFI_INTERFACE"
+}
+
+auto_network() {
+    local profile autoconnect
+
+    nmcli radio wifi on
+    nmcli connection down "$HOTSPOT_PROFILE" >/dev/null 2>&1 || true
+
+    if connect_profile "$PREFERRED_PROFILE"; then
+        echo "Connected to preferred profile '$PREFERRED_PROFILE'."
+        return 0
+    fi
+
+    while IFS= read -r profile; do
+        [[ "$profile" != "$PREFERRED_PROFILE" ]] || continue
+        autoconnect="$(profile_property "$profile" connection.autoconnect)"
+        [[ "$autoconnect" == "yes" ]] || continue
+        if connect_profile "$profile"; then
+            echo "Connected to saved profile '$profile'."
+            return 0
+        fi
+    done < <(client_profiles)
+
+    start_hotspot
+}
+
+run_worker() {
+    local command="${1:-}"
+    shift || true
+
+    case "$command" in
+        auto)
+            auto_network
+            ;;
+        connect)
+            [[ $# -eq 1 ]] || die "connect requires exactly one profile name"
+            connect_profile "$1" || die "'$1' is not a saved client Wi-Fi profile"
+            ;;
+        hotspot)
+            start_hotspot
+            ;;
+        *)
+            die "invalid worker command '$command'"
+            ;;
+    esac
+}
+
+schedule_worker() {
+    local unit self
+    self="$(readlink -f "$0")"
+    unit="ai-drone-network-switch-$(date +%s)-$$"
+    systemd-run --quiet --collect --no-block \
+        --unit "$unit" \
+        "$self" --worker "$@"
+    echo "Scheduled network switch as $unit.service."
+}
+
+command="${1:-}"
+case "$command" in
+    --worker)
+        require_root
+        shift
+        run_worker "$@"
+        ;;
+    auto|hotspot)
+        require_root
+        schedule_worker "$command"
+        ;;
+    connect)
+        require_root
+        [[ $# -eq 2 ]] || die "connect requires exactly one profile name"
+        schedule_worker "$command" "$2"
+        ;;
+    list)
+        client_profiles
+        ;;
+    status)
+        nmcli -f DEVICE,TYPE,STATE,CONNECTION device status
+        echo
+        ip -4 route show
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
