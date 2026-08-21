@@ -112,10 +112,11 @@ def test_the_climb_stick_is_above_the_deadzone_and_below_full(monkeypatch) -> No
 
 
 def test_a_climb_faster_than_pilot_speed_up_stops_the_flight(monkeypatch) -> None:
-    # PILOT_SPEED_UP is 0.25 m/s on this aircraft.  Ten times that means the
-    # stick is not being read as a climb rate at all.
+    # PILOT_SPEED_UP is 0.25 m/s on this aircraft.  The 2026-08-21 runaway was
+    # about 3.8 m/s; a real liftoff transient is around 0.5 m/s and must not
+    # trip this.
     controller, _ = _controller(
-        monkeypatch, [0.02, 0.10, 0.20, 0.30, 0.40, 0.45, 0.48, 0.49]
+        monkeypatch, [0.02, 0.20, 0.40, 0.45, 0.48, 0.49, 0.49, 0.49]
     )
 
     with pytest.raises(FlightSafetyError, match="not being read as a climb rate"):

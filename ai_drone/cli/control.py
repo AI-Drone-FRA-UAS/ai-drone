@@ -330,6 +330,45 @@ def cmd_stabilize_takeoff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _live_line(drone: DroneController, climb: float | None) -> str:
+    """One line of everything the guards are about to act on."""
+
+    def metres(value: float | None) -> str:
+        return f"{value:+6.2f}" if value is not None else "   n/a"
+
+    believed = measured = None
+    if drone.local_position_altitude is not None and drone._ekf_reference is not None:
+        believed = drone.local_position_altitude - drone._ekf_reference
+    if drone.current_altitude is not None and drone._ground_reference is not None:
+        measured = drone.current_altitude - drone._ground_reference
+    disagreement = (
+        f"{believed - measured:+5.2f}"
+        if believed is not None and measured is not None
+        else "  n/a"
+    )
+    return (
+        f"  {drone.flight_mode or '?':<9} rng={metres(drone.current_altitude)} m "
+        f"climb={metres(climb)} m/s  ekf={metres(drone.local_position_altitude)} m "
+        f"ekfvz={metres(drone.local_position_climb)} m/s  "
+        f"gap={disagreement} m  batt={metres(drone.battery_voltage)} V"
+    )
+
+
+def _reporter(period: float = 0.25):
+    """Print the live line, rate limited so the console stays readable."""
+
+    state = {"next": 0.0}
+
+    def report(drone: DroneController, climb: float | None = None) -> None:
+        now = time.monotonic()
+        if now < state["next"]:
+            return
+        state["next"] = now + period
+        print(_live_line(drone, climb), flush=True)
+
+    return report
+
+
 def cmd_alt_hold_takeoff(args: argparse.Namespace) -> int:
     """Climb, hold and land entirely in modes ArduPilot controls the altitude in.
 
@@ -352,12 +391,29 @@ def cmd_alt_hold_takeoff(args: argparse.Namespace) -> int:
             target_alt_m=args.takeoff_alt,
             climb_rate_fraction=args.climb,
         )
+        report = _reporter()
         print(f"climbing to {args.takeoff_alt:.2f} m in ALT_HOLD")
-        drone.climb_in_alt_hold(args.takeoff_alt, climb=args.climb)
+        print(
+            "  mode      rangefinder  measured climb   EKF height   EKF rate   "
+            "gap between them   battery"
+        )
+
+        def climbing(controller: DroneController, climb: float | None) -> None:
+            report(controller, climb)
+            record.event(
+                "climb_sample",
+                rangefinder_m=controller.current_altitude,
+                measured_climb_ms=climb,
+                ekf_altitude_m=controller.local_position_altitude,
+                ekf_climb_ms=controller.local_position_climb,
+            )
+
+        drone.climb_in_alt_hold(args.takeoff_alt, climb=args.climb, on_sample=climbing)
         record.event("hold_started", ekf_flags=drone.ekf_flags)
         print(f"holding in ALT_HOLD for {args.duration:.1f} s")
 
         def sample(controller: DroneController) -> None:
+            report(controller)
             try:
                 check_safety_guardrails(controller, args.min_battery)
             except FlightGuardError as error:

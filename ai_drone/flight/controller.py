@@ -122,6 +122,9 @@ class DroneController:
         self._last_force_disarm = 0.0
         self._last_heartbeat_sent = 0.0
         self._ekf_reference: float | None = None
+        # The climb the guard last measured, so a caller can report the same
+        # number the guard is acting on instead of computing a second one.
+        self.measured_climb_ms: float | None = None
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -1574,11 +1577,19 @@ class DroneController:
         self.abort()
         raise TimeoutError("the STABILIZE climb did not reach the target altitude")
 
-    # ArduPilot bounds an ALT_HOLD climb by PILOT_SPEED_UP, which is 0.25 m/s
-    # on this aircraft.  A measured climb well past that means the stick is
-    # not being read as a climb rate at all -- the mode confusion that makes
-    # this airframe dangerous -- rather than a slightly brisk takeoff.
-    MAX_ALT_HOLD_CLIMB_MS = 0.50
+    # ArduPilot bounds a *steady* ALT_HOLD climb by PILOT_SPEED_UP, 0.25 m/s
+    # here, but the moment of leaving the ground is not steady: the airframe
+    # unloads and the rangefinder jumps, and ArduPilot's own takeoff ramp
+    # overshoots the pilot limit briefly.  A real liftoff measured 0.50 m/s
+    # and was aborted by this guard when the limit was set there, which is a
+    # false alarm rather than a catch.
+    #
+    # The runaway this exists to catch is a different size entirely: on
+    # 2026-08-21 the aircraft went from the floor past 3 m in 0.9 s, about
+    # 3.8 m/s.  One metre per second sits clear of the liftoff transient and
+    # far below that, and the altitude ceiling in update_telemetry remains the
+    # backstop -- it acts within centimetres regardless of rate.
+    MAX_ALT_HOLD_CLIMB_MS = 1.00
     ALT_HOLD_CLIMB_WINDOW_S = 0.2
 
     def climb_in_alt_hold(
@@ -1587,6 +1598,7 @@ class DroneController:
         *,
         climb: float = 0.5,
         timeout: float = 20.0,
+        on_sample: Any = None,
     ) -> None:
         """Climb to ``target_alt`` in ALT_HOLD, letting ArduPilot fly the climb.
 
@@ -1657,6 +1669,7 @@ class DroneController:
                         reference = (now, altitude)
                     elif now - reference[0] >= self.ALT_HOLD_CLIMB_WINDOW_S:
                         measured = (altitude - reference[1]) / (now - reference[0])
+                        self.measured_climb_ms = measured
                         if measured > self.MAX_ALT_HOLD_CLIMB_MS:
                             raise FlightSafetyError(
                                 f"climbing at {measured:.2f} m/s against a "
@@ -1665,6 +1678,8 @@ class DroneController:
                                 "so the stick is not being read as a climb rate"
                             )
                         reference = (now, altitude)
+                if on_sample is not None:
+                    on_sample(self, self.measured_climb_ms)
                 self.command_alt_hold_climb(climb)
                 time.sleep(0.05)
         except BaseException:
