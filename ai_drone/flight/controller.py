@@ -1483,6 +1483,104 @@ class DroneController:
         self.abort()
         raise TimeoutError("the STABILIZE climb did not reach the target altitude")
 
+    # ArduPilot bounds an ALT_HOLD climb by PILOT_SPEED_UP, which is 0.25 m/s
+    # on this aircraft.  A measured climb well past that means the stick is
+    # not being read as a climb rate at all -- the mode confusion that makes
+    # this airframe dangerous -- rather than a slightly brisk takeoff.
+    MAX_ALT_HOLD_CLIMB_MS = 0.50
+    ALT_HOLD_CLIMB_WINDOW_S = 0.2
+
+    def climb_in_alt_hold(
+        self,
+        target_alt: float,
+        *,
+        climb: float = 0.5,
+        timeout: float = 20.0,
+    ) -> None:
+        """Climb to ``target_alt`` in ALT_HOLD, letting ArduPilot fly the climb.
+
+        This exists because the two things that made the earlier routes up
+        dangerous are both absent here.  There is no thrust mapping to get
+        wrong: the stick is a climb rate, bounded by ``PILOT_SPEED_UP``, and
+        ArduPilot owns the altitude loop.  And ALT_HOLD needs no position
+        estimate, so unlike GUIDED it can arm on the floor -- the vehicle's own
+        pre-arm verdict says ``Need Position Estimate`` for GUIDED and says
+        nothing of the sort here.
+
+        What it does depend on is the vehicle's vertical estimate, which is
+        why this is only safe now: with ``EK3_SRC1_POSZ`` on the barometer the
+        aircraft reports +0.00 m/s standing still, where it reported -17.78 m/s
+        before.  The guards below assume nothing about that and measure the
+        climb anyway.
+        """
+
+        target = finite_in_range(
+            target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
+        )
+        finite_in_range(climb, "climb", minimum=0.05, maximum=1.0)
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=60.0)
+
+        self._throttle_calibration = self.read_throttle_calibration()
+        calibration = self._throttle_calibration
+        # The throttle has to be at its calibrated minimum before arming, and
+        # an override that only starts afterwards leaves a window in which the
+        # vehicle has no throttle source at all.
+        self._set_rc_override(calibration.minimum_pwm)
+        if not self.is_armed:
+            self.arm(mode="ALT_HOLD")
+        if not self._armed_by_controller:
+            raise FlightSafetyError("takeoff requires arming by this controller")
+        if self.wait_for_altitude(timeout=3.0) is None:
+            raise FlightSafetyError("no fresh downward altitude before takeoff")
+
+        self._ground_reference = self.current_altitude
+        reference: tuple[float, float] | None = None
+        started = time.monotonic()
+        deadline = started + timeout
+        try:
+            while time.monotonic() < deadline:
+                self.update_telemetry()
+                now = time.monotonic()
+                if now - started > 2.0 and (
+                    not self.altitude_is_fresh() or not self.heartbeat_is_fresh()
+                ):
+                    raise FlightSafetyError("telemetry became stale during the climb")
+                altitude = self.current_altitude
+                if (
+                    not self._flight_started_by_controller
+                    and altitude is not None
+                    and self._ground_reference is not None
+                    and altitude > self._ground_reference + self.LIFTOFF_MARGIN_M
+                ):
+                    self._flight_started_by_controller = True
+                    self.is_flying = True
+                if (
+                    self.last_telemetry_time >= started
+                    and altitude is not None
+                    and altitude >= target
+                ):
+                    return
+                if altitude is not None:
+                    if reference is None:
+                        reference = (now, altitude)
+                    elif now - reference[0] >= self.ALT_HOLD_CLIMB_WINDOW_S:
+                        measured = (altitude - reference[1]) / (now - reference[0])
+                        if measured > self.MAX_ALT_HOLD_CLIMB_MS:
+                            raise FlightSafetyError(
+                                f"climbing at {measured:.2f} m/s against a "
+                                f"{self.MAX_ALT_HOLD_CLIMB_MS:.2f} m/s limit; "
+                                "ArduPilot is not bounding this by PILOT_SPEED_UP, "
+                                "so the stick is not being read as a climb rate"
+                            )
+                        reference = (now, altitude)
+                self.command_alt_hold_climb(climb)
+                time.sleep(0.05)
+        except BaseException:
+            self.abort()
+            raise
+        self.abort()
+        raise TimeoutError("the ALT_HOLD climb did not reach the target altitude")
+
     def handover_to_alt_hold(self, timeout: float = 5.0) -> None:
         """Hand altitude control to ArduPilot, in the one order that is safe.
 

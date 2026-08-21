@@ -324,6 +324,48 @@ def cmd_stabilize_takeoff(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_alt_hold_takeoff(args: argparse.Namespace) -> int:
+    """Climb, hold and land entirely in modes ArduPilot controls the altitude in.
+
+    The one route up this aircraft can actually fly. GUIDED is refused by the
+    vehicle itself -- ``PreArm: Need Position Estimate``, because EKF3 does not
+    start optical-flow navigation until it detects a takeoff -- and STABILIZE
+    puts raw motor thrust on the stick through a mapping that two flights have
+    failed to pin down. ALT_HOLD needs no position estimate and reads the stick
+    as a climb rate bounded by ``PILOT_SPEED_UP``, so ArduPilot flies the climb
+    and there is no thrust curve left to guess at.
+
+    It depends instead on the vehicle's vertical estimate, which is why it
+    would have been a bad idea this morning and is a reasonable one now.
+    """
+
+    _require_flight_confirmation(args)
+    with _flight_session(args) as (drone, record):
+        record.event(
+            "alt_hold_takeoff_started",
+            target_alt_m=args.takeoff_alt,
+            climb_rate_fraction=args.climb,
+        )
+        print(f"climbing to {args.takeoff_alt:.2f} m in ALT_HOLD")
+        drone.climb_in_alt_hold(args.takeoff_alt, climb=args.climb)
+        record.event("hold_started", ekf_flags=drone.ekf_flags)
+        print(f"holding in ALT_HOLD for {args.duration:.1f} s")
+
+        def sample(controller: DroneController) -> None:
+            try:
+                check_safety_guardrails(controller, args.min_battery)
+            except FlightGuardError as error:
+                raise FlightSafetyError(str(error)) from error
+
+        drone.hold_in_alt_hold(args.duration, on_sample=sample)
+        record.event("landing_started", ekf_flags=drone.ekf_flags)
+        print("landing")
+        drone.land()
+        record.event("landed")
+        print("landed")
+    return 0
+
+
 def cmd_hover(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
     with _flight_session(args) as (drone, record):
@@ -437,6 +479,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     stabilize.add_argument("--confirm-flight")
     stabilize.set_defaults(handler=cmd_stabilize_takeoff)
+
+    alt_hold = commands.add_parser(
+        "alt-hold-takeoff",
+        help="climb, hold and land in ALT_HOLD; ArduPilot flies the climb",
+    )
+    _add_common_options(alt_hold, include_takeoff=True)
+    alt_hold.add_argument("--duration", type=float, default=3.0)
+    alt_hold.add_argument(
+        "--climb",
+        type=float,
+        default=0.5,
+        help="climb rate as a fraction of PILOT_SPEED_UP, 0.05-1.0",
+    )
+    alt_hold.add_argument("--confirm-flight")
+    alt_hold.set_defaults(handler=cmd_alt_hold_takeoff)
 
     hover = commands.add_parser(
         "hover",

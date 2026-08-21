@@ -204,6 +204,25 @@ def cmd_stabilize(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_alt_hold(args: argparse.Namespace) -> int:
+    return _rehearse(
+        args,
+        [
+            "alt-hold-takeoff",
+            "--takeoff-alt",
+            str(args.takeoff_alt),
+            "--max-alt",
+            str(args.max_alt),
+            "--duration",
+            str(args.duration),
+            "--min-battery",
+            str(args.min_battery),
+            "--climb",
+            str(args.climb),
+        ],
+    )
+
+
 def cmd_hover(args: argparse.Namespace) -> int:
     return _rehearse(
         args,
@@ -327,6 +346,14 @@ def _parser() -> argparse.ArgumentParser:
     _add_flight(stabilize)
     stabilize.add_argument("--climb", type=float, default=0.06)
     stabilize.set_defaults(handler=cmd_stabilize)
+
+    alt_hold = commands.add_parser(
+        "alt-hold-takeoff",
+        help="rehearse an ALT_HOLD climb, hold and landing",
+    )
+    _add_flight(alt_hold)
+    alt_hold.add_argument("--climb", type=float, default=0.5)
+    alt_hold.set_defaults(handler=cmd_alt_hold)
 
     hover = commands.add_parser("hover", help="rehearse a guarded takeoff and landing")
     _add_flight(hover)

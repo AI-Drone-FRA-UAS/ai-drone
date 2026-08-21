@@ -14,6 +14,7 @@ this aircraft. Check the newest `state/` capture and `params/` dump before use.
 | `status` | Read altitude, battery, mode, and armed state | Read-only |
 | `preflight` | Report what would block a guarded takeoff | Read-only |
 | `arm-test` | Arm in a chosen mode, hold at idle, disarm | Arms; no takeoff |
+| `alt-hold-takeoff` | Climb, hold and land in ALT_HOLD; ArduPilot flies the climb | Arms and flies |
 | `nogps-takeoff` | Climb, hold and land with no position estimate | Arms and flies |
 | `stabilize-takeoff` | Climb in STABILIZE, hold in ALT_HOLD, then land | Arms and flies |
 | `hover` (`takeoff` alias) | Guided takeoff, timed hold, then land | Arms and flies |
@@ -62,6 +63,42 @@ Two failures are worth recognizing on sight:
   horizontal source. A GUIDED takeoff cannot work without one: `EK3_SRC1_POSXY`
   must name a working source (GPS outdoors, or optical flow indoors) before
   `hover` or `velocity-test` can do anything but be refused.
+
+## The route up this aircraft can actually fly
+
+`alt-hold-takeoff` is the one to reach for. The other two exist for reasons
+that no longer hold:
+
+- **GUIDED is refused by the vehicle itself.** Asked to run its pre-arm checks
+  in GUIDED it answers `PreArm: Need Position Estimate`, because EKF3 starts
+  optical-flow navigation only once it has detected a takeoff. Asked the same
+  question in `ALT_HOLD` or `GUIDED_NOGPS`, it does not. That is the vehicle's
+  verdict, obtained with `MAV_CMD_RUN_PREARM_CHECKS` and without arming.
+- **STABILIZE puts raw motor thrust on the stick**, through a mapping two
+  flights failed to pin down: a commanded 0.313 of stick produced 0.128 of
+  throttle against a 0.263 hover, which neither a direct reading nor
+  ArduPilot's mid-stick-is-hover curve predicts. Until that is measured on a
+  bench with the propellers off, every STABILIZE throttle is a guess.
+
+In ALT_HOLD the stick is a climb rate that ArduPilot bounds by
+`PILOT_SPEED_UP` (0.25 m/s here), and ArduPilot owns the altitude loop, so
+there is no thrust curve left to get wrong:
+
+```bash
+ssh -t -F /dev/null seb@192.168.4.1 'cd ~/ai-drone && .venv/bin/drone-control \
+  alt-hold-takeoff --takeoff-alt 0.3 --max-alt 0.5 --duration 3 --climb 0.5 \
+  --confirm-flight FLIGHT_TEST_READY'
+```
+
+Use `ssh -t`, and run it from a terminal you are sitting at: without one the
+abort key cannot arm, and the command will say so.
+
+This depends on the vehicle's vertical estimate, which is exactly what was
+diverged on 2026-08-21 -- `EK3_SRC1_POSZ` named the rangefinder as the height
+source while `EK3_RNG_USE_HGT` disabled using it for height, leaving the filter
+with no vertical position source and a vertical velocity that ran away to
+-38 m/s. It is now the barometer. Confirm before flying that `preflight`
+reports a plausible vertical estimate rather than merely claiming one exists.
 
 ## Flying without a position estimate
 
