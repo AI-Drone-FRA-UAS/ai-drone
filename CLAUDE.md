@@ -130,6 +130,19 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   every takeoff must go through it before arming. Shaping the requested climb
   rate does not substitute for it -- the runaway above happened with the
   throttle stick centred, asking for no climb at all.
+- A stationary aircraft measures exactly one g whatever its orientation, so
+  the accelerometer magnitude is self-checking on a bench. This one measures
+  9.79 m/s^2 with its motors stopped and 10.65 m/s^2 with them turning at idle
+  spin, attitude unchanged, `VIBE` at 0.17. EKF3 integrates that 0.85 m/s^2
+  into a vertical velocity at 0.75 m/s per second: on 2026-08-21 the aircraft
+  reported climbing at 4.27 m/s while its rangefinder sat at 0.020 m for all
+  359 samples, ALT_HOLD held the throttle down against the phantom climb, and
+  it never left the ground. An hour earlier the same fault ran the other way
+  and produced 92 % throttle. `ai_drone.mavlink.accel_bias` measures it and
+  `drone-motor-test` reports it. Do not read `VIBE` as evidence that vibration
+  is not the problem -- it measures variance, and a rectified vibration is a DC
+  offset. ALT_HOLD cannot be flown on this airframe while that shift is
+  present, in either direction.
 - A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
   simulator, and the simulator encodes whatever was assumed when it was
   written. It cannot validate an assumption about how the vehicle interprets a

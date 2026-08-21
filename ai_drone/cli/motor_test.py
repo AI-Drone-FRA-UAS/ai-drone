@@ -17,6 +17,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.mavlink import arming_checks
+from ai_drone.mavlink.accel_bias import AccelBias
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
@@ -196,6 +197,22 @@ def _cleanup_motor_test(
     return disarmed_observed
 
 
+def _drain_accel(connection: Any, bias: AccelBias, *, moving: bool) -> None:
+    """Take whatever accelerometer readings have arrived, sending nothing.
+
+    Non-blocking on purpose: this runs inside the countdown, which paces
+    itself, and must not add waiting of its own.
+    """
+
+    while True:
+        message = connection.recv_match(type="RAW_IMU", blocking=False)
+        if message is None:
+            return
+        bias.observe(
+            float(message.xacc), float(message.yacc), float(message.zacc), moving=moving
+        )
+
+
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Briefly test selected motor outputs on a propeller-free bench."
@@ -280,9 +297,28 @@ def main(arguments: list[str] | None = None) -> int:
         print(f"Configured MOT_SPIN_MIN is approximately {spin_min:.1f}%.")
         print("ArduPilot temporarily soft-arms outputs during MAV_CMD_DO_MOTOR_TEST.")
         print("Press Ctrl-C now to cancel.")
+
+        # The accelerometer must read one g throughout: the aircraft is on a
+        # bench and never moves.  Anything else is the sensor, and on
+        # 2026-08-21 that number was what kept this aircraft on the ground.
+        bias = AccelBias.empty()
+        connection.mav.command_long_send(
+            connection.target_system,
+            connection.target_component,
+            mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavlink.MAVLINK_MSG_ID_RAW_IMU,
+            20_000,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
         for remaining in range(args.countdown, 0, -1):
             print(f"Starting in {remaining} ...", flush=True)
             time.sleep(1)
+            _drain_accel(connection, bias, moving=False)
 
         require_fresh_disarmed_heartbeat(
             connection,
@@ -311,10 +347,19 @@ def main(arguments: list[str] | None = None) -> int:
         deadline = time.monotonic() + expected + 1.0
         while time.monotonic() < deadline:
             message = connection.recv_match(
-                type=["STATUSTEXT", "HEARTBEAT"], blocking=True, timeout=0.25
+                type=["STATUSTEXT", "HEARTBEAT", "RAW_IMU"], blocking=True, timeout=0.25
             )
-            if message is not None and message.get_type() == "STATUSTEXT":
+            if message is None:
+                continue
+            if message.get_type() == "STATUSTEXT":
                 print(f"ArduPilot: {message.text}")
+            elif message.get_type() == "RAW_IMU":
+                bias.observe(
+                    float(message.xacc),
+                    float(message.yacc),
+                    float(message.zacc),
+                    moving=True,
+                )
     except KeyboardInterrupt:
         print("Cancelled; requesting immediate motor-test stop.", file=sys.stderr)
         return 130
@@ -325,6 +370,8 @@ def main(arguments: list[str] | None = None) -> int:
             first_motor=first_motor,
         )
 
+    print()
+    print(bias.describe())
     if cleanup_confirmed:
         print("Motor test complete; a disarmed heartbeat was observed.")
         return 0

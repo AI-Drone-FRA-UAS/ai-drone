@@ -319,3 +319,64 @@ only for a while.
   what fixes the overshoot -- kept, and labelled as such.
 - The live console line gained an `ask=` column, so the requested rate and the
   measured rate are visible side by side. On this flight they differed by 6x.
+
+## Evening, second attempt: it did not lift, and that closed the case
+
+The settle gate worked. The vehicle reported +0.013 m/s and held it for three
+seconds before the software would arm. Then the aircraft sat on the floor for
+twenty seconds and never moved. Recorded in
+`alt-hold-takeoff-no-liftoff.tlog`.
+
+| t | rangefinder | asked-for climb | **vehicle's reported climb** |
+|---|---|---|---|
+| 6.0 s | 0.020 m | 0.00 | +0.01 m/s |
+| 9.0 s | 0.020 m | 0.50 | **+0.80 m/s** |
+| 12.1 s | 0.020 m | 0.50 | **+3.09 m/s** |
+| 16.1 s | 0.020 m | 0.50 | **+4.27 m/s** |
+
+The rangefinder read 0.020 m for every one of 359 samples. The vehicle believed
+it was climbing at 4.27 m/s, so ALT_HOLD held the throttle down against a climb
+that was not happening, and it never left the ground. This is the mirror image
+of the overshoot an hour earlier, from the same cause.
+
+### The cause, measured
+
+| t | armed | motors | \|accelerometer\| | vibration Z | roll / pitch |
+|---|---|---|---|---|---|
+| 1.5–6.1 s | no | 1000 | **9.74–9.80 m/s²** | 0.01 | 0.5° / 2.3° |
+| 9.1–25.7 s | yes | 1085–1161 | **10.55–10.74 m/s²** | 0.17 | 0.5° / 2.3° |
+
+A stationary aircraft measures exactly one g whatever its orientation. With the
+motors stopped this one measures gravity correctly. With them turning at idle
+spin -- 1090 of a 1000–1400 usable band, nowhere near hover -- it measures
+**0.85 m/s² too much**, with the attitude unchanged and the vibration metric at
+0.17. EKF3 integrates that difference: 0.75 m/s² of drift per second, which is
+exactly the slope of the reported climb between 8 s and 12 s.
+
+The VIBE metric cannot see this. It measures variance, and a rectified
+vibration appears as a DC offset instead. This is the same +0.566 m/s² armed
+bias noted on 2026-08-20 and left unexplained; it is now the confirmed cause of
+two failed flights and it is not a software fault.
+
+### What was wrongly believed before this telemetry was read
+
+- That the settle gate would be enough. It fixed what it was built for -- the
+  ringing left by handling -- and the aircraft still could not fly, because the
+  estimate is corrupted again the moment the motors turn.
+- That prop wash on the barometer was involved. The barometer is steady to
+  0.03 hPa across the whole run; the pressure trace is flat while the reported
+  climb runs to +4.27 m/s.
+- That vibration would show up in `VIBE`. It does not, and the two flights
+  before this one were analysed on the assumption that it would.
+
+### What changed
+
+`ai_drone/mavlink/accel_bias.py` and `drone-motor-test` now measure this
+directly: the motor test takes a baseline during its countdown and compares it
+with the readings while the motors run, then names the number. It needs the
+propellers off, which is the point -- with them off, the same measurement
+separates an unbalanced or damaged propeller from a bent shaft, a hard-mounted
+flight controller, or an electrical coupling.
+
+**Until that measurement is made and the shift is gone, ALT_HOLD cannot fly on
+this aircraft.** Both failure directions are the same fault.

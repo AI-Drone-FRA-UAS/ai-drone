@@ -230,6 +230,8 @@ def test_partial_motor_command_write_still_triggers_stop_cleanup(monkeypatch) ->
         wait_heartbeat=lambda *, timeout: heartbeat,
         close=lambda: setattr(connection, "closed", True),
         closed=False,
+        mav=SimpleNamespace(command_long_send=lambda *_args: None),
+        recv_match=lambda **_kwargs: None,
     )
     sends = []
 
