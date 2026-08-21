@@ -124,6 +124,15 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
 - Filter MAVLink state by the selected vehicle source, reject armed heartbeats,
   use monotonic absolute deadlines, and close serial, camera, and output
   resources in `finally` blocks.
+- Losing the operator must end the flight, not abandon it. A flight run over
+  SSH dies with the session: SIGHUP terminates it, taking the guards, the
+  landing logic and the abort key with it, and the RC override then lapses
+  after `RC_OVERRIDE_TIME` onto an airframe with no receiver. On 2026-08-21 a
+  Wi-Fi drop did exactly that and left an armed aircraft with its motors
+  running until someone pulled the battery. `AbortOnHangUp` turns SIGHUP and
+  SIGTERM into the ordinary abort path so `ensure_landed` still runs; every
+  flight command must install it, and no flight path may rely on the process
+  outliving the link.
 - No systemd unit, timer, or crontab on the Pi may start anything that talks to
   the flight controller at boot. An unexpected reboot must never bring up a
   command path to the vehicle.

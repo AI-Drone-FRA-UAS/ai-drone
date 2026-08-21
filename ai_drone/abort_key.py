@@ -34,6 +34,76 @@ from typing import IO, Any
 _POLL_SECONDS = 0.2
 
 
+class OperatorLost(RuntimeError):
+    """Raised when the terminal driving the flight went away."""
+
+
+class AbortOnHangUp:
+    """Turn losing the operator's terminal into an abort instead of a kill.
+
+    A flight run over SSH dies with the SSH session: the shell sends SIGHUP
+    and the default action is to terminate, taking the guards, the landing
+    logic and the abort key with it.  On 2026-08-21 a Wi-Fi drop did exactly
+    that and left an armed aircraft with its motors running and nobody
+    commanding it -- the override lapsed after RC_OVERRIDE_TIME and, with no
+    receiver and no failsafe configured, ArduPilot had no defined behaviour to
+    fall back on.
+
+    Losing the operator is a reason to end the flight, not a reason to abandon
+    it.  Raising from the signal handler puts the flight on the same abort path
+    every other failure takes, so ``ensure_landed`` still runs and still gets
+    to choose between LAND and a disarm.
+    """
+
+    # SIGINT is deliberately absent: Ctrl-C already raises KeyboardInterrupt,
+    # which the flight session handles.
+    SIGNALS = ("SIGHUP", "SIGTERM")
+
+    def __init__(self) -> None:
+        self.installed: tuple[str, ...] = ()
+        self._previous: dict[Any, Any] = {}
+
+    def __enter__(self) -> AbortOnHangUp:
+        import signal
+
+        installed = []
+        for name in self.SIGNALS:
+            number = getattr(signal, name, None)
+            if number is None:  # pragma: no cover - POSIX only
+                continue
+            try:
+                self._previous[number] = signal.signal(number, self._raise)
+            except (OSError, ValueError):  # pragma: no cover - not main thread
+                continue
+            installed.append(name)
+        self.installed = tuple(installed)
+        return self
+
+    def __exit__(self, *_exception: Any) -> None:
+        import signal
+
+        for number, handler in self._previous.items():
+            with contextlib.suppress(OSError, ValueError):
+                signal.signal(number, handler)
+        self._previous.clear()
+        self.installed = ()
+
+    @staticmethod
+    def _raise(number: int, _frame: Any) -> None:
+        raise OperatorLost(
+            f"the terminal driving this flight went away (signal {number}); "
+            "ending the flight rather than abandoning the aircraft"
+        )
+
+    def describe(self) -> str:
+        if not self.installed:
+            return "hang-up abort NOT installed; a dropped link will kill this flight"
+        return (
+            f"hang-up abort armed on {', '.join(self.installed)}: a dropped link "
+            "ends the flight instead of stranding it"
+        )
+
+
 class AbortKey:
     """Watch a terminal for one keypress, on a background thread.
 

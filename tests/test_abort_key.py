@@ -171,3 +171,37 @@ def test_the_key_does_not_blind_the_controller_to_the_disarm() -> None:
     assert _forced_disarms(connection)
     # The heartbeat that arrived in the same pass must have been read.
     assert not controller.is_armed
+
+
+def test_a_hang_up_ends_the_flight_instead_of_killing_it() -> None:
+    """SIGHUP must reach the abort path, not the default terminate action.
+
+    A flight over SSH dies with the session, and on 2026-08-21 that left an
+    armed aircraft with its motors running: the guards, the landing logic and
+    the abort key all went with the process.
+    """
+
+    import os
+    import signal
+
+    from ai_drone.abort_key import AbortOnHangUp, OperatorLost
+
+    with AbortOnHangUp() as hang_up:
+        assert "SIGHUP" in hang_up.installed
+        assert "ends the flight" in hang_up.describe()
+        with pytest.raises(OperatorLost, match="went away"):
+            os.kill(os.getpid(), signal.SIGHUP)
+
+    # And the previous disposition is put back, so a later SIGHUP outside a
+    # flight behaves the way the shell expects.
+    assert hang_up.installed == ()
+    assert signal.getsignal(signal.SIGHUP) is signal.SIG_DFL
+
+
+def test_the_flight_session_reports_whether_the_hang_up_abort_is_armed() -> None:
+    from ai_drone.abort_key import AbortOnHangUp
+
+    hang_up = AbortOnHangUp()
+    # Not installed yet: the operator must be able to read that.
+    assert "NOT installed" in hang_up.describe()
+    assert "will kill this flight" in hang_up.describe()
