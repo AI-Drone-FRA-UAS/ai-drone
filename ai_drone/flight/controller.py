@@ -119,6 +119,8 @@ class DroneController:
         self._landing_commanded = False
         self._manual_descent = False
         self._grounded_since: float | None = None
+        # Set by the caller to put a human in the loop; see ai_drone.abort_key.
+        self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
         self._rc_override_sent = 0.0
         self._throttle_calibration: ThrottleCalibration | None = None
@@ -342,6 +344,12 @@ class DroneController:
         if self.connection is None:
             return
         self._pump_rc_override()
+        if self._operator_asked_to_stop():
+            # Checked before reading telemetry, not after: the operator is
+            # reacting to the aircraft, and nothing this loop is about to
+            # learn changes what they asked for.
+            self.stop_now()
+            raise FlightSafetyError("operator pressed the abort key")
         for _ in range(max_messages):
             message = self.connection.recv_match(blocking=False)
             if message is None:
@@ -357,6 +365,49 @@ class DroneController:
             raise FlightSafetyError(
                 f"altitude {self.current_altitude:.2f} m exceeds {self.max_altitude:.2f} m"
             )
+
+    def _operator_asked_to_stop(self) -> bool:
+        callback = self.abort_requested
+        if callback is None:
+            return False
+        try:
+            return bool(callback())
+        except Exception as error:
+            # A broken abort hook must not become a reason to keep flying, but
+            # it also must not stop a flight that nobody asked to stop.
+            logger.error("abort-key check failed: %s", error)
+            return False
+
+    def stop_now(self) -> None:
+        """Force the motors off immediately, whatever the aircraft is doing.
+
+        This is not ``emergency_stop``.  That one picks the gentlest ending the
+        evidence supports and can end in LAND, an altitude-controlled mode.
+        This one cuts the motors: ArduPilot refuses an ordinary disarm in
+        flight, so the force magic number is required, and the aircraft will
+        drop.  That is the intent.  It exists for the case the guards cannot
+        see -- an operator watching the aircraft do something wrong -- and from
+        the half-metre this airframe is flown at, a drop is a far better
+        outcome than a climb nobody can stop.
+        """
+
+        if self.connection is None:
+            return
+        self._landing_commanded = True
+        logger.error("FORCED DISARM: cutting the motors now")
+        self.connection.mav.command_long_send(
+            self.target_system,
+            self.target_component,
+            mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+            0,
+            0,  # 0 = disarm
+            self.FORCE_DISARM_MAGIC,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
 
     def altitude_is_fresh(self, max_age: float = 1.0) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
@@ -626,6 +677,10 @@ class DroneController:
     # controller will say the aircraft is airborne.  ArduPilot's own takeoff
     # detector uses about the same margin.
     LIFTOFF_MARGIN_M = 0.05
+    # ArduPilot refuses an ordinary disarm while flying.  This value in param2
+    # of MAV_CMD_COMPONENT_ARM_DISARM is its documented override, and it is the
+    # only way to cut the motors of an aircraft that is doing something wrong.
+    FORCE_DISARM_MAGIC = 21196
     # How far a LAND may climb before it stops being treated as a landing.
     # Larger than the rangefinder's centimetre rounding and than the settle a
     # real touchdown produces, small enough to act inside a metre.
@@ -772,7 +827,14 @@ class DroneController:
             if now >= next_request:
                 next_request = now + retry_every
                 try:
-                    if escaped:
+                    if self._operator_asked_to_stop():
+                        # update_telemetry raises for this, and this loop
+                        # deliberately swallows that exception so a landing
+                        # cannot be interrupted.  Re-asserting it here is what
+                        # keeps the operator's decision from being swallowed
+                        # with it.
+                        self.stop_now()
+                    elif escaped:
                         # No longer asking LAND for anything: keep the manual
                         # descent throttle alive instead.
                         self._send_rc_override()

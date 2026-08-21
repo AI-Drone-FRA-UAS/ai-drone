@@ -138,6 +138,34 @@ uv run drone-rehearse stabilize-takeoff
 uv run drone-rehearse stabilize-takeoff --fault throttle-runaway
 ```
 
+## The abort key
+
+Every flying `drone-control` command watches the terminal for a keypress.
+Pressing any key **force-disarms the aircraft**: it does not request a
+landing, because LAND is an altitude-controlled mode and answering a panic key
+with one is what destroyed the aircraft on 2026-08-21. The motors stop and the
+aircraft drops. From the half-metre this airframe is flown at that is a far
+better outcome than a climb nobody can stop.
+
+The command prints, before anything arms, whether the key is actually live:
+
+```
+abort key ARMED: press any key to cut the motors
+abort key NOT ARMED (stdin is not a terminal; run the command with 'ssh -t'). ...
+```
+
+Read that line every time. Over SSH the key only works with a terminal
+allocated, so run flights as:
+
+```bash
+ssh -t -F /dev/null seb@192.168.4.1 'cd ~/ai-drone && .venv/bin/drone-control ...'
+```
+
+**It is only as good as the link.** The command runs on the Pi and the
+keystroke travels over Wi-Fi; if the link drops, the key does nothing and
+neither does anything else on the laptop. It is a second pair of hands, not a
+substitute for someone able to cut the battery.
+
 ## Rehearsing a flight without an aircraft
 
 `drone-rehearse` runs the real `drone-control` command against

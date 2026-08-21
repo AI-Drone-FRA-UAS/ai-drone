@@ -8,6 +8,7 @@ import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 
+from ai_drone.abort_key import AbortKey
 from ai_drone.flight.controller import DroneController, FlightSafetyError
 from ai_drone.flight.dataflash import latest_dataflash_log
 from ai_drone.flight.guards import FlightGuardError, check_safety_guardrails
@@ -67,13 +68,19 @@ def _controller(args: argparse.Namespace) -> DroneController:
 
 @contextmanager
 def _flight_session(args: argparse.Namespace):
-    with _controller(args) as drone:
+    with _controller(args) as drone, AbortKey() as abort_key:
+        # Printed rather than assumed.  A watcher that quietly did nothing --
+        # no terminal, stdin a pipe -- would be worse than none at all,
+        # because the operator would be counting on it.
+        print(abort_key.describe())
+        drone.abort_requested = abort_key.requested
         metadata = {
             key: value
             for key, value in vars(args).items()
             if key not in {"confirm_flight", "handler"}
             and isinstance(value, str | int | float | bool | type(None))
         }
+        metadata["abort_key"] = abort_key.reason
         record = FlightRecorder(drone._connection(), metadata)
         try:
             yield drone, record
