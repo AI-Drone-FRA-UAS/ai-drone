@@ -152,6 +152,45 @@ every observation available at the time and was wrong in its central claim: the
 rangefinder was accurate throughout. The unused second altitude source is still
 a real gap, but it is not what happened here.
 
+## The repair, later the same day
+
+The aircraft was rebuilt and put back on the bench. Everything below was
+measured through the link with the propellers fitted and the vehicle disarmed;
+no motor was run.
+
+**The vehicle-side cause.** `EK3_SRC1_POSZ` was `2`, naming the rangefinder as
+the primary height source, while `EK3_RNG_USE_HGT` was `-1`, disabling use of
+the rangefinder for height. Between them the filter had no vertical position
+source at all, and its vertical velocity ran as an uncorrected integral of
+accelerometer bias. That is the -10000 m.
+
+The barometer had been working the whole time -- it sat at a stable 2.7 m in
+the accident log while the EKF was ten kilometres underground -- and it is the
+right height source for indoor flight on flow. Moving `EK3_SRC1_POSZ` to `1`:
+
+| | reported altitude | reported vertical rate |
+| --- | --- | --- |
+| before, stationary on the floor | flag said "estimate available" | **-17.78 m/s** |
+| after, stationary on the floor | +0.05 m | **+0.01 m/s** |
+| after a full flight-controller reboot | -0.01 m | **+0.00 m/s** |
+
+The reboot matters: setting the parameter back to `2` did **not** bring the
+divergence back, so it is established at EKF initialisation rather than during
+operation. The accident happened on a freshly booted aircraft, and the third
+row is that same condition with the fix in place.
+
+`MOT_SPIN_MAX` went from `0.95` to `0.40` as a second, mode-independent limit.
+It caps motor output at 40% against a learned hover of 26%, so the full-throttle
+excursion of the accident is no longer physically available. It is a damper on
+the consequence, not a fix for a cause.
+
+**What the guard proof does and does not show.** The new `vertical_position`
+check was watched reading real values off the aircraft and passing on healthy
+ones. It has *not* been watched failing on real hardware: the attempt to
+reproduce the accident configuration did not reproduce the divergence. The
+guard is proven against the simulator and against the recorded accident values,
+not against a live divergence.
+
 ## Also unaddressed, and flagged before the flight
 
 These were raised before anything armed and were not acted on:

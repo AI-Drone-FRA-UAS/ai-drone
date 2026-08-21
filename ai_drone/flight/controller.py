@@ -207,6 +207,12 @@ class DroneController:
             connection,
             {
                 mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED: float(rate_hz),
+                # This airframe does not publish LOCAL_POSITION_NED at all --
+                # its EKF has no horizontal solution on the ground, so there
+                # is no local frame to report.  VFR_HUD carries the vertical
+                # estimate regardless, and it is the only place the -10000 m
+                # divergence of 2026-08-21 is visible before a flight.
+                mavlink.MAVLINK_MSG_ID_VFR_HUD: float(rate_hz),
                 mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR: float(rate_hz),
                 mavlink.MAVLINK_MSG_ID_SYS_STATUS: 2.0,
                 mavlink.MAVLINK_MSG_ID_ATTITUDE: float(rate_hz),
@@ -281,35 +287,54 @@ class DroneController:
                     self.local_position_climb = climb
             return
         if message_type == "DISTANCE_SENSOR":
-            if int(message.orientation) != DOWNWARD_ORIENTATION:
-                return
-            if not self._timestamp_is_fresh(
-                getattr(message, "time_boot_ms", None), now
-            ):
-                return
-            current = int(message.current_distance)
-            minimum = int(message.min_distance)
-            maximum = int(message.max_distance)
-            quality = int(getattr(message, "signal_quality", 255))
-            # MAVLink defines 0 as unknown/not supplied and 1 as invalid.
-            if (
-                current <= 0
-                or (minimum > 0 and current < minimum)
-                or (maximum > 0 and current > maximum)
-                or quality == 1
-            ):
-                return
-            altitude = current / 100.0
-            if not math.isfinite(altitude):
-                return
-            self.current_altitude = altitude
-            self.last_telemetry_time = now
+            self._process_distance_sensor(message, now)
+        elif message_type == "VFR_HUD":
+            # No timestamp on VFR_HUD to check, but it is the vertical
+            # estimate this vehicle actually sends.  Only fill in what
+            # LOCAL_POSITION_NED has not already provided.
+            climb = float(message.climb)
+            if math.isfinite(climb):
+                self.local_position_climb = climb
+            altitude = float(message.alt)
+            if math.isfinite(altitude) and self.local_position_altitude is None:
+                self.local_position_altitude = altitude
         elif message_type == "EKF_STATUS_REPORT":
             self.ekf_flags = int(message.flags)
         elif message_type == "SYS_STATUS":
             voltage = float(message.voltage_battery) / 1_000.0
             if math.isfinite(voltage) and voltage > 0.0:
                 self.battery_voltage = voltage
+
+    def _process_distance_sensor(self, message: Any, now: float) -> None:
+        """Accept one downward rangefinder reading, or reject it and say nothing.
+
+        Every altitude limit in this class is built on this value, so a
+        reading that fails any of these tests must not become
+        ``current_altitude`` -- and must not refresh ``last_telemetry_time``
+        either, because that is what the staleness guards read.
+        """
+
+        if int(message.orientation) != DOWNWARD_ORIENTATION:
+            return
+        if not self._timestamp_is_fresh(getattr(message, "time_boot_ms", None), now):
+            return
+        current = int(message.current_distance)
+        minimum = int(message.min_distance)
+        maximum = int(message.max_distance)
+        quality = int(getattr(message, "signal_quality", 255))
+        # MAVLink defines 0 as unknown/not supplied and 1 as invalid.
+        if (
+            current <= 0
+            or (minimum > 0 and current < minimum)
+            or (maximum > 0 and current > maximum)
+            or quality == 1
+        ):
+            return
+        altitude = current / 100.0
+        if not math.isfinite(altitude):
+            return
+        self.current_altitude = altitude
+        self.last_telemetry_time = now
 
     def update_telemetry(self, max_messages: int = 50) -> None:
         if isinstance(max_messages, bool) or not 1 <= max_messages <= 1_000:

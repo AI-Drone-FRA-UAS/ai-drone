@@ -420,6 +420,14 @@ class _Collector:
         if math.isfinite(voltage) and voltage > 0.0:
             self.battery_v = voltage
 
+    def _on_vfr_hud(self, message: Any, connection: Any) -> None:
+        climb = float(message.climb)
+        if math.isfinite(climb):
+            self.vertical_climb_ms = climb
+        altitude = float(message.alt)
+        if math.isfinite(altitude) and self.vertical_altitude_m is None:
+            self.vertical_altitude_m = altitude
+
     def _on_local_position_ned(self, message: Any, connection: Any) -> None:
         self.local_position = True
         altitude = -float(message.z)
@@ -475,6 +483,9 @@ def _request_observations(connection: Any, system: int, component: int) -> None:
         (mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR, 5.0),
         (mavlink.MAVLINK_MSG_ID_SYS_STATUS, 2.0),
         (mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED, 5.0),
+        # The vertical estimate this airframe actually publishes; it has no
+        # local frame to report on the ground.  See _check_vertical_position.
+        (mavlink.MAVLINK_MSG_ID_VFR_HUD, 5.0),
         (mavlink.MAVLINK_MSG_ID_OPTICAL_FLOW, 10.0),
     ):
         connection.mav.command_long_send(
