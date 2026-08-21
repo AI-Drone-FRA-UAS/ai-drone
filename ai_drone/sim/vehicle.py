@@ -121,6 +121,7 @@ class Fault(enum.Enum):
     THROTTLE_RUNAWAY = "throttle-runaway"
     EKF_DIVERGENCE = "ekf-divergence"
     LAND_CLIMBS = "land-climbs"
+    EKF_DRIFT = "ekf-drift"
 
 
 # What the vehicle reported on 2026-08-21 while sitting on the floor: an
@@ -132,6 +133,10 @@ DIVERGED_LAND_CLIMB_MS = 3.8
 # param2 of MAV_CMD_COMPONENT_ARM_DISARM: ArduPilot's documented override for
 # disarming an aircraft that is flying.
 FORCE_DISARM_MAGIC = 21196
+# 2026-08-21, measured: armed, the accelerometer read 0.566 m/s too much, the
+# barometer corrected about half of it, and the EKF's height ran away at
+# roughly this rate while the aircraft stood on the floor.
+DRIFT_RATE_MS = 0.35
 
 
 # Both faults report a diverged vertical estimate and make LAND climb.  They
@@ -148,6 +153,7 @@ class VehicleState:
 
     mode: int = COPTER_MODES["STABILIZE"]
     armed: bool = False
+    armed_at: float = 0.0
     altitude_m: float = 0.0
     north_m: float = 0.0
     east_m: float = 0.0
@@ -443,14 +449,25 @@ class SimulatedVehicle:
 
         if self._due("local_position", now, 0.1):
             diverged = self.fault in _DIVERGED_FAULTS
+            reported = -state.altitude_m
+            reported_vz = 0.0
+            if diverged:
+                reported = DIVERGED_ALTITUDE_M
+                reported_vz = -DIVERGED_CLIMB_MS
+            elif self.fault is Fault.EKF_DRIFT and state.armed:
+                # Not a jump to nonsense: a believable estimate that quietly
+                # walks away from the truth, the way the real one did.
+                drift = (self._clock() - state.armed_at) * DRIFT_RATE_MS
+                reported = -(state.altitude_m + drift * drift * 0.5)
+                reported_vz = -drift
             link.mav.local_position_ned_send(
                 self._boot_ms(now),
                 state.north_m,
                 state.east_m,
-                DIVERGED_ALTITUDE_M if diverged else -state.altitude_m,
+                reported,
                 0.0,
                 0.0,
-                -DIVERGED_CLIMB_MS if diverged else 0.0,
+                reported_vz,
             )
 
         if self._due("attitude", now, 0.1):
@@ -575,6 +592,7 @@ class SimulatedVehicle:
             self._note(f"refused arm in {state.mode_name}")
             return mavlink.MAV_RESULT_DENIED
         state.armed = True
+        state.armed_at = self._clock()
         self._note(f"armed in {state.mode_name}")
         return mavlink.MAV_RESULT_ACCEPTED
 

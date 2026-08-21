@@ -143,3 +143,66 @@ def test_leaving_the_ground_is_what_makes_it_a_flight(monkeypatch) -> None:
 
     assert controller.is_flying
     assert controller._flight_started_by_controller
+
+
+def _grounded_with_references() -> tuple[DroneController, MagicMock]:
+    controller = DroneController(device="udp:127.0.0.1:14550", max_altitude=0.5)
+    connection = MagicMock()
+    connection.recv_match.return_value = None
+    connection.mode_mapping.return_value = {"ALT_HOLD": 2, "LAND": 9, "STABILIZE": 0}
+    controller.connection = connection
+    controller.is_armed = True
+    controller._armed_by_controller = True
+    controller.current_altitude = 0.02
+    controller._ground_reference = 0.02
+    controller.local_position_altitude = 0.05
+    controller._ekf_reference = 0.05
+    controller.last_telemetry_time = time.monotonic()
+    return controller, connection
+
+
+def test_the_afternoon_of_2026_08_21_is_a_disagreement() -> None:
+    """The EKF ran to 4 m in seven seconds while the rangefinder held 0.02 m."""
+
+    controller, _ = _grounded_with_references()
+
+    assert controller.altitude_sources_agree()
+
+    controller.local_position_altitude = 0.05 + 0.30
+    assert controller.altitude_sources_agree(), "0.30 m is inside the tolerance"
+
+    controller.local_position_altitude = 0.05 + 4.00
+    assert not controller.altitude_sources_agree()
+
+
+def test_a_constant_offset_between_the_two_is_not_a_disagreement() -> None:
+    # The two are measured from different origins, so only the *change* since
+    # arming is comparable.  A fixed offset must not stop a healthy flight.
+    controller, _ = _grounded_with_references()
+    controller._ekf_reference = 12.0
+    controller.local_position_altitude = 12.0 + 0.28
+    controller.current_altitude = 0.02 + 0.30
+
+    assert controller.altitude_sources_agree()
+
+
+def test_a_missing_estimate_is_not_treated_as_a_disagreement() -> None:
+    controller, _ = _grounded_with_references()
+    controller.local_position_altitude = None
+
+    # Stopping a flight for want of a message would be its own hazard.
+    assert controller.altitude_sources_agree()
+
+
+def test_the_disagreement_stops_the_flight_through_update_telemetry() -> None:
+    controller, connection = _grounded_with_references()
+    controller._flight_started_by_controller = True
+    controller.is_flying = True
+    controller.local_position_altitude = 0.05 + 4.00
+
+    with pytest.raises(FlightSafetyError, match="the EKF believes it has climbed"):
+        controller.update_telemetry()
+
+    # And it stopped the aircraft rather than merely complaining.
+    assert controller._landing_commanded
+    assert connection.arducopter_disarm.called or connection.mav.set_mode_send.called

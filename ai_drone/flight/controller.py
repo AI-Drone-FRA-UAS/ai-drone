@@ -121,6 +121,7 @@ class DroneController:
         self._grounded_since: float | None = None
         self._last_force_disarm = 0.0
         self._last_heartbeat_sent = 0.0
+        self._ekf_reference: float | None = None
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -271,6 +272,7 @@ class DroneController:
                 self._armed_by_controller = False
                 self._flight_started_by_controller = False
                 self._ground_reference = None
+                self._ekf_reference = None
             return
         if message_type in {"ATTITUDE", "LOCAL_POSITION_NED"}:
             timestamp = getattr(message, "time_boot_ms", None)
@@ -372,6 +374,17 @@ class DroneController:
             self.emergency_stop()
             raise FlightSafetyError(
                 f"altitude {self.current_altitude:.2f} m exceeds {self.max_altitude:.2f} m"
+            )
+        if not self._landing_commanded and not self.altitude_sources_agree():
+            believed = (self.local_position_altitude or 0.0) - (
+                self._ekf_reference or 0.0
+            )
+            measured = (self.current_altitude or 0.0) - (self._ground_reference or 0.0)
+            self.emergency_stop()
+            raise FlightSafetyError(
+                f"the EKF believes it has climbed {believed:+.2f} m while the "
+                f"rangefinder measures {measured:+.2f} m. ArduPilot flies ALT_HOLD "
+                "and LAND on that estimate, so it is not safe to continue"
             )
 
     def _operator_asked_to_stop(self) -> bool:
@@ -608,6 +621,7 @@ class DroneController:
         if self.wait_for_altitude(timeout=3.0) is None:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
         self._ground_reference = self.current_altitude
+        self._ekf_reference = self.local_position_altitude
         started = time.monotonic()
         self._connection().mav.command_long_send(
             self.target_system,
@@ -706,6 +720,37 @@ class DroneController:
     # How long a LAND gets to start working before an impossible vertical
     # estimate is treated as proof that it never will.
     LAND_ESCAPE_AFTER_S = 2.0
+    # How far the EKF's idea of how much it has climbed may drift from the
+    # rangefinder's before the flight stops.  Compared as *changes since
+    # arming*, not as absolute values, because the two are measured from
+    # different origins and a constant offset between them means nothing.
+    #
+    # On 2026-08-21 the EKF's height ran to 4 m in seven seconds while the
+    # rangefinder held 0.02 m and the aircraft sat on the floor -- an armed
+    # accelerometer bias of +0.566 m/s that the barometer only half corrected.
+    # ArduPilot flies ALT_HOLD and LAND on that estimate, so this is the check
+    # that catches it before a climb rather than during one.
+    MAX_ALTITUDE_DISAGREEMENT_M = 0.40
+
+    def altitude_sources_agree(self) -> bool:
+        """Whether the EKF and the rangefinder tell the same story about the climb.
+
+        True when there is not enough to compare: a missing estimate is not
+        evidence of disagreement, and stopping a flight for want of a message
+        would be its own hazard.
+        """
+
+        if self._ground_reference is None or self._ekf_reference is None:
+            return True
+        if not self.altitude_is_fresh():
+            return True
+        rangefinder = self.current_altitude
+        estimate = self.local_position_altitude
+        if rangefinder is None or estimate is None:
+            return True
+        measured = rangefinder - self._ground_reference
+        believed = estimate - self._ekf_reference
+        return abs(believed - measured) <= self.MAX_ALTITUDE_DISAGREEMENT_M
 
     def vertical_estimate_is_sane(self) -> bool:
         """Whether the EKF's vertical rate is physically possible for this aircraft.
@@ -1042,6 +1087,7 @@ class DroneController:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
 
         self._ground_reference = self.current_altitude
+        self._ekf_reference = self.local_position_altitude
         reference: tuple[float, float] | None = None
         started = time.monotonic()
         deadline = started + timeout
@@ -1475,6 +1521,7 @@ class DroneController:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
 
         self._ground_reference = self.current_altitude
+        self._ekf_reference = self.local_position_altitude
         reference: tuple[float, float] | None = None
         started = time.monotonic()
         deadline = started + timeout
@@ -1578,6 +1625,7 @@ class DroneController:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
 
         self._ground_reference = self.current_altitude
+        self._ekf_reference = self.local_position_altitude
         reference: tuple[float, float] | None = None
         started = time.monotonic()
         deadline = started + timeout
