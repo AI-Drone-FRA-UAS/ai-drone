@@ -165,6 +165,8 @@ trip is here:
 | `battery-sag` | The battery guard lands on a collapsing pack |
 | `stale-altitude` | A dead rangefinder stream lands the aircraft |
 | `heartbeat-loss` | A dead telemetry link lands the aircraft |
+| `ekf-divergence` | 2026-08-21 end to end: a climb that never lifts, a diverged vertical estimate, and a LAND that answers it with full throttle. The abort must disarm rather than request LAND |
+| `land-climbs` | The same broken LAND under an aircraft that *did* take off. The abort must abandon LAND for STABILIZE on a below-hover throttle and fly it back down |
 | `throttle-runaway` | A commanded throttle producing far more thrust than the learned hover value predicts is measured and stopped |
 | `refuse-land` | An ignored LAND is reported, and the controller still does not force-disarm an airborne vehicle |
 

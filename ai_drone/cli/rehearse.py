@@ -21,7 +21,7 @@ from collections.abc import Sequence
 
 from ai_drone.cli.control import ARM_TEST_CONFIRMATION, FLIGHT_CONFIRMATION
 from ai_drone.cli.control import main as control_main
-from ai_drone.sim.vehicle import Fault, SimulatedVehicle
+from ai_drone.sim.vehicle import TOUCHDOWN_ALTITUDE_M, Fault, SimulatedVehicle
 from ai_drone.validation import finite_in_range
 
 logger = logging.getLogger(__name__)
@@ -124,19 +124,31 @@ def _rehearse(
         f"altitude={state.altitude_m:.2f} m battery={state.battery_v:.2f} V"
     )
     expected_failure = vehicle.fault is not Fault.NONE
+    # What actually matters about a rehearsal is where the aircraft ended up,
+    # not which exit code the command chose.  A fault that was recovered from
+    # -- flown back down and disarmed -- is a better outcome than one that
+    # aborted, and reporting it as "the fault did NOT stop the flight" trains
+    # the reader to ignore the warning that matters.
+    safe = not state.armed and state.altitude_m <= TOUCHDOWN_ALTITUDE_M
     if expected_failure:
-        verdict = (
-            "the injected fault was caught and the flight was stopped"
-            if code != 0
-            else "WARNING: the injected fault did NOT stop the flight"
-        )
+        if not safe:
+            verdict = (
+                "WARNING: the injected fault left the aircraft "
+                f"{'airborne' if state.altitude_m > TOUCHDOWN_ALTITUDE_M else 'armed'}"
+            )
+        elif code != 0:
+            verdict = "the injected fault was caught and the flight was stopped"
+        else:
+            verdict = "the injected fault was recovered from and the aircraft landed"
     else:
         verdict = (
-            "clean rehearsal" if code == 0 else "the rehearsal failed without a fault"
+            "clean rehearsal"
+            if code == 0 and safe
+            else "the rehearsal failed without a fault"
         )
     print(f"drone-control exit code {code}: {verdict}")
-    if expected_failure and code != 0:
-        return 0
+    if expected_failure:
+        return 0 if safe else 1
     return code
 
 

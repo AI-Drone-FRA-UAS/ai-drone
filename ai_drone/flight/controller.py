@@ -101,6 +101,8 @@ class DroneController:
         self.connection: Any | None = None
         self.current_altitude: float | None = None
         self.local_position_altitude: float | None = None
+        self.local_position_climb: float | None = None
+        self._ground_reference: float | None = None
         self.battery_voltage: float | None = None
         self.ekf_flags: int | None = None
         self._yaw_rad: float | None = None
@@ -115,6 +117,8 @@ class DroneController:
         self._armed_by_controller = False
         self._flight_started_by_controller = False
         self._landing_commanded = False
+        self._manual_descent = False
+        self._grounded_since: float | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
         self._rc_override_sent = 0.0
         self._throttle_calibration: ThrottleCalibration | None = None
@@ -256,6 +260,7 @@ class DroneController:
                 self._arm_command_sent = False
                 self._armed_by_controller = False
                 self._flight_started_by_controller = False
+                self._ground_reference = None
             return
         if message_type in {"ATTITUDE", "LOCAL_POSITION_NED"}:
             timestamp = getattr(message, "time_boot_ms", None)
@@ -268,6 +273,12 @@ class DroneController:
                 altitude = -float(message.z)
                 if math.isfinite(altitude):
                     self.local_position_altitude = altitude
+                # The EKF's own vertical rate.  This is the number LAND acts
+                # on, so it is the number worth sanity-checking before asking
+                # for LAND -- see ``vertical_estimate_is_sane``.
+                climb = -float(message.vz)
+                if math.isfinite(climb):
+                    self.local_position_climb = climb
             return
         if message_type == "DISTANCE_SENSOR":
             if int(message.orientation) != DOWNWARD_ORIENTATION:
@@ -504,8 +515,7 @@ class DroneController:
             raise FlightSafetyError("takeoff requires arming by this controller")
         if self.wait_for_altitude(timeout=3.0) is None:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
-        self._flight_started_by_controller = True
-        self.is_flying = True
+        self._ground_reference = self.current_altitude
         started = time.monotonic()
         self._connection().mav.command_long_send(
             self.target_system,
@@ -529,10 +539,22 @@ class DroneController:
             ):
                 self.emergency_stop()
                 raise FlightSafetyError("telemetry became stale during takeoff")
+            altitude = self.current_altitude
+            if (
+                not self._flight_started_by_controller
+                and altitude is not None
+                and self._ground_reference is not None
+                and altitude > self._ground_reference + self.LIFTOFF_MARGIN_M
+            ):
+                # Only now is this a flight.  Declaring it earlier is what
+                # made a climb that never lifted look like an airborne
+                # emergency on 2026-08-21, and sent it to LAND.
+                self._flight_started_by_controller = True
+                self.is_flying = True
             if (
                 self.last_telemetry_time >= started
-                and self.current_altitude is not None
-                and self.current_altitude >= target * 0.95
+                and altitude is not None
+                and altitude >= target * 0.95
             ):
                 return
             time.sleep(0.05)
@@ -546,32 +568,147 @@ class DroneController:
         # hover is a descent in whichever mode the vehicle is still in, so it
         # is safe to send first and does not depend on LAND being accepted.
         self._back_off_throttle_override()
-        self.set_mode("LAND")
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.update_telemetry()
-            if not self.is_armed:
-                self.is_flying = False
-                if self._rc_override is not None:
-                    self.clear_rc_override()
-                return
-            time.sleep(0.1)
-        raise TimeoutError(
-            "LAND remains commanded but disarming was not confirmed; do not approach the vehicle"
-        )
+        if self.never_left_the_ground():
+            # Ending a flight that never began.  LAND would hand a grounded
+            # aircraft to an altitude controller for no reason at all, and on
+            # 2026-08-21 that controller answered a diverged estimate with
+            # full throttle.
+            logger.warning(
+                "ending with a disarm rather than LAND: the aircraft never left "
+                "the ground"
+            )
+            self._request_disarm()
+        else:
+            self.set_mode("LAND")
+        # ensure_landed owns every wait for a disarm, so that the escape from a
+        # LAND that climbs exists on this path too.  Waiting here separately is
+        # what let a misbehaving LAND run unwatched for a full timeout.
+        if not self.ensure_landed(timeout=timeout):
+            raise TimeoutError(
+                "LAND remains commanded but disarming was not confirmed; do not "
+                "approach the vehicle"
+            )
+        self.is_flying = False
+        if self._rc_override is not None:
+            self.clear_rc_override()
+
+    # A vertical rate this large is not motion on an indoor aircraft whose
+    # climb rate is limited to 0.25 m/s; it is a diverged filter.  On
+    # 2026-08-21 the EKF reported 38 m/s of descent while the aircraft sat on
+    # the floor, and LAND answered that estimate with full throttle.
+    MAX_PLAUSIBLE_CLIMB_MS = 5.0
+    # How far above its arming reading the rangefinder must go before this
+    # controller will say the aircraft is airborne.  ArduPilot's own takeoff
+    # detector uses about the same margin.
+    LIFTOFF_MARGIN_M = 0.05
+    # How far a LAND may climb before it stops being treated as a landing.
+    # Larger than the rangefinder's centimetre rounding and than the settle a
+    # real touchdown produces, small enough to act inside a metre.
+    LAND_CLIMB_ESCAPE_M = 0.15
+    # How long a LAND gets to start working before an impossible vertical
+    # estimate is treated as proof that it never will.
+    LAND_ESCAPE_AFTER_S = 2.0
+
+    def vertical_estimate_is_sane(self) -> bool:
+        """Whether the EKF's vertical rate is physically possible for this aircraft.
+
+        Reported as sane when there is no estimate at all: the absence of a
+        number is not evidence against LAND, and refusing to stop an aircraft
+        because a message is missing would be worse than the failure this
+        guards against.
+        """
+
+        climb = self.local_position_climb
+        if climb is None or not math.isfinite(climb):
+            return True
+        return abs(climb) <= self.MAX_PLAUSIBLE_CLIMB_MS
+
+    def _rangefinder_says_grounded(self) -> bool:
+        """Whether a fresh rangefinder puts the aircraft back at its reference.
+
+        False on a stale reading: a number nobody can vouch for is not
+        evidence of anything, least of all of it being safe to disarm.
+        """
+
+        if not self.altitude_is_fresh():
+            return False
+        altitude = self.current_altitude
+        reference = self._ground_reference
+        if altitude is None or reference is None:
+            return False
+        return altitude <= reference + self.LIFTOFF_MARGIN_M
+
+    def never_left_the_ground(self) -> bool:
+        """Whether the aircraft demonstrably never became airborne.
+
+        Deliberately narrow.  It is false the moment this controller has seen
+        a liftoff, so it can never disarm an aircraft that is flying.
+        """
+
+        if self._flight_started_by_controller:
+            return False
+        return self._rangefinder_says_grounded()
+
+    def settled_on_the_ground(self, for_seconds: float = 0.5) -> bool:
+        """Whether the rangefinder has read ground level for long enough to act on.
+
+        Used only during a manual descent, where the altitude estimate is
+        already known to be untrustworthy and the rangefinder is all there is.
+        A single low sample is not enough -- an aircraft passing over an
+        obstacle produces one -- so this requires the reading to hold.
+        """
+
+        if not self._rangefinder_says_grounded():
+            self._grounded_since = None
+            return False
+        now = time.monotonic()
+        if self._grounded_since is None:
+            self._grounded_since = now
+            return False
+        return now - self._grounded_since >= for_seconds
 
     def emergency_stop(self) -> None:
-        """Request LAND without force-disarming a possibly airborne vehicle.
+        """Stop the aircraft by the safest route the evidence supports.
 
         This is deliberately a single, fast, unverified request so a guard can
         call it the instant something is wrong.  It is *not* sufficient on its
         own: a request that was lost or refused leaves the aircraft flying.
         Every caller must follow it with ``ensure_landed`` before giving up the
         connection.
+
+        LAND is an altitude-controlled mode, so it is only ever as good as the
+        vehicle's vertical estimate.  On 2026-08-21 this method requested LAND
+        on an aircraft that had never left the floor, whose EKF reported
+        -10000 m and a 38 m/s descent; the altitude controller went to full
+        throttle in a single log sample and flew the aircraft into a ceiling.
+        An aircraft that demonstrably never became airborne is therefore ended
+        with a disarm, which no altitude controller can misread.
         """
         if self.connection is None:
             return
         self._landing_commanded = True
+        if self.never_left_the_ground():
+            logger.warning(
+                "stopping with a disarm rather than LAND: the rangefinder still "
+                "reports %.2f m against a %.2f m ground reference, so this "
+                "aircraft never became airborne",
+                self.current_altitude
+                if self.current_altitude is not None
+                else float("nan"),
+                self._ground_reference
+                if self._ground_reference is not None
+                else float("nan"),
+            )
+            self._request_disarm()
+            return
+        if not self.vertical_estimate_is_sane():
+            logger.error(
+                "requesting LAND while the EKF reports %.1f m/s of vertical "
+                "motion, which this aircraft cannot do. LAND is altitude "
+                "controlled and may answer that estimate with full throttle. "
+                "Be ready to cut power.",
+                self.local_position_climb,
+            )
         mapping = self.connection.mode_mapping()
         if "LAND" not in mapping:
             raise FlightSafetyError("flight controller does not expose LAND mode")
@@ -600,16 +737,24 @@ class DroneController:
         if self.connection is None:
             return False
 
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        deadline = started + timeout
         next_request = 0.0
+        reference = self.current_altitude if self.altitude_is_fresh() else None
+        escaped = self._manual_descent
         while time.monotonic() < deadline:
             now = time.monotonic()
             if now >= next_request:
                 next_request = now + retry_every
                 try:
-                    self.emergency_stop()
+                    if escaped:
+                        # No longer asking LAND for anything: keep the manual
+                        # descent throttle alive instead.
+                        self._send_rc_override()
+                    else:
+                        self.emergency_stop()
                 except (OSError, RuntimeError, FlightSafetyError) as error:
-                    logger.error("could not request LAND: %s", error)
+                    logger.error("could not command the vehicle: %s", error)
             try:
                 self.update_telemetry()
             except FlightSafetyError:
@@ -621,8 +766,94 @@ class DroneController:
             if not self.is_armed:
                 self.is_flying = False
                 return True
+
+            altitude = self.current_altitude
+            measured = altitude if self.altitude_is_fresh() else None
+            # Whatever route brought it down, an aircraft the rangefinder has
+            # held at ground level is one this loop can finish.  A manual
+            # descent has no landing detector behind it, and a vehicle that
+            # refuses LAND never runs its own.
+            if self.settled_on_the_ground():
+                self._request_disarm()
+            if not escaped:
+                climbed = (
+                    measured is not None
+                    and reference is not None
+                    and measured > reference + self.LAND_CLIMB_ESCAPE_M
+                )
+                # The rangefinder runs out of range long before a runaway
+                # climb does, so a measured climb cannot be the only trigger.
+                # An estimate the aircraft cannot possibly be producing, still
+                # armed a couple of seconds after LAND was asked for, is the
+                # 2026-08-21 signature and does not depend on range at all.
+                impossible_estimate = (
+                    not self.vertical_estimate_is_sane()
+                    and now - started > self.LAND_ESCAPE_AFTER_S
+                )
+                if climbed or impossible_estimate:
+                    escaped = self._escape_to_manual_descent(
+                        measured if measured is not None else float("nan"),
+                        reference if reference is not None else float("nan"),
+                    )
+                    if escaped:
+                        next_request = time.monotonic()
+                elif measured is not None:
+                    reference = (
+                        measured if reference is None else min(reference, measured)
+                    )
             time.sleep(0.1)
         return False
+
+    def _escape_to_manual_descent(self, altitude: float, reference: float) -> bool:
+        """Abandon LAND for STABILIZE and descend on a manual throttle.
+
+        LAND is altitude controlled, so a diverged vertical estimate can make
+        it answer a landing request with a climb -- on 2026-08-21 with full
+        throttle.  Asking again gets the same answer from the same broken
+        controller.  STABILIZE ignores the altitude estimate entirely: its
+        attitude loop runs on the IMU, and a throttle below hover descends
+        whatever the EKF believes.
+
+        Returns whether the escape could be made.  Without a throttle
+        calibration and a standing override there is no manual throttle to
+        escape to, and LAND, however badly it is behaving, is still the only
+        thing left to ask for.
+        """
+
+        if self._throttle_calibration is None or self._rc_override is None:
+            logger.error(
+                "LAND has climbed from %.2f m to %.2f m and there is no throttle "
+                "override to take over with. Cut power from a safe distance.",
+                reference,
+                altitude,
+            )
+            return False
+        logger.error(
+            "LAND is climbing (%.2f m to %.2f m). Abandoning it for STABILIZE on "
+            "a below-hover throttle, which no altitude estimate can affect.",
+            reference,
+            altitude,
+        )
+        # Throttle first, mode second.  The other order hands STABILIZE
+        # whatever stick happens to be standing for as long as the mode change
+        # takes to confirm.
+        self._back_off_throttle_override()
+        try:
+            connection = self._connection()
+            connection.mav.set_mode_send(
+                self.target_system,
+                mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                connection.mode_mapping()["STABILIZE"],
+            )
+        except (OSError, RuntimeError, KeyError) as error:
+            logger.error("could not leave LAND for STABILIZE: %s", error)
+            return False
+        # _landing_commanded deliberately stays set.  Clearing it re-arms the
+        # ceiling check in update_telemetry, which answers an over-height
+        # aircraft by calling emergency_stop -- putting it straight back into
+        # the LAND this method just escaped.
+        self._manual_descent = True
+        return True
 
     # -- position-free flight ------------------------------------------
 
@@ -705,8 +936,7 @@ class DroneController:
         if self.wait_for_altitude(timeout=3.0) is None:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
 
-        self._flight_started_by_controller = True
-        self.is_flying = True
+        self._ground_reference = self.current_altitude
         reference: tuple[float, float] | None = None
         started = time.monotonic()
         deadline = started + timeout
@@ -720,6 +950,17 @@ class DroneController:
                     self.emergency_stop()
                     raise FlightSafetyError("telemetry became stale during takeoff")
                 altitude = self.current_altitude
+                if (
+                    not self._flight_started_by_controller
+                    and altitude is not None
+                    and self._ground_reference is not None
+                    and altitude > self._ground_reference + self.LIFTOFF_MARGIN_M
+                ):
+                    # Only now is this a flight.  Declaring it earlier is what
+                    # made a climb that never lifted look like an airborne
+                    # emergency on 2026-08-21, and sent it to LAND.
+                    self._flight_started_by_controller = True
+                    self.is_flying = True
                 if (
                     self.last_telemetry_time >= started
                     and altitude is not None
@@ -1024,19 +1265,24 @@ class DroneController:
         start = -self.STABILIZE_RAMP_START_BELOW_HOVER
         return start + fraction * (climb - start)
 
-    def abort_to_land(self) -> None:
-        """Request LAND and back the throttle off to a value safe in any mode.
+    def abort(self) -> None:
+        """Stop the aircraft and back the throttle off to a value safe in any mode.
 
         An abort cannot assume its own mode change was accepted, so the
         throttle it leaves behind has to be safe whether the vehicle is still
         in STABILIZE, already in ALT_HOLD, or in LAND.  Just below hover is
         that value; centring the stick would not be.
+
+        Whether this ends in LAND or in a disarm is ``emergency_stop``'s
+        decision, and it turns on whether the aircraft ever actually left the
+        ground.  This was ``abort_to_land`` until 2026-08-21, when requesting
+        LAND unconditionally flew a grounded aircraft into a ceiling.
         """
 
         try:
             self.emergency_stop()
         except (OSError, RuntimeError, FlightSafetyError) as error:
-            logger.error("could not request LAND: %s", error)
+            logger.error("could not stop the aircraft: %s", error)
         self._back_off_throttle_override()
 
     def _back_off_throttle_override(self) -> None:
@@ -1097,8 +1343,7 @@ class DroneController:
         if self.wait_for_altitude(timeout=3.0) is None:
             raise FlightSafetyError("no fresh downward altitude before takeoff")
 
-        self._flight_started_by_controller = True
-        self.is_flying = True
+        self._ground_reference = self.current_altitude
         reference: tuple[float, float] | None = None
         started = time.monotonic()
         deadline = started + timeout
@@ -1111,6 +1356,17 @@ class DroneController:
                 ):
                     raise FlightSafetyError("telemetry became stale during the climb")
                 altitude = self.current_altitude
+                if (
+                    not self._flight_started_by_controller
+                    and altitude is not None
+                    and self._ground_reference is not None
+                    and altitude > self._ground_reference + self.LIFTOFF_MARGIN_M
+                ):
+                    # Only now is this a flight.  Declaring it earlier is what
+                    # made a climb that never lifted look like an airborne
+                    # emergency on 2026-08-21, and sent it to LAND.
+                    self._flight_started_by_controller = True
+                    self.is_flying = True
                 if (
                     self.last_telemetry_time >= started
                     and altitude is not None
@@ -1135,9 +1391,9 @@ class DroneController:
                 )
                 time.sleep(0.05)
         except BaseException:
-            self.abort_to_land()
+            self.abort()
             raise
-        self.abort_to_land()
+        self.abort()
         raise TimeoutError("the STABILIZE climb did not reach the target altitude")
 
     def handover_to_alt_hold(self, timeout: float = 5.0) -> None:
@@ -1154,7 +1410,7 @@ class DroneController:
             self.set_mode("ALT_HOLD", timeout=timeout)
             self.command_alt_hold_climb(0.0)
         except BaseException:
-            self.abort_to_land()
+            self.abort()
             raise
 
     def hold_in_alt_hold(self, duration: float, on_sample: Any = None) -> None:
@@ -1170,5 +1426,5 @@ class DroneController:
                 self.command_alt_hold_climb(0.0)
                 time.sleep(0.1)
         except BaseException:
-            self.abort_to_land()
+            self.abort()
             raise

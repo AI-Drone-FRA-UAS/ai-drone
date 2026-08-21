@@ -133,18 +133,25 @@ def test_flight_requires_onboard_logging(monkeypatch, parameters, message) -> No
 def test_land_timeout_never_force_disarms(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
+    connection.mode_mapping.return_value = {"LAND": 9, "STABILIZE": 0}
     controller.connection = connection
     controller.is_armed = True
     monkeypatch.setattr(controller, "set_mode", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "update_telemetry", lambda: None)
-    times = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr("ai_drone.flight.controller.time.sleep", lambda _s: None)
+    # A clock that always runs past the deadline, however many times the
+    # landing path consults it.
+    clock = iter(range(10_000))
     monkeypatch.setattr(
-        "ai_drone.flight.controller.time.monotonic", lambda: next(times)
+        "ai_drone.flight.controller.time.monotonic", lambda: float(next(clock))
     )
 
     with pytest.raises(TimeoutError, match="LAND remains commanded"):
         controller.land(timeout=1.0)
 
+    # A vehicle that will not confirm a landing may still be flying, and
+    # force-disarming a flying aircraft drops it out of the sky.  Nothing on
+    # this path has evidence that it is on the ground.
     connection.arducopter_disarm.assert_not_called()
 
 

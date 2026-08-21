@@ -119,6 +119,24 @@ class Fault(enum.Enum):
     HEARTBEAT_LOSS = "heartbeat-loss"
     REFUSE_LAND = "refuse-land"
     THROTTLE_RUNAWAY = "throttle-runaway"
+    EKF_DIVERGENCE = "ekf-divergence"
+    LAND_CLIMBS = "land-climbs"
+
+
+# What the vehicle reported on 2026-08-21 while sitting on the floor: an
+# altitude ten kilometres underground and a 38 m/s descent.  LAND is altitude
+# controlled, so it answered that estimate with full throttle.
+DIVERGED_ALTITUDE_M = -10_000.0
+DIVERGED_CLIMB_MS = -38.0
+DIVERGED_LAND_CLIMB_MS = 3.8
+
+
+# Both faults report a diverged vertical estimate and make LAND climb.  They
+# differ in whether the aircraft ever leaves the ground: EKF_DIVERGENCE is
+# 2026-08-21 end to end, where the commanded throttle never lifted it and the
+# abort flew it; LAND_CLIMBS is the same broken LAND under an aircraft that
+# did take off normally.
+_DIVERGED_FAULTS = frozenset({Fault.EKF_DIVERGENCE, Fault.LAND_CLIMBS})
 
 
 @dataclass
@@ -248,6 +266,14 @@ class SimulatedVehicle:
                 drain = 1.2
             state.battery_v = max(0.1, state.battery_v - drain * dt)
 
+        if state.mode == COPTER_MODES["LAND"] and self.fault in _DIVERGED_FAULTS:
+            # The accident: the altitude controller reads a 38 m/s descent that
+            # is not happening, applies full throttle to arrest it, and flies
+            # the aircraft upward.  Nothing about being on the ground stops it.
+            if state.armed:
+                state.altitude_m += DIVERGED_LAND_CLIMB_MS * dt
+            return
+
         if state.mode == COPTER_MODES["LAND"] and self.fault is not Fault.REFUSE_LAND:
             state.altitude_m = max(0.0, state.altitude_m - DESCENT_RATE_MS * dt)
             if state.altitude_m <= TOUCHDOWN_ALTITUDE_M:
@@ -332,6 +358,10 @@ class SimulatedVehicle:
             if self.fault is Fault.THROTTLE_RUNAWAY:
                 gain *= RUNAWAY_THRUST_MULTIPLIER
             rate = (throttle - state.parameters["MOT_THST_HOVER"]) * gain
+            if self.fault is Fault.EKF_DIVERGENCE:
+                # 2026-08-21: the commanded throttle was about half of hover,
+                # so no stick this command sends ever lifts the aircraft.
+                rate = min(rate, 0.0)
         else:
             deadzone = state.parameters["THR_DZ"] / 1_000.0
             offset = throttle - 0.5
@@ -409,14 +439,15 @@ class SimulatedVehicle:
             )
 
         if self._due("local_position", now, 0.1):
+            diverged = self.fault in _DIVERGED_FAULTS
             link.mav.local_position_ned_send(
                 self._boot_ms(now),
                 state.north_m,
                 state.east_m,
-                -state.altitude_m,
+                DIVERGED_ALTITUDE_M if diverged else -state.altitude_m,
                 0.0,
                 0.0,
-                0.0,
+                -DIVERGED_CLIMB_MS if diverged else 0.0,
             )
 
         if self._due("attitude", now, 0.1):

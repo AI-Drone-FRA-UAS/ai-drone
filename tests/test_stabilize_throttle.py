@@ -101,7 +101,7 @@ def test_an_abort_leaves_a_throttle_that_descends_in_every_mode() -> None:
     controller, connection = _armed_controller("STABILIZE")
     controller.command_stabilize_throttle(0.06)
 
-    controller.abort_to_land()
+    controller.abort()
 
     left = _sent_throttle(connection)
     # Below hover, so it descends in STABILIZE; below the ALT_HOLD deadzone,

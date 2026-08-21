@@ -100,8 +100,10 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   aircraft was fine for thirteen seconds in STABILIZE, which ignores the EKF
   entirely; the moment this software requested LAND, the altitude controller
   read that estimate, went to full throttle in a single log sample, and flew
-  the aircraft into a ceiling in one second. `emergency_stop`, `abort_to_land`,
-  `ensure_landed`, and every guard in `flight/guards.py` route to LAND. Before
+  the aircraft into a ceiling in one second. `emergency_stop`, `abort`,
+  `ensure_landed`, and every guard in `flight/guards.py` route through
+  `emergency_stop`, which disarms instead when the aircraft never left the
+  ground. Before
   requesting it, check that the vertical estimate is sane -- and when the
   aircraft is demonstrably still on the ground, disarm instead.
 - Do not report a flight as started before the aircraft has left the ground.

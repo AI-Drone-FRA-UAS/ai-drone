@@ -95,6 +95,8 @@ class Snapshot:
     rangefinder_orientation: int | None = None
     battery_v: float | None = None
     local_position: bool = False
+    vertical_altitude_m: float | None = None
+    vertical_climb_ms: float | None = None
     flow_samples: int = 0
     flow_quality: int | None = None
     modes_available: tuple[str, ...] = ()
@@ -255,13 +257,63 @@ def _check_horizontal_position(snapshot: Snapshot) -> Check:
     return Check("horizontal_position", False, reason)
 
 
+# What the vertical estimate is allowed to say about a stationary aircraft
+# standing on the floor.  These are not flight limits; they are the bounds
+# outside which the number cannot be a measurement of this airframe at all.
+MAX_GROUNDED_CLIMB_MS = 1.0
+MAX_PLAUSIBLE_ALTITUDE_M = 1_000.0
+
+
 def _check_vertical_position(snapshot: Snapshot) -> Check:
+    """Check the vertical estimate itself, not only the flag that claims one.
+
+    On 2026-08-21 this check passed on the flag while the estimate behind it
+    was -10000 m with a reported 38 m/s descent, and the LAND that followed
+    read that estimate and went to full throttle.  A bit saying a value is
+    available says nothing about whether the value is usable.
+    """
+
     flags = snapshot.ekf_flags
     if flags is None:
         return Check("vertical_position", None, "no EKF_STATUS_REPORT received")
-    if flags & (EKF_POS_VERT_ABS | EKF_POS_VERT_AGL):
-        return Check("vertical_position", True, "EKF has a vertical position estimate")
-    return Check("vertical_position", False, "EKF has no vertical position estimate")
+    if not flags & (EKF_POS_VERT_ABS | EKF_POS_VERT_AGL):
+        return Check(
+            "vertical_position", False, "EKF has no vertical position estimate"
+        )
+
+    altitude = snapshot.vertical_altitude_m
+    climb = snapshot.vertical_climb_ms
+    if altitude is None or climb is None:
+        return Check(
+            "vertical_position",
+            None,
+            "EKF claims a vertical estimate but no LOCAL_POSITION_NED arrived to "
+            "check it against; the flag alone is not enough to fly on",
+        )
+    if abs(altitude) > MAX_PLAUSIBLE_ALTITUDE_M:
+        return Check(
+            "vertical_position",
+            False,
+            f"EKF vertical estimate is {altitude:.0f} m, which is not a position "
+            "this aircraft can be in. The flag says an estimate exists; the "
+            "estimate is diverged. LAND acts on this number -- check "
+            "EK3_SRC1_POSZ names a working height source",
+        )
+    if not snapshot.armed and abs(climb) > MAX_GROUNDED_CLIMB_MS:
+        return Check(
+            "vertical_position",
+            False,
+            f"EKF reports {climb:+.1f} m/s of vertical motion on a disarmed "
+            f"aircraft standing still. The estimate is diverged, and LAND is "
+            "altitude controlled -- check EK3_SRC1_POSZ names a working height "
+            "source",
+        )
+    return Check(
+        "vertical_position",
+        True,
+        f"EKF vertical estimate is {altitude:+.2f} m at {climb:+.2f} m/s, "
+        "both plausible",
+    )
 
 
 def _check_battery(snapshot: Snapshot) -> Check:
@@ -331,6 +383,8 @@ class _Collector:
         self.rangefinder_orientation: int | None = None
         self.battery_v: float | None = None
         self.local_position = False
+        self.vertical_altitude_m: float | None = None
+        self.vertical_climb_ms: float | None = None
         self.flow_qualities: list[int] = []
 
     def apply(self, message: Any, connection: Any) -> None:
@@ -368,6 +422,12 @@ class _Collector:
 
     def _on_local_position_ned(self, message: Any, connection: Any) -> None:
         self.local_position = True
+        altitude = -float(message.z)
+        if math.isfinite(altitude):
+            self.vertical_altitude_m = altitude
+        climb = -float(message.vz)
+        if math.isfinite(climb):
+            self.vertical_climb_ms = climb
 
     def _on_optical_flow(self, message: Any, connection: Any) -> None:
         self.flow_qualities.append(int(message.quality))
@@ -389,6 +449,8 @@ class _Collector:
             rangefinder_orientation=self.rangefinder_orientation,
             battery_v=self.battery_v,
             local_position=self.local_position,
+            vertical_altitude_m=self.vertical_altitude_m,
+            vertical_climb_ms=self.vertical_climb_ms,
             flow_samples=len(self.flow_qualities),
             flow_quality=(
                 sorted(self.flow_qualities)[len(self.flow_qualities) // 2]
