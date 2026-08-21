@@ -58,6 +58,11 @@ def _controller(
     monkeypatch.setattr(controller, "wait_for_altitude", fake_wait_for_altitude)
     monkeypatch.setattr(controller, "heartbeat_is_fresh", lambda *_a, **_k: True)
     monkeypatch.setattr(controller, "altitude_is_fresh", lambda *_a, **_k: True)
+    # The settle gate has its own tests below; waiting out its real window in
+    # every climb test would buy nothing and cost seconds apiece.
+    monkeypatch.setattr(
+        controller, "wait_for_vertical_estimate_to_settle", lambda **_kwargs: 0.0
+    )
 
     feed = iter(altitudes)
 
@@ -99,7 +104,11 @@ def test_the_throttle_is_at_its_minimum_before_the_vehicle_is_armed(
     assert _throttles(connection)[0] == CALIBRATION.minimum_pwm
 
 
-def test_the_climb_stick_is_above_the_deadzone_and_below_full(monkeypatch) -> None:
+def test_the_climb_stick_never_descends_and_never_reaches_full(monkeypatch) -> None:
+    # The stick used to be pinned at the full requested rate from the first
+    # sample.  It is ramped now, so the opening sticks sit at or just above
+    # centre; what still has to hold is that a climb never asks for a descent
+    # and never asks for everything the channel has.
     controller, connection = _controller(monkeypatch, [0.02, 0.10, 0.31])
 
     controller.climb_in_alt_hold(0.3, climb=0.5)
@@ -107,7 +116,7 @@ def test_the_climb_stick_is_above_the_deadzone_and_below_full(monkeypatch) -> No
     climbing = _throttles(connection)[1:]
     assert climbing, "no climb stick was ever sent"
     for pwm in climbing:
-        assert pwm > CALIBRATION.middle_pwm + CALIBRATION.deadzone_pwm
+        assert pwm >= CALIBRATION.middle_pwm
         assert pwm < CALIBRATION.maximum_pwm
 
 
@@ -207,3 +216,145 @@ def test_the_disagreement_stops_the_flight_through_update_telemetry() -> None:
     # And it stopped the aircraft rather than merely complaining.
     assert controller._landing_commanded
     assert connection.arducopter_disarm.called or connection.mav.set_mode_send.called
+
+
+class TestTheClimbIsShapedNotJustRequested:
+    """The 2026-08-21 evening flight put the whole requested climb rate on the
+    stick from the first sample and kept it there for 2.9 s while the aircraft
+    sat at 0.02 m.  It broke free with a thrust surplus, went 0.02 m to 0.57 m
+    in 0.77 s, and tripped its own 0.50 m ceiling.  These pin the shaping that
+    replaced that: ask for less at the start, and ask for less near the end.
+    """
+
+    @staticmethod
+    def _controller() -> DroneController:
+        controller = DroneController(device="udp:127.0.0.1:14550")
+        controller._ground_reference = 0.0
+        return controller
+
+    def test_the_first_request_is_zero_not_the_full_rate(self) -> None:
+        controller = self._controller()
+
+        assert controller._shaped_climb(0.0, 0.02, 0.30, 0.5) == 0.0
+
+    def test_the_request_grows_over_the_ramp_and_stops_at_the_asked_rate(self) -> None:
+        controller = self._controller()
+        ramp = DroneController.ALT_HOLD_RAMP_SECONDS
+
+        # Far below the target, so the ramp is the only thing binding.
+        rising = [controller._shaped_climb(t, 0.0, 10.0, 0.5) for t in (0.0, 1.0, 2.0)]
+        assert rising == sorted(rising)
+        assert rising[0] < rising[-1]
+        assert controller._shaped_climb(ramp, 0.0, 10.0, 0.5) == pytest.approx(0.5)
+        # The ramp is a limit, never a multiplier that overshoots the request.
+        assert controller._shaped_climb(ramp * 10, 0.0, 10.0, 0.5) == pytest.approx(0.5)
+
+    def test_the_request_fades_to_zero_as_the_target_arrives(self) -> None:
+        controller = self._controller()
+        # Long past the ramp, so only the approach taper binds.
+        late = DroneController.ALT_HOLD_RAMP_SECONDS * 10
+
+        approaching = [
+            controller._shaped_climb(late, alt, 0.30, 0.5) for alt in (0.10, 0.20, 0.25)
+        ]
+        assert approaching == sorted(approaching, reverse=True)
+        assert controller._shaped_climb(late, 0.30, 0.30, 0.5) == 0.0
+        # Above the target the request cannot turn back into a climb.
+        assert controller._shaped_climb(late, 0.40, 0.30, 0.5) == 0.0
+
+    def test_the_shaped_request_never_exceeds_what_was_asked_for(self) -> None:
+        controller = self._controller()
+
+        for elapsed in (0.0, 0.5, 3.0, 30.0):
+            for altitude in (0.0, 0.1, 0.29, 0.3, 1.0):
+                shaped = controller._shaped_climb(elapsed, altitude, 0.30, 0.5)
+                assert 0.0 <= shaped <= 0.5
+
+    def test_a_missing_altitude_still_ramps_rather_than_jumping_to_full(self) -> None:
+        controller = self._controller()
+
+        assert controller._shaped_climb(0.0, None, 0.30, 0.5) == 0.0
+
+    def test_the_taper_leaves_room_to_stop_before_the_usual_ceiling(self) -> None:
+        # The flown geometry: 0.30 m target under a 0.50 m ceiling.  ArduPilot
+        # decelerates at PILOT_ACCEL_Z, 2.5 m/s^2 by default.  The request has
+        # to be small enough over the last stretch that the braking distance
+        # fits in the 0.20 m that is left.
+        controller = self._controller()
+        late = DroneController.ALT_HOLD_RAMP_SECONDS * 10
+
+        at_target_minus_5cm = controller._shaped_climb(late, 0.25, 0.30, 0.5)
+        braking_distance = at_target_minus_5cm**2 / (2 * 2.5)
+        assert braking_distance < 0.20
+
+
+class TestTheVerticalEstimateHasToSettleBeforeArming:
+    """The evening flight of 2026-08-21 armed on top of a ringing estimate.
+
+    The aircraft had been picked up shortly before.  Disarmed, with the motors
+    stopped and the rangefinder pinned at 0.02 m, it reported -1.89 m/s; by the
+    time it armed it was reporting -2.40 m/s.  ALT_HOLD's altitude controller
+    acts on that number, so ArduPilot commanded 92 % throttle against a 27.7 %
+    hover to arrest a fall that was not happening, and the aircraft left the
+    ground with the whole surplus.  Untouched for thirty seconds, the same
+    aircraft reports -0.01 m/s.
+    """
+
+    @staticmethod
+    def _settling(monkeypatch, rates: list[float]) -> DroneController:
+        controller = DroneController(device="udp:127.0.0.1:14550")
+        controller.connection = MagicMock()
+        monkeypatch.setattr(DroneController, "SETTLE_WINDOW_S", 0.2)
+        feed = iter(rates)
+
+        def fake_update(max_messages: int = 50) -> None:
+            with contextlib.suppress(StopIteration):
+                controller.local_position_climb = next(feed)
+
+        monkeypatch.setattr(controller, "update_telemetry", fake_update)
+        return controller
+
+    def test_a_still_aircraft_settles_and_is_allowed_to_arm(self, monkeypatch) -> None:
+        controller = self._settling(monkeypatch, [-0.01] * 40)
+
+        assert controller.wait_for_vertical_estimate_to_settle(timeout=5.0) == -0.01
+
+    def test_the_rate_the_evening_flight_armed_on_is_refused(self, monkeypatch) -> None:
+        controller = self._settling(monkeypatch, [-1.89, -2.11, -2.40] * 20)
+
+        with pytest.raises(FlightSafetyError, match="never settled"):
+            controller.wait_for_vertical_estimate_to_settle(timeout=1.0)
+
+    def test_a_rate_that_swings_through_zero_does_not_count_as_settled(
+        self, monkeypatch
+    ) -> None:
+        # Seven seconds after touchdown the same aircraft passed through zero
+        # on its way out to +1.27 m/s.  A single sample near zero is not a
+        # settled estimate, which is why the window exists.
+        controller = self._settling(monkeypatch, [-0.43, -0.21, 0.0, 0.31, 0.78, 1.16])
+
+        with pytest.raises(FlightSafetyError, match="never settled"):
+            controller.wait_for_vertical_estimate_to_settle(timeout=1.0)
+
+    def test_settling_is_refused_outright_once_the_vehicle_is_armed(self) -> None:
+        controller = DroneController(device="udp:127.0.0.1:14550")
+        controller.connection = MagicMock()
+        controller.is_armed = True
+
+        with pytest.raises(FlightSafetyError, match="before arming"):
+            controller.wait_for_vertical_estimate_to_settle()
+
+    def test_a_climb_on_an_unsettled_estimate_never_arms(self, monkeypatch) -> None:
+        controller, _connection = _controller(monkeypatch, [0.02, 0.10, 0.31])
+        armed: list[bool] = []
+
+        def refuse(**_kwargs) -> float:
+            raise FlightSafetyError("the vertical estimate never settled")
+
+        monkeypatch.setattr(controller, "wait_for_vertical_estimate_to_settle", refuse)
+        monkeypatch.setattr(controller, "arm", lambda *_a, **_k: armed.append(True))
+
+        with pytest.raises(FlightSafetyError, match="never settled"):
+            controller.climb_in_alt_hold(0.3, climb=0.5)
+
+        assert armed == [], "the vehicle armed on an estimate that had not settled"

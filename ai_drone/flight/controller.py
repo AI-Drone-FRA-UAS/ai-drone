@@ -125,6 +125,7 @@ class DroneController:
         # The climb the guard last measured, so a caller can report the same
         # number the guard is acting on instead of computing a second one.
         self.measured_climb_ms: float | None = None
+        self.commanded_climb_ms: float | None = None
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -1592,6 +1593,92 @@ class DroneController:
     MAX_ALT_HOLD_CLIMB_MS = 1.00
     ALT_HOLD_CLIMB_WINDOW_S = 0.2
 
+    # A climb rate asked for all at once is not a climb rate the aircraft
+    # follows.  On the 2026-08-21 evening flight the full 0.5 m/s was on the
+    # stick for 2.9 s while the aircraft sat on the floor at 0.02 m, and when
+    # it finally broke free it went 0.02 m to 0.57 m in 0.77 s and tripped the
+    # 0.50 m ceiling.  Asking for the rate gradually gives ArduPilot a target
+    # it can actually track, so the aircraft leaves the ground at the rate it
+    # was asked for rather than at whatever the thrust surplus produces.
+    # Being picked up leaves this vehicle's vertical velocity ringing, and
+    # ALT_HOLD's altitude controller acts on that number.  On the 2026-08-21
+    # evening flight it reported -1.89 m/s while disarmed with the motors
+    # stopped, drifted to -2.40 m/s, and was still swinging out to +1.27 m/s
+    # seven seconds after touchdown -- all with the rangefinder pinned at
+    # 0.02 m and the aircraft sitting on the floor.  Believing it was falling
+    # at 2.3 m/s, ArduPilot commanded 92 % throttle against a 27.7 % hover;
+    # the aircraft broke free with that surplus and went 0.02 m to 0.57 m in
+    # 0.4 s.  Left untouched for thirty seconds the same aircraft reports
+    # -0.01 m/s.  So the answer is to wait for it, and to refuse to arm until
+    # the vehicle stops claiming a motion it is demonstrably not making.
+    SETTLED_CLIMB_MS = 0.10
+    SETTLE_WINDOW_S = 3.0
+
+    def wait_for_vertical_estimate_to_settle(
+        self, timeout: float = 40.0, on_sample: Any = None
+    ) -> float:
+        """Wait until the vehicle stops reporting a climb it is not making.
+
+        Returns the settled climb rate.  Raises rather than arming on top of
+        an estimate that is still moving: this is the check that the evening
+        of 2026-08-21 needed and did not have.
+        """
+
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=300.0)
+        if self.is_armed:
+            raise FlightSafetyError(
+                "the vertical estimate must settle before arming, not after"
+            )
+        deadline = time.monotonic() + timeout
+        settled_since: float | None = None
+        while time.monotonic() < deadline:
+            self.update_telemetry()
+            now = time.monotonic()
+            climb = self.local_position_climb
+            if climb is None or abs(climb) > self.SETTLED_CLIMB_MS:
+                settled_since = None
+            elif settled_since is None:
+                settled_since = now
+            elif now - settled_since >= self.SETTLE_WINDOW_S:
+                return climb
+            if on_sample is not None:
+                on_sample(self, settled_since and now - settled_since)
+            time.sleep(0.1)
+        raise FlightSafetyError(
+            f"the vertical estimate never settled: the vehicle still reports "
+            f"{self.local_position_climb:+.2f} m/s while standing still, against a "
+            f"{self.SETTLED_CLIMB_MS:.2f} m/s limit. Set the aircraft down, let go "
+            f"of it and leave it alone -- being handled leaves this estimate "
+            f"ringing for tens of seconds, and ALT_HOLD flies on it"
+            if self.local_position_climb is not None
+            else "no vertical estimate arrived at all before takeoff"
+        )
+
+    ALT_HOLD_RAMP_SECONDS = 3.0
+    # Arriving at the target is not the same as stopping there.  The request
+    # is faded out over the last stretch below the target so the aircraft
+    # reaches it with the climb already near zero, rather than at full rate
+    # with the whole braking distance still ahead of it.
+    ALT_HOLD_TAPER_M = 0.20
+
+    def _shaped_climb(
+        self, elapsed: float, altitude: float | None, target: float, climb: float
+    ) -> float:
+        """Shape the requested climb into one the aircraft can arrive on.
+
+        Two limits, whichever binds: a ramp from zero over the first
+        ``ALT_HOLD_RAMP_SECONDS``, and a taper proportional to what is left of
+        the climb within ``ALT_HOLD_TAPER_M`` of the target.  Both are below
+        ``climb``, so this can only ever ask for less than the caller did.
+        """
+
+        ramped = climb * min(1.0, max(0.0, elapsed) / self.ALT_HOLD_RAMP_SECONDS)
+        if altitude is None or self._ground_reference is None:
+            return ramped
+        remaining = target - altitude
+        approach = climb * max(0.0, remaining) / self.ALT_HOLD_TAPER_M
+        return min(ramped, approach, climb)
+
     def climb_in_alt_hold(
         self,
         target_alt: float,
@@ -1599,6 +1686,7 @@ class DroneController:
         climb: float = 0.5,
         timeout: float = 20.0,
         on_sample: Any = None,
+        on_settle: Any = None,
     ) -> None:
         """Climb to ``target_alt`` in ALT_HOLD, letting ArduPilot fly the climb.
 
@@ -1628,6 +1716,8 @@ class DroneController:
         # The throttle has to be at its calibrated minimum before arming, and
         # an override that only starts afterwards leaves a window in which the
         # vehicle has no throttle source at all.
+        if not self.is_armed:
+            self.wait_for_vertical_estimate_to_settle(on_sample=on_settle)
         self._set_rc_override(calibration.minimum_pwm)
         if not self.is_armed:
             self.arm(mode="ALT_HOLD")
@@ -1638,6 +1728,7 @@ class DroneController:
 
         self._ground_reference = self.current_altitude
         self._ekf_reference = self.local_position_altitude
+        self.commanded_climb_ms = 0.0
         reference: tuple[float, float] | None = None
         started = time.monotonic()
         deadline = started + timeout
@@ -1678,9 +1769,12 @@ class DroneController:
                                 "so the stick is not being read as a climb rate"
                             )
                         reference = (now, altitude)
+                self.commanded_climb_ms = self._shaped_climb(
+                    now - started, altitude, target, climb
+                )
                 if on_sample is not None:
                     on_sample(self, self.measured_climb_ms)
-                self.command_alt_hold_climb(climb)
+                self.command_alt_hold_climb(self.commanded_climb_ms)
                 time.sleep(0.05)
         except BaseException:
             self.abort()

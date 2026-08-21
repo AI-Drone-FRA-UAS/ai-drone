@@ -348,10 +348,26 @@ def _live_line(drone: DroneController, climb: float | None) -> str:
     )
     return (
         f"  {drone.flight_mode or '?':<9} rng={metres(drone.current_altitude)} m "
-        f"climb={metres(climb)} m/s  ekf={metres(drone.local_position_altitude)} m "
+        f"climb={metres(climb)} m/s  ask={metres(drone.commanded_climb_ms)} m/s  "
+        f"ekf={metres(drone.local_position_altitude)} m "
         f"ekfvz={metres(drone.local_position_climb)} m/s  "
         f"gap={disagreement} m  batt={metres(drone.battery_voltage)} V"
     )
+
+
+def _rate_limit(period: float):
+    """Return a predicate that is true at most once every ``period`` seconds."""
+
+    state = {"next": 0.0}
+
+    def due() -> bool:
+        now = time.monotonic()
+        if now < state["next"]:
+            return False
+        state["next"] = now + period
+        return True
+
+    return due
 
 
 def _reporter(period: float = 0.25):
@@ -392,13 +408,37 @@ def cmd_alt_hold_takeoff(args: argparse.Namespace) -> int:
             climb_rate_fraction=args.climb,
         )
         report = _reporter()
-        print(f"climbing to {args.takeoff_alt:.2f} m in ALT_HOLD")
+        settle_tick = _rate_limit(period=1.0)
+
+        def settling(controller: DroneController, steady_for: float | None) -> None:
+            record.event(
+                "settle_sample",
+                ekf_climb_ms=controller.local_position_climb,
+                steady_for_s=steady_for,
+            )
+            if not settle_tick():
+                return
+            rate = controller.local_position_climb
+            if rate is None:
+                print("  no vertical estimate yet", flush=True)
+                return
+            held = f"steady for {steady_for:.1f} s" if steady_for else "still moving"
+            print(f"  vertical estimate {rate:+.2f} m/s ({held})", flush=True)
+
         print(
-            "  mode      rangefinder  measured climb   EKF height   EKF rate   "
-            "gap between them   battery"
+            "waiting for the vertical estimate to settle -- do not touch the aircraft"
         )
+        header_shown = False
 
         def climbing(controller: DroneController, climb: float | None) -> None:
+            nonlocal header_shown
+            if not header_shown:
+                header_shown = True
+                print(f"climbing to {args.takeoff_alt:.2f} m in ALT_HOLD")
+                print(
+                    "  mode      rangefinder  measured climb   asked-for climb   "
+                    "EKF height   EKF rate   gap between them   battery"
+                )
             report(controller, climb)
             record.event(
                 "climb_sample",
@@ -406,9 +446,15 @@ def cmd_alt_hold_takeoff(args: argparse.Namespace) -> int:
                 measured_climb_ms=climb,
                 ekf_altitude_m=controller.local_position_altitude,
                 ekf_climb_ms=controller.local_position_climb,
+                asked_climb_ms=controller.commanded_climb_ms,
             )
 
-        drone.climb_in_alt_hold(args.takeoff_alt, climb=args.climb, on_sample=climbing)
+        drone.climb_in_alt_hold(
+            args.takeoff_alt,
+            climb=args.climb,
+            on_sample=climbing,
+            on_settle=settling,
+        )
         record.event("hold_started", ekf_flags=drone.ekf_flags)
         print(f"holding in ALT_HOLD for {args.duration:.1f} s")
 

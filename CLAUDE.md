@@ -116,6 +116,20 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   `vertical_position` on 2026-08-21 by reading the flag that says a vertical
   estimate exists, while the estimate itself was -10000 m. Check values, not
   only the bits that claim the values are available.
+- A vertical estimate that is merely present is not a vertical estimate that
+  has settled. Handling this aircraft leaves its barometer-derived vertical
+  velocity ringing for tens of seconds. On the evening of 2026-08-21 it
+  reported -1.89 m/s while disarmed with the motors stopped and the
+  rangefinder pinned at 0.02 m, drifted to -2.40 m/s by the time it armed, and
+  was still swinging out to +1.27 m/s seven seconds after touchdown. ALT_HOLD's
+  altitude controller flies on that number: believing it was falling at
+  2.3 m/s, ArduPilot commanded 92 % throttle against a 27.7 % hover, and the
+  aircraft broke free with the surplus and went 0.02 m to 0.57 m in 0.4 s.
+  Left untouched for thirty seconds the same aircraft reports -0.01 m/s.
+  `DroneController.wait_for_vertical_estimate_to_settle` is that wait and
+  every takeoff must go through it before arming. Shaping the requested climb
+  rate does not substitute for it -- the runaway above happened with the
+  throttle stick centred, asking for no climb at all.
 - A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
   simulator, and the simulator encodes whatever was assumed when it was
   written. It cannot validate an assumption about how the vehicle interprets a

@@ -239,3 +239,83 @@ all.
   survived.
 - Do not reconnect the pack to inspect the airframe. A damaged ESC or a
   pinched lead can spin a motor the moment power returns.
+
+## Evening: the first real liftoff, and why it overshot
+
+The aircraft flew. It left the ground under its own power for the first time
+since the crash, climbed past the 0.30 m target, and the altitude ceiling
+stopped it at 0.57 m. Recorded in `alt-hold-takeoff-overshoot.tlog`.
+
+### What the operator saw
+
+"Das Abheben hat geklappt, er hat allerdings zu schnell hochreguliert." The
+request was to ramp the thrust gradually so the ceiling would not trigger.
+
+### What the telemetry shows
+
+| t (s) | armed | rangefinder | pressure (hPa) | reported climb | throttle | motor 1 |
+|---|---|---|---|---|---|---|
+| 0.26 | no | 0.02 m | 994.471 | **-1.89 m/s** | 0 % | 1000 |
+| 2.67 | no | 0.02 m | 994.466 | **-2.00 m/s** | 0 % | 1000 |
+| 3.52 | yes | 0.02 m | 994.464 | -2.22 m/s | 0 % | 1000 |
+| 4.91 | yes | 0.02 m | 994.455 | **-2.40 m/s** | 0 % | 1044 |
+| 5.77 | yes | 0.02 m | 994.405 | -2.16 m/s | 48 % | 1316 |
+| 6.04 | yes | 0.12 m | 994.284 | -1.64 m/s | **86 %** | 1378 |
+| 6.32 | yes | 0.29 m | 993.905 | -1.32 m/s | **92 %** | 1336 |
+| 6.65 | yes | 0.53 m | 993.663 | -0.76 m/s | 75 % | 1374 |
+| 12.87 | yes | 0.02 m | 994.431 | **+1.02 m/s** | 9 % | 1168 |
+| 13.86 | yes | 0.02 m | 994.469 | **+1.27 m/s** | 0 % | 1000 |
+
+The first two rows are the whole finding. The aircraft is **disarmed, motors
+stopped at 1000, rangefinder pinned at 0.02 m** -- and it reports itself
+descending at 1.89 m/s. That is not prop wash and not a flight condition. The
+estimate was already wrong before anything was commanded.
+
+The operator supplied the cause unprompted: *"Es kann sein das einige Werte
+falsch sind weil wir die Drohne zwischendurch angehoben haben."* The aircraft
+had been picked up. Its barometer-derived vertical velocity was still ringing.
+
+ALT_HOLD's altitude controller acts on that number. Believing it was falling at
+2.3 m/s, ArduPilot commanded **92 % throttle against a 27.7 % hover**
+(`MOT_THST_HOVER = 0.277447`). The aircraft broke free with the whole surplus
+and went 0.02 m to 0.57 m in 0.4 s. The ceiling guard caught it correctly.
+
+The last two rows close the case: seven seconds after touchdown, sitting
+motionless on the floor, the same estimate has swung to **+1.27 m/s**.
+
+### The control confirmed it
+
+Thirty seconds later, aircraft still and untouched, read-only:
+
+```
+  1.0s armed=False  climb=-0.0010 m/s  rng=0.02 m  press=994.3998 hPa
+ 29.0s armed=False  climb=-0.0113 m/s  rng=0.02 m  press=994.4142 hPa
+```
+
+Steady at -0.01 m/s. The sensors are fine. Handling is what breaks them, and
+only for a while.
+
+### What was wrongly believed before the telemetry was read
+
+- That the overshoot was caused by too high a *requested* climb rate. It was
+  not. `PILOT_SPEED_UP = 25 cm/s`, so `--climb 0.5` asked for **0.125 m/s**
+  and the aircraft did roughly 0.8 m/s -- six times the rate ArduPilot was
+  supposed to bound it to.
+- That ramping and tapering the request would fix it. The overshoot ran from
+  0.25 m to 0.57 m, and `hold_started` -- the throttle stick returning to
+  **centre**, asking for no climb at all -- is timestamped inside that window.
+  Shaping a request the aircraft was not following could not have helped.
+- That prop wash on the barometer was to blame. Ruled out by the motors being
+  stopped at 1000 while the estimate already read -1.89 m/s.
+
+### What changed
+
+- `wait_for_vertical_estimate_to_settle`: the vehicle must report itself within
+  0.10 m/s of stationary, continuously for 3 s, before this software will arm
+  it. The console prints the estimate once a second while it waits.
+- `_shaped_climb`: the requested rate is ramped from zero over 3 s and tapered
+  to zero over the last 0.20 m below the target. This was the change the
+  operator asked for. It is a real improvement to the liftoff and it is *not*
+  what fixes the overshoot -- kept, and labelled as such.
+- The live console line gained an `ask=` column, so the requested rate and the
+  measured rate are visible side by side. On this flight they differed by 6x.
