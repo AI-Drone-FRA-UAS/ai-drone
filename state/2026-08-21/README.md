@@ -380,3 +380,52 @@ flight controller, or an electrical coupling.
 
 **Until that measurement is made and the shift is gone, ALT_HOLD cannot fly on
 this aircraft.** Both failure directions are the same fault.
+
+## Evening, third attempt: the guard worked and the teardown did not
+
+Launched with a tighter geometry -- 0.25 m target, 0.45 m ceiling, 0.3 climb.
+The new climb-rate guard fired exactly as designed, ten seconds in:
+
+```
+FlightSafetyError: the vehicle reports climbing at +0.96 m/s while the
+rangefinder measures +0.00 m/s, and has done for 0.8 s.
+```
+
+That is the fault caught within a second of appearing, before ArduPilot had
+applied any thrust to it. It is the first time today a guard stopped this
+aircraft on the leading indicator rather than the consequence.
+
+**And then the aircraft sat there armed, in ALT_HOLD, motors at 1060.** The
+operator reported it: *"nicht abgehoben, motoren wieder nicht ausgegangen"*.
+A read-only check confirmed it minutes later, still armed, still turning.
+
+### Two faults, both mine
+
+1. `_flight_session` called `ensure_landed` only `if drone.is_flying`. A climb
+   that never lifted never sets that, so `emergency_stop` sent a single
+   unverified disarm request and nothing ever checked whether it was accepted.
+   CLAUDE.md has said since 2026-08-20 that every teardown must go through
+   `ensure_landed`; this path did not, and I did not notice when I added it.
+2. `_request_disarm` sends an ordinary disarm. ArduPilot refuses that while it
+   believes it is flying -- and the vehicle believed it was climbing at
+   +0.96 m/s. The estimate that triggered the guard is the same estimate that
+   then blocked the stop.
+
+The second attempt of the evening almost certainly ended the same way. It
+failed with a `TimeoutError`, `is_flying` was false, and nothing verified the
+disarm. I never checked, and went straight to diagnosis.
+
+### How it was stopped
+
+An ordinary disarm request, sent by hand once the estimate had settled back,
+was accepted on the first try and confirmed by the vehicle's own heartbeat --
+motors to 1000. So nothing was mechanically stuck; the request simply had to be
+made when the vehicle would accept it, or forced.
+
+### What changed
+
+- The teardown now runs `ensure_landed` unconditionally and records
+  `was_flying` alongside the confirmation.
+- `ensure_landed` escalates to the force disarm after
+  `GROUNDED_FORCE_DISARM_AFTER_S = 3.0` when the rangefinder is fresh and
+  holds the aircraft at its ground reference. A stale reading never qualifies.

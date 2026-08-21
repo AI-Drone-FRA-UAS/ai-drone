@@ -143,6 +143,21 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   is not the problem -- it measures variance, and a rectified vibration is a DC
   offset. ALT_HOLD cannot be flown on this airframe while that shift is
   present, in either direction.
+- Every flight teardown must verify a disarm, including a flight that never
+  left the ground. The teardown used to call `ensure_landed` only when
+  `is_flying` was set, so a climb that never lifted got one unverified disarm
+  request and no check at all; twice on 2026-08-21 that left the aircraft
+  armed in ALT_HOLD with its motors turning at 1060 until somebody noticed.
+- ArduPilot refuses an ordinary disarm while it believes it is flying, and on
+  this airframe that belief is precisely what fails. On 2026-08-21 the vehicle
+  reported climbing at +0.96 m/s with its rangefinder reading 0.02 m for all
+  71 samples and refused the disarm on those grounds. A fresh rangefinder
+  holding the aircraft at its ground reference outranks the estimate:
+  `ensure_landed` escalates to the force disarm after
+  `GROUNDED_FORCE_DISARM_AFTER_S`, because forcing the motors off on an
+  aircraft that is already on the floor cannot drop it. A stale reading is
+  never grounds for this -- an airborne aircraft must not be dropped on the
+  strength of a number nobody can vouch for.
 - A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
   simulator, and the simulator encodes whatever was assumed when it was
   written. It cannot validate an assumption about how the vehicle interprets a

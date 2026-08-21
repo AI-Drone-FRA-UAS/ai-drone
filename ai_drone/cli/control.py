@@ -92,18 +92,22 @@ def _flight_session(args: argparse.Namespace):
             yield drone, record
         except BaseException as error:
             record.finish(error)
-            if drone.is_flying:
-                # A guard already requested LAND, but a request is not a
-                # landing.  Stay connected and keep asking until the vehicle
-                # says it is disarmed; letting go here is what leaves an
-                # aircraft in the air with nobody talking to it.
-                landed = drone.ensure_landed()
-                record.event("emergency_landing", confirmed=landed)
-                if not landed:
-                    logger.error(
-                        "VEHICLE DID NOT CONFIRM DISARM. It may still be flying. "
-                        "Do not approach it; cut power only from a safe distance."
-                    )
+            # A request is not a result, and this runs whether or not the
+            # aircraft ever left the ground.  It used to be guarded by
+            # is_flying, so a climb that never lifted got a single unverified
+            # disarm request and no check: on 2026-08-21 that left the
+            # aircraft armed in ALT_HOLD with its motors turning at 1060,
+            # twice, because the vehicle believed it was climbing at
+            # +0.96 m/s and refused an ordinary disarm on those grounds.
+            landed = drone.ensure_landed()
+            record.event(
+                "emergency_landing", confirmed=landed, was_flying=drone.is_flying
+            )
+            if not landed:
+                logger.error(
+                    "VEHICLE DID NOT CONFIRM DISARM. It may still be armed. "
+                    "Do not approach it; cut power only from a safe distance."
+                )
             raise
         else:
             try:

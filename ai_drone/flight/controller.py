@@ -732,6 +732,14 @@ class DroneController:
     # of MAV_CMD_COMPONENT_ARM_DISARM is its documented override, and it is the
     # only way to cut the motors of an aircraft that is doing something wrong.
     FORCE_DISARM_MAGIC = 21196
+    # ArduPilot refuses an ordinary disarm while it believes it is flying, and
+    # on this airframe that belief is exactly what fails: on 2026-08-21 the
+    # vehicle reported climbing at +0.96 m/s with its rangefinder pinned at
+    # 0.02 m for all 71 samples, refused the disarm on those grounds, and sat
+    # armed with its motors turning.  A fresh rangefinder holding the aircraft
+    # at its ground reference outranks the estimate, and forcing a disarm on
+    # an aircraft that is already on the floor cannot drop it.
+    GROUNDED_FORCE_DISARM_AFTER_S = 3.0
     # Fast enough that a lost command costs little, slow enough not to flood.
     FORCE_DISARM_INTERVAL_S = 0.2
     # How far a LAND may climb before it stops being treated as a landing.
@@ -993,6 +1001,14 @@ class DroneController:
             # refuses LAND never runs its own.
             if self.settled_on_the_ground():
                 self._request_disarm()
+                if now - started >= self.GROUNDED_FORCE_DISARM_AFTER_S:
+                    logger.warning(
+                        "the vehicle has refused an ordinary disarm for %.1f s "
+                        "while the rangefinder holds it at ground level; forcing "
+                        "the motors off",
+                        now - started,
+                    )
+                    self.stop_now()
             if not escaped:
                 climbed = (
                     measured is not None
