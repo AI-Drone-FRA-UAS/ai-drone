@@ -173,6 +173,25 @@ def cmd_nogps(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_stabilize(args: argparse.Namespace) -> int:
+    return _rehearse(
+        args,
+        [
+            "stabilize-takeoff",
+            "--takeoff-alt",
+            str(args.takeoff_alt),
+            "--max-alt",
+            str(args.max_alt),
+            "--duration",
+            str(args.duration),
+            "--min-battery",
+            str(args.min_battery),
+            "--climb",
+            str(args.climb),
+        ],
+    )
+
+
 def cmd_hover(args: argparse.Namespace) -> int:
     return _rehearse(
         args,
@@ -288,6 +307,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_flight(nogps)
     nogps.set_defaults(handler=cmd_nogps)
+
+    stabilize = commands.add_parser(
+        "stabilize-takeoff",
+        help="rehearse a STABILIZE climb, an ALT_HOLD hold and a landing",
+    )
+    _add_flight(stabilize)
+    stabilize.add_argument("--climb", type=float, default=0.06)
+    stabilize.set_defaults(handler=cmd_stabilize)
 
     hover = commands.add_parser("hover", help="rehearse a guarded takeoff and landing")
     _add_flight(hover)

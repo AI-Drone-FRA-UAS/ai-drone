@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,46 @@ FUTURE_TOLERANCE_MS = 250
 
 class FlightSafetyError(RuntimeError):
     """Raised when a live-flight safety invariant is violated."""
+
+
+@dataclass(frozen=True)
+class ThrottleCalibration:
+    """The vehicle's own throttle numbers, read from the vehicle.
+
+    STABILIZE maps the throttle channel straight onto motor thrust, so "how
+    much throttle is a hover" stops being a detail and becomes the whole
+    flight.  The only defensible answer is the one ArduPilot learned for
+    itself in ``MOT_THST_HOVER``, expressed against this receiver's own
+    calibrated endpoints.  Nothing here is a constant in this repository.
+    """
+
+    minimum_pwm: int
+    maximum_pwm: int
+    roll_trim_pwm: int
+    pitch_trim_pwm: int
+    yaw_trim_pwm: int
+    hover: float
+    deadzone: int
+
+    @property
+    def span_pwm(self) -> int:
+        return self.maximum_pwm - self.minimum_pwm
+
+    @property
+    def middle_pwm(self) -> int:
+        return (self.maximum_pwm + self.minimum_pwm) // 2
+
+    def pwm_for(self, normalized: float) -> int:
+        """Convert a 0.0-1.0 throttle fraction to a calibrated PWM value."""
+
+        clamped = min(1.0, max(0.0, normalized))
+        return round(self.minimum_pwm + self.span_pwm * clamped)
+
+    @property
+    def deadzone_pwm(self) -> int:
+        """THR_DZ against a 0-1000 stick, scaled onto this receiver's span."""
+
+        return round(self.deadzone * self.span_pwm / 1_000.0)
 
 
 class DroneController:
@@ -74,6 +115,9 @@ class DroneController:
         self._armed_by_controller = False
         self._flight_started_by_controller = False
         self._landing_commanded = False
+        self._rc_override: tuple[int, int, int, int] | None = None
+        self._rc_override_sent = 0.0
+        self._throttle_calibration: ThrottleCalibration | None = None
 
     @staticmethod
     def find_device(requested: str | Path | None) -> str:
@@ -138,6 +182,15 @@ class DroneController:
             raise
 
     def close(self) -> None:
+        # A standing RC override outlives this object on the vehicle, so it is
+        # released here -- but only once the vehicle says it is disarmed.
+        # Handing the throttle back on an armed aircraft with no receiver
+        # fitted hands it to nothing at all.
+        if self.connection is not None and self._rc_override is not None:
+            try:
+                self.clear_rc_override()
+            except (OSError, RuntimeError, FlightSafetyError) as error:
+                logger.error("could not release the RC override: %s", error)
         connection, self.connection = self.connection, None
         if connection is not None:
             connection.close()
@@ -252,6 +305,7 @@ class DroneController:
             raise ValueError("max_messages must be between 1 and 1000")
         if self.connection is None:
             return
+        self._pump_rc_override()
         for _ in range(max_messages):
             message = self.connection.recv_match(blocking=False)
             if message is None:
@@ -361,7 +415,9 @@ class DroneController:
         if self.wait_for_altitude(timeout=min(timeout, 3.0)) is None:
             raise FlightSafetyError("no fresh downward DISTANCE_SENSOR altitude")
         self.set_mode(mode)
+        self._pump_rc_override()
         self._fresh_disarmed()
+        self._pump_rc_override()
         if not self.altitude_is_fresh():
             raise FlightSafetyError("downward altitude became stale before arming")
         self._arm_command_sent = True
@@ -392,6 +448,7 @@ class DroneController:
         refusals: list[str] = []
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            self._pump_rc_override()
             message = self._connection().recv_match(
                 type=["HEARTBEAT", "STATUSTEXT", "COMMAND_ACK"],
                 blocking=True,
@@ -485,12 +542,18 @@ class DroneController:
     def land(self, timeout: float = 30.0) -> None:
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
         self._landing_commanded = True
+        # Back an overridden throttle off before asking for LAND.  Just below
+        # hover is a descent in whichever mode the vehicle is still in, so it
+        # is safe to send first and does not depend on LAND being accepted.
+        self._back_off_throttle_override()
         self.set_mode("LAND")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.update_telemetry()
             if not self.is_armed:
                 self.is_flying = False
+                if self._rc_override is not None:
+                    self.clear_rc_override()
                 return
             time.sleep(0.1)
         raise TimeoutError(
@@ -731,3 +794,381 @@ class DroneController:
             0,
             math.radians(yaw_rate),
         )
+
+    # -- STABILIZE climb ------------------------------------------------
+
+    # ArduPilot lets an RC override lapse after RC_OVERRIDE_TIME, 3 s on this
+    # vehicle.  When it lapses control returns to the receiver, and this
+    # airframe has none, so a lapsed override leaves STABILIZE with no
+    # throttle source at all while the aircraft is in the air.  Refresh far
+    # inside that window.
+    RC_OVERRIDE_REFRESH_S = 0.4
+    # The most throttle above the learned hover value this class will ever
+    # command in STABILIZE.  In a mode with no altitude loop this number *is*
+    # the climb authority: every metre of altitude comes from it, and nothing
+    # in the autopilot will take it back.
+    MAX_THROTTLE_ABOVE_HOVER = 0.10
+    # The ramp starts below hover so that the first seconds of an armed
+    # aircraft cannot lift it, and any surprise in the thrust curve shows up
+    # as motion before there is enough throttle to climb on.
+    STABILIZE_RAMP_START_BELOW_HOVER = 0.10
+    STABILIZE_RAMP_SECONDS = 2.0
+    # Backing the throttle off by this much below hover is the one command
+    # that is safe under every reading of the stick: a gentle descent in
+    # STABILIZE, a bounded descent in ALT_HOLD, and ignored in LAND.
+    ABORT_THROTTLE_BELOW_HOVER = 0.04
+    # STABILIZE gives away no altitude control whatsoever, so the measured
+    # climb is the only thing that can report that the commanded throttle is
+    # producing more thrust than expected.
+    #
+    # The limit is deliberately not tight.  The rangefinder reports whole
+    # centimetres, so over this window rounding alone moves the measurement by
+    # about 0.10 m/s, and a guard that aborts a healthy climb is a guard that
+    # gets turned off.  What this catches is the 2026-08-20 failure -- a
+    # commanded value producing a multiple of the expected thrust -- not a
+    # thirty percent error.  A slow runaway is the altitude ceiling's job, and
+    # ``update_telemetry`` enforces that on every message.
+    MAX_STABILIZE_CLIMB_MS = 0.60
+    STABILIZE_CLIMB_WINDOW_S = 0.2
+
+    def read_throttle_calibration(self) -> ThrottleCalibration:
+        """Read the vehicle's own throttle mapping before commanding any of it.
+
+        Refuses anything it cannot make sense of.  A guessed hover throttle in
+        STABILIZE is a guessed climb rate, and a wrong one is a flyaway.
+        """
+
+        connection = self._connection()
+        names = (
+            "RCMAP_ROLL",
+            "RCMAP_PITCH",
+            "RCMAP_THROTTLE",
+            "RCMAP_YAW",
+            "RC1_TRIM",
+            "RC2_TRIM",
+            "RC3_MIN",
+            "RC3_MAX",
+            "RC4_TRIM",
+            "MOT_THST_HOVER",
+            "THR_DZ",
+        )
+        values = {name: request_parameter(connection, name) for name in names}
+
+        # This class sends the first four override channels positionally, so a
+        # vehicle that maps its sticks anywhere else must be refused rather
+        # than quietly flown with roll on the throttle.
+        for name, channel in (
+            ("RCMAP_ROLL", 1),
+            ("RCMAP_PITCH", 2),
+            ("RCMAP_THROTTLE", 3),
+            ("RCMAP_YAW", 4),
+        ):
+            if int(values[name]) != channel:
+                raise FlightSafetyError(
+                    f"{name} is {values[name]:.0f}, not {channel}; this command sends "
+                    "the first four override channels in the default RCMAP order"
+                )
+
+        minimum = int(values["RC3_MIN"])
+        maximum = int(values["RC3_MAX"])
+        if not 800 <= minimum < maximum <= 2_200 or maximum - minimum < 400:
+            raise FlightSafetyError(
+                f"throttle channel is not calibrated: RC3_MIN={minimum}, "
+                f"RC3_MAX={maximum}"
+            )
+        hover = float(values["MOT_THST_HOVER"])
+        if not math.isfinite(hover) or not 0.05 <= hover <= 0.7:
+            raise FlightSafetyError(
+                f"MOT_THST_HOVER is {hover:.3f}, outside the range this command will "
+                "build a STABILIZE throttle from"
+            )
+        return ThrottleCalibration(
+            minimum_pwm=minimum,
+            maximum_pwm=maximum,
+            roll_trim_pwm=int(values["RC1_TRIM"]),
+            pitch_trim_pwm=int(values["RC2_TRIM"]),
+            yaw_trim_pwm=int(values["RC4_TRIM"]),
+            hover=hover,
+            deadzone=max(0, int(values["THR_DZ"])),
+        )
+
+    def _calibration(self) -> ThrottleCalibration:
+        if self._throttle_calibration is None:
+            raise FlightSafetyError("throttle calibration has not been read")
+        return self._throttle_calibration
+
+    def _set_rc_override(self, throttle_pwm: int) -> None:
+        """Hold the sticks level and the throttle at ``throttle_pwm``.
+
+        Roll, pitch and yaw are overridden alongside the throttle on purpose.
+        With no receiver fitted, a channel left un-overridden has no source,
+        and STABILIZE takes its entire attitude command from those sticks.
+        """
+
+        calibration = self._calibration()
+        if isinstance(throttle_pwm, bool) or not (
+            calibration.minimum_pwm <= int(throttle_pwm) <= calibration.maximum_pwm
+        ):
+            raise FlightSafetyError(
+                f"throttle {throttle_pwm} is outside the calibrated range "
+                f"{calibration.minimum_pwm}-{calibration.maximum_pwm}"
+            )
+        self._rc_override = (
+            calibration.roll_trim_pwm,
+            calibration.pitch_trim_pwm,
+            int(throttle_pwm),
+            calibration.yaw_trim_pwm,
+        )
+        self._send_rc_override()
+
+    def _send_rc_override(self) -> None:
+        override = self._rc_override
+        if override is None or self.connection is None:
+            return
+        roll, pitch, throttle, yaw = override
+        self.connection.mav.rc_channels_override_send(
+            self.target_system,
+            self.target_component,
+            roll,
+            pitch,
+            throttle,
+            yaw,
+            0,
+            0,
+            0,
+            0,
+        )
+        self._rc_override_sent = time.monotonic()
+
+    def _pump_rc_override(self) -> None:
+        """Re-send the standing override before ArduPilot lets it lapse.
+
+        Every loop that can block for more than a moment goes through here, so
+        that no wait -- for a mode confirmation, for an arm confirmation, for a
+        landing -- can silently drop the only throttle source the aircraft has.
+        """
+
+        if self._rc_override is None or self.connection is None:
+            return
+        if time.monotonic() - self._rc_override_sent >= self.RC_OVERRIDE_REFRESH_S:
+            self._send_rc_override()
+
+    def clear_rc_override(self) -> None:
+        """Release every overridden channel, once the vehicle is disarmed."""
+
+        if self.connection is None:
+            return
+        if self.is_armed:
+            raise FlightSafetyError(
+                "refusing to release the RC override while the vehicle is armed"
+            )
+        self._rc_override = None
+        self.connection.mav.rc_channels_override_send(
+            self.target_system, self.target_component, 0, 0, 0, 0, 0, 0, 0, 0
+        )
+
+    def command_stabilize_throttle(self, above_hover: float) -> None:
+        """Command a STABILIZE throttle, expressed relative to learned hover.
+
+        The mode is verified from the vehicle's own heartbeat before anything
+        is sent.  The same stick position means motor thrust in STABILIZE and
+        a climb rate in ALT_HOLD, so a value that is gentle in one mode is
+        violent in the other; checking which mode the vehicle reports it is in
+        is what keeps the two apart.
+        """
+
+        finite_in_range(above_hover, "above_hover", minimum=-1.0, maximum=1.0)
+        if not self.is_armed:
+            raise FlightSafetyError("throttle commands require an armed vehicle")
+        if self.flight_mode != "STABILIZE":
+            raise FlightSafetyError(
+                f"refusing to send a STABILIZE throttle while the vehicle reports "
+                f"{self.flight_mode or 'an unknown mode'}"
+            )
+        calibration = self._calibration()
+        bounded = min(self.MAX_THROTTLE_ABOVE_HOVER, above_hover)
+        self._set_rc_override(calibration.pwm_for(calibration.hover + bounded))
+
+    def command_alt_hold_climb(self, climb: float) -> None:
+        """Command an ALT_HOLD climb rate, ``0.0`` meaning hold this altitude.
+
+        ArduPilot owns the altitude loop here and bounds the result by
+        PILOT_SPEED_UP and PILOT_SPEED_DN; this only places the stick.
+        """
+
+        rate = finite_in_range(climb, "climb", minimum=-1.0, maximum=1.0)
+        if not self.is_armed:
+            raise FlightSafetyError("throttle commands require an armed vehicle")
+        if self.flight_mode != "ALT_HOLD":
+            raise FlightSafetyError(
+                f"refusing to send an ALT_HOLD climb rate while the vehicle reports "
+                f"{self.flight_mode or 'an unknown mode'}"
+            )
+        calibration = self._calibration()
+        middle = calibration.middle_pwm
+        deadzone = calibration.deadzone_pwm
+        if rate == 0.0:
+            self._set_rc_override(middle)
+            return
+        if rate > 0.0:
+            span = calibration.maximum_pwm - middle - deadzone
+            self._set_rc_override(round(middle + deadzone + rate * span))
+            return
+        span = middle - deadzone - calibration.minimum_pwm
+        self._set_rc_override(round(middle - deadzone + rate * span))
+
+    def _ramped_throttle(self, elapsed: float, climb: float) -> float:
+        """Ramp from below hover up to ``climb`` over ``STABILIZE_RAMP_SECONDS``."""
+
+        fraction = min(1.0, max(0.0, elapsed / self.STABILIZE_RAMP_SECONDS))
+        start = -self.STABILIZE_RAMP_START_BELOW_HOVER
+        return start + fraction * (climb - start)
+
+    def abort_to_land(self) -> None:
+        """Request LAND and back the throttle off to a value safe in any mode.
+
+        An abort cannot assume its own mode change was accepted, so the
+        throttle it leaves behind has to be safe whether the vehicle is still
+        in STABILIZE, already in ALT_HOLD, or in LAND.  Just below hover is
+        that value; centring the stick would not be.
+        """
+
+        try:
+            self.emergency_stop()
+        except (OSError, RuntimeError, FlightSafetyError) as error:
+            logger.error("could not request LAND: %s", error)
+        self._back_off_throttle_override()
+
+    def _back_off_throttle_override(self) -> None:
+        """Move a standing override to the one throttle safe in every mode."""
+
+        if self._throttle_calibration is None or self._rc_override is None:
+            return
+        calibration = self._throttle_calibration
+        try:
+            self._set_rc_override(
+                calibration.pwm_for(
+                    max(0.0, calibration.hover - self.ABORT_THROTTLE_BELOW_HOVER)
+                )
+            )
+        except (OSError, RuntimeError, FlightSafetyError) as error:
+            logger.error("could not back the throttle override off: %s", error)
+
+    def climb_in_stabilize(
+        self,
+        target_alt: float,
+        *,
+        climb: float = 0.06,
+        timeout: float = 12.0,
+    ) -> None:
+        """Climb to ``target_alt`` in STABILIZE on an overridden throttle.
+
+        STABILIZE has no altitude controller: the throttle stick is motor
+        thrust, and the aircraft accelerates upward for as long as that thrust
+        exceeds its weight.  Everything protective here is therefore in this
+        loop -- a bounded throttle built from the vehicle's learned hover, a
+        ramp onto it, a measured climb-rate limit, and the altitude ceiling in
+        ``update_telemetry`` -- because the autopilot contributes none of it.
+        """
+
+        target = finite_in_range(
+            target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
+        )
+        finite_in_range(
+            climb, "climb", minimum=0.01, maximum=self.MAX_THROTTLE_ABOVE_HOVER
+        )
+        # Short on purpose.  An aircraft still on the floor after this long is
+        # an aircraft holding hover throttle plus a climb margin against the
+        # ground, and the longer that lasts the worse whatever is stuck about
+        # it gets.
+        finite_in_range(timeout, "timeout", minimum=1.0, maximum=60.0)
+
+        self._throttle_calibration = self.read_throttle_calibration()
+        calibration = self._throttle_calibration
+        # Hold the throttle at its calibrated minimum *before* arming.  With
+        # RC_OPTIONS bit 5 set the vehicle refuses to arm otherwise, and an
+        # override that only starts after arming leaves a window in which
+        # STABILIZE has no throttle source.
+        self._set_rc_override(calibration.minimum_pwm)
+        if not self.is_armed:
+            self.arm(mode="STABILIZE")
+        if not self._armed_by_controller:
+            raise FlightSafetyError("takeoff requires arming by this controller")
+        if self.wait_for_altitude(timeout=3.0) is None:
+            raise FlightSafetyError("no fresh downward altitude before takeoff")
+
+        self._flight_started_by_controller = True
+        self.is_flying = True
+        reference: tuple[float, float] | None = None
+        started = time.monotonic()
+        deadline = started + timeout
+        try:
+            while time.monotonic() < deadline:
+                self.update_telemetry()
+                now = time.monotonic()
+                if now - started > 2.0 and (
+                    not self.altitude_is_fresh() or not self.heartbeat_is_fresh()
+                ):
+                    raise FlightSafetyError("telemetry became stale during the climb")
+                altitude = self.current_altitude
+                if (
+                    self.last_telemetry_time >= started
+                    and altitude is not None
+                    and altitude >= target
+                ):
+                    return
+                if altitude is not None:
+                    if reference is None:
+                        reference = (now, altitude)
+                    elif now - reference[0] >= self.STABILIZE_CLIMB_WINDOW_S:
+                        measured = (altitude - reference[1]) / (now - reference[0])
+                        if measured > self.MAX_STABILIZE_CLIMB_MS:
+                            raise FlightSafetyError(
+                                f"climbing at {measured:.2f} m/s, faster than the "
+                                f"{self.MAX_STABILIZE_CLIMB_MS:.2f} m/s limit; the "
+                                "commanded throttle is producing more thrust than "
+                                "the learned hover value predicts"
+                            )
+                        reference = (now, altitude)
+                self.command_stabilize_throttle(
+                    self._ramped_throttle(now - started, climb)
+                )
+                time.sleep(0.05)
+        except BaseException:
+            self.abort_to_land()
+            raise
+        self.abort_to_land()
+        raise TimeoutError("the STABILIZE climb did not reach the target altitude")
+
+    def handover_to_alt_hold(self, timeout: float = 5.0) -> None:
+        """Hand altitude control to ArduPilot, in the one order that is safe.
+
+        The mode change goes first.  Centring the throttle stick while still in
+        STABILIZE would command roughly half throttle -- close to twice hover
+        on this airframe -- for however long the mode change takes to confirm.
+        Doing it in this order costs a brief descent at PILOT_SPEED_DN instead,
+        and nothing else.
+        """
+
+        try:
+            self.set_mode("ALT_HOLD", timeout=timeout)
+            self.command_alt_hold_climb(0.0)
+        except BaseException:
+            self.abort_to_land()
+            raise
+
+    def hold_in_alt_hold(self, duration: float, on_sample: Any = None) -> None:
+        """Hold altitude in ALT_HOLD with the throttle stick centred."""
+
+        finite_in_range(duration, "duration", minimum=0.1, maximum=600.0)
+        deadline = time.monotonic() + duration
+        try:
+            while time.monotonic() < deadline:
+                self.update_telemetry()
+                if on_sample is not None:
+                    on_sample(self)
+                self.command_alt_hold_climb(0.0)
+                time.sleep(0.1)
+        except BaseException:
+            self.abort_to_land()
+            raise

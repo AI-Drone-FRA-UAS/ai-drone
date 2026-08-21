@@ -272,6 +272,51 @@ def cmd_nogps_takeoff(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stabilize_takeoff(args: argparse.Namespace) -> int:
+    """Climb in STABILIZE, hold in ALT_HOLD, then land in LAND.
+
+    STABILIZE is the one mode in this CLI where the autopilot contributes
+    nothing to holding the aircraft up: the throttle stick is motor thrust,
+    and the climb ends only when this loop ends it.  It exists because
+    ALT_HOLD has never lifted this airframe cleanly off the floor and GUIDED
+    cannot arm without a position estimate it only gets after taking off.
+
+    The three phases are three different meanings of the same stick, so the
+    controller verifies the vehicle's reported mode before every value it
+    sends, and hands altitude control back to ArduPilot as soon as there is
+    altitude to hold.
+    """
+
+    _require_flight_confirmation(args)
+    with _flight_session(args) as (drone, record):
+        record.event(
+            "stabilize_takeoff_started",
+            target_alt_m=args.takeoff_alt,
+            throttle_above_hover=args.climb,
+        )
+        print(f"climbing to {args.takeoff_alt:.2f} m in STABILIZE")
+        drone.climb_in_stabilize(args.takeoff_alt, climb=args.climb)
+        record.event("handover_started", ekf_flags=drone.ekf_flags)
+        print("handing altitude control to ALT_HOLD")
+        drone.handover_to_alt_hold()
+        record.event("hold_started", ekf_flags=drone.ekf_flags)
+        print(f"holding in ALT_HOLD for {args.duration:.1f} s")
+
+        def sample(controller: DroneController) -> None:
+            try:
+                check_safety_guardrails(controller, args.min_battery)
+            except FlightGuardError as error:
+                raise FlightSafetyError(str(error)) from error
+
+        drone.hold_in_alt_hold(args.duration, on_sample=sample)
+        record.event("landing_started", ekf_flags=drone.ekf_flags)
+        print("landing")
+        drone.land()
+        record.event("landed")
+        print("landed")
+    return 0
+
+
 def cmd_hover(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
     with _flight_session(args) as (drone, record):
@@ -370,6 +415,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     nogps.add_argument("--confirm-flight")
     nogps.set_defaults(handler=cmd_nogps_takeoff)
+
+    stabilize = commands.add_parser(
+        "stabilize-takeoff",
+        help="climb in STABILIZE, hold in ALT_HOLD, then land",
+    )
+    _add_common_options(stabilize, include_takeoff=True)
+    stabilize.add_argument("--duration", type=float, default=3.0)
+    stabilize.add_argument(
+        "--climb",
+        type=float,
+        default=0.06,
+        help="throttle above the vehicle's learned hover, 0.0-0.10",
+    )
+    stabilize.add_argument("--confirm-flight")
+    stabilize.set_defaults(handler=cmd_stabilize_takeoff)
 
     hover = commands.add_parser(
         "hover",

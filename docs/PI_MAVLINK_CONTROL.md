@@ -15,6 +15,7 @@ this aircraft. Check the newest `state/` capture and `params/` dump before use.
 | `preflight` | Report what would block a guarded takeoff | Read-only |
 | `arm-test` | Arm in a chosen mode, hold at idle, disarm | Arms; no takeoff |
 | `nogps-takeoff` | Climb, hold and land with no position estimate | Arms and flies |
+| `stabilize-takeoff` | Climb in STABILIZE, hold in ALT_HOLD, then land | Arms and flies |
 | `hover` (`takeoff` alias) | Guided takeoff, timed hold, then land | Arms and flies |
 | `velocity-test` | Bounded body-frame velocity/yaw, then stop and land | Arms and flies |
 
@@ -91,6 +92,52 @@ Once the aircraft is off the ground the EKF starts flow navigation, so a later
 switch to `GUIDED` or `LOITER` becomes possible. That handover is not yet
 implemented.
 
+## Climbing on the throttle stick
+
+`stabilize-takeoff` exists because the two position-free routes up have each
+failed on this airframe in a different way: `ALT_HOLD` has never lifted it
+cleanly off the floor, and the thrust question `nogps-takeoff` raised on
+2026-08-20 is still open.
+
+```bash
+uv run drone-control stabilize-takeoff --takeoff-alt 0.3 --max-alt 0.5 \
+  --duration 3 --confirm-flight FLIGHT_TEST_READY
+```
+
+It arms in `STABILIZE` with the throttle already overridden to `RC3_MIN`,
+ramps onto a throttle built from the vehicle's own learned `MOT_THST_HOVER`,
+climbs to the target on the downward rangefinder, hands altitude control to
+`ALT_HOLD`, holds, and lands in `LAND`.
+
+Three things about it are worth knowing before running it.
+
+**STABILIZE has no altitude controller.** The throttle stick is motor thrust,
+and the aircraft accelerates upward for as long as that thrust exceeds its
+weight. Every limit during the climb is in `climb_in_stabilize`: a throttle
+capped at `MOT_THST_HOVER` plus `MAX_THROTTLE_ABOVE_HOVER`, a ramp onto it, a
+measured climb-rate limit, and the altitude ceiling. The autopilot contributes
+none of them.
+
+**The same stick means two different things.** Centred is "hold this altitude"
+in `ALT_HOLD` and roughly half throttle -- close to twice hover -- in
+`STABILIZE`. `DroneController` therefore checks the mode the vehicle reports in
+its own heartbeat before every throttle it sends, and the handover changes mode
+*first* and centres the stick second. The other order commands half throttle
+for as long as the mode change takes to confirm.
+
+**An override lapses.** `RC_OVERRIDE_TIME` is 3 s, and when an override expires
+ArduPilot hands the channel back to the receiver -- of which this airframe has
+none. The override is re-sent from every loop that can block, including the
+waits for a mode confirmation and an arm confirmation, and it is released only
+once the vehicle's own heartbeat reports it disarmed.
+
+Rehearse it, and watch it stop, before it is flown:
+
+```bash
+uv run drone-rehearse stabilize-takeoff
+uv run drone-rehearse stabilize-takeoff --fault throttle-runaway
+```
+
 ## Rehearsing a flight without an aircraft
 
 `drone-rehearse` runs the real `drone-control` command against
@@ -118,6 +165,7 @@ trip is here:
 | `battery-sag` | The battery guard lands on a collapsing pack |
 | `stale-altitude` | A dead rangefinder stream lands the aircraft |
 | `heartbeat-loss` | A dead telemetry link lands the aircraft |
+| `throttle-runaway` | A commanded throttle producing far more thrust than the learned hover value predicts is measured and stopped |
 | `refuse-land` | An ignored LAND is reported, and the controller still does not force-disarm an airborne vehicle |
 
 Every fault applies to `nogps-takeoff` as well as `hover`.

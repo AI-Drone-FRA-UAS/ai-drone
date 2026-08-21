@@ -54,6 +54,24 @@ CLIMB_RATE_MS = 0.5
 DESCENT_RATE_MS = 0.35
 TOUCHDOWN_ALTITUDE_M = 0.05
 
+# ArduPilot lets an RC override lapse after RC_OVERRIDE_TIME seconds.  This
+# double models the lapse as the aircraft losing its throttle input entirely,
+# which is what happens on an airframe with no receiver fitted -- so a
+# rehearsal fails if the flight code stops refreshing the override.
+RC_OVERRIDE_TIME_S = 3.0
+# How hard a STABILIZE throttle above the learned hover value pushes the
+# aircraft up.  This is a sequencing double, not a thrust model: the number
+# only has to be steep enough that a wrong throttle is visible as motion.
+STABILIZE_THRUST_GAIN = 5.0
+# What a runaway looks like: the same commanded throttle, four times the
+# thrust.  This is the 2026-08-20 failure -- a commanded value producing far
+# more lift than the number predicted -- expressed as something a guard can
+# be watched catching.
+RUNAWAY_THRUST_MULTIPLIER = 4.0
+# PILOT_SPEED_UP and PILOT_SPEED_DN on this airframe, in m/s.
+PILOT_SPEED_UP_MS = 0.25
+PILOT_SPEED_DN_MS = 0.20
+
 # The parameters DroneController reads before it will arm.  These are the
 # values a *correctly configured* aircraft reports: all pre-arm checks on,
 # onboard logging enabled.  The rehearsal is worthless if the double is more
@@ -69,6 +87,20 @@ DEFAULT_PARAMETERS: dict[str, float] = {
     "RNGFND1_ORIENT": float(DOWNWARD),
     "EK3_SRC1_POSXY": 3.0,
     "BATT_MONITOR": 4.0,
+    # The throttle mapping a STABILIZE climb reads before it commands any of
+    # it.  These are the live values from the 2026-08-20 capture, including
+    # the hover throttle ArduPilot learned during the flight itself.
+    "RCMAP_ROLL": 1.0,
+    "RCMAP_PITCH": 2.0,
+    "RCMAP_THROTTLE": 3.0,
+    "RCMAP_YAW": 4.0,
+    "RC1_TRIM": 1501.0,
+    "RC2_TRIM": 1500.0,
+    "RC3_MIN": 988.0,
+    "RC3_MAX": 2011.0,
+    "RC4_TRIM": 1500.0,
+    "MOT_THST_HOVER": 0.263,
+    "THR_DZ": 40.0,
 }
 
 
@@ -86,6 +118,7 @@ class Fault(enum.Enum):
     STALE_ALTITUDE = "stale-altitude"
     HEARTBEAT_LOSS = "heartbeat-loss"
     REFUSE_LAND = "refuse-land"
+    THROTTLE_RUNAWAY = "throttle-runaway"
 
 
 @dataclass
@@ -104,6 +137,8 @@ class VehicleState:
     velocity_deadline: float = 0.0
     climb_rate_ms: float = 0.0
     climb_deadline: float = 0.0
+    rc_throttle_pwm: int | None = None
+    rc_override_deadline: float = 0.0
     parameters: dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_PARAMETERS)
     )
@@ -226,6 +261,10 @@ class SimulatedVehicle:
         if not state.armed:
             return
 
+        if state.mode in {COPTER_MODES["STABILIZE"], COPTER_MODES["ALT_HOLD"]}:
+            self._advance_on_sticks(dt)
+            return
+
         if self.fault is Fault.ALTITUDE_RUNAWAY and state.altitude_m > 0.05:
             # A stuck climb: the aircraft keeps going up regardless of target.
             state.altitude_m += CLIMB_RATE_MS * dt
@@ -250,6 +289,76 @@ class SimulatedVehicle:
                 vx * math.sin(state.yaw_rad) + vy * math.cos(state.yaw_rad)
             ) * dt
             state.altitude_m = max(0.0, state.altitude_m - vz * dt)
+
+    def _stick_throttle(self) -> float | None:
+        """The overridden throttle as a 0.0-1.0 fraction, or None if lapsed.
+
+        A lapsed override is not "hold the last value": ArduPilot hands the
+        channel back to the receiver, and this airframe has none.  Reporting
+        it as no throttle at all is what makes a flight command that stops
+        refreshing its override fail here instead of over a floor.
+        """
+
+        state = self.state
+        if state.rc_throttle_pwm is None:
+            return None
+        if self._clock() > state.rc_override_deadline:
+            if self._last.get("override_lapsed") != state.rc_override_deadline:
+                self._last["override_lapsed"] = state.rc_override_deadline
+                self._note("RC override lapsed; no throttle source")
+            return None
+        minimum = state.parameters["RC3_MIN"]
+        maximum = state.parameters["RC3_MAX"]
+        return (state.rc_throttle_pwm - minimum) / (maximum - minimum)
+
+    def _advance_on_sticks(self, dt: float) -> None:
+        """Move the aircraft the way the overridden throttle stick asks.
+
+        The same stick means two different things: motor thrust in STABILIZE,
+        a climb rate in ALT_HOLD.  Modelling both is the point -- a flight
+        command that confuses them is exactly what this double exists to
+        catch, and the difference is a flyaway on the real aircraft.
+        """
+
+        state = self.state
+        throttle = self._stick_throttle()
+        if throttle is None:
+            # No throttle source: the aircraft comes down.
+            state.altitude_m = max(0.0, state.altitude_m - DESCENT_RATE_MS * dt)
+            return
+
+        if state.mode == COPTER_MODES["STABILIZE"]:
+            gain = STABILIZE_THRUST_GAIN
+            if self.fault is Fault.THROTTLE_RUNAWAY:
+                gain *= RUNAWAY_THRUST_MULTIPLIER
+            rate = (throttle - state.parameters["MOT_THST_HOVER"]) * gain
+        else:
+            deadzone = state.parameters["THR_DZ"] / 1_000.0
+            offset = throttle - 0.5
+            if abs(offset) <= deadzone:
+                rate = 0.0
+            elif offset > 0.0:
+                rate = (offset - deadzone) / (0.5 - deadzone) * PILOT_SPEED_UP_MS
+            else:
+                rate = (offset + deadzone) / (0.5 - deadzone) * PILOT_SPEED_DN_MS
+
+        if self.fault is Fault.NO_TAKEOFF:
+            # The throttle is commanded and nothing happens.  In a stick-driven
+            # mode this is the aircraft that never leaves the floor, and the
+            # only thing that ends it is the climb's own timeout.
+            return
+        if self.fault is Fault.ALTITUDE_RUNAWAY and state.altitude_m > 0.05:
+            # A climb slow enough to pass the climb-rate guard and keep going
+            # anyway.  This is what leaves the altitude ceiling as the only
+            # thing between the aircraft and the roof, so the rehearsal has to
+            # be able to produce it.
+            rate = 0.30
+        rate = min(2.0, max(-DESCENT_RATE_MS, rate))
+        if state.altitude_m <= 0.0 and rate <= 0.0:
+            return
+        if self._flight_started == 0.0 and rate > 0.0:
+            self._flight_started = self._clock()
+        state.altitude_m = max(0.0, state.altitude_m + rate * dt)
 
     # -- outbound -------------------------------------------------------
 
@@ -400,7 +509,16 @@ class SimulatedVehicle:
         if self.fault is Fault.REFUSE_ARM:
             self._note("refused arm (injected fault)")
             return mavlink.MAV_RESULT_DENIED
-        if state.mode not in {
+        if state.mode == COPTER_MODES["STABILIZE"]:
+            # RC_OPTIONS bit 5 is set on this airframe: the vehicle refuses to
+            # arm unless the throttle channel reads its calibrated minimum.
+            # Enforcing it here is what makes a rehearsal prove that the
+            # override is already running before the arm request goes out.
+            throttle = state.rc_throttle_pwm
+            if throttle is None or throttle > state.parameters["RC3_MIN"] + 20:
+                self._note("refused arm in STABILIZE: throttle is not at minimum")
+                return mavlink.MAV_RESULT_DENIED
+        elif state.mode not in {
             COPTER_MODES["GUIDED"],
             COPTER_MODES["ALT_HOLD"],
             COPTER_MODES["GUIDED_NOGPS"],
@@ -421,6 +539,17 @@ class SimulatedVehicle:
         self._flight_started = self._clock()
         self._note(f"takeoff to {target_m:.2f} m")
         return mavlink.MAV_RESULT_ACCEPTED
+
+    def _on_rc_channels_override(self, message: Any) -> None:
+        state = self.state
+        throttle = int(message.chan3_raw)
+        if throttle == 0:
+            state.rc_throttle_pwm = None
+            state.rc_override_deadline = 0.0
+            self._note("RC override released")
+            return
+        state.rc_throttle_pwm = throttle
+        state.rc_override_deadline = self._clock() + RC_OVERRIDE_TIME_S
 
     def _on_set_position_target_local_ned(self, message: Any) -> None:
         state = self.state

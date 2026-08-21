@@ -58,8 +58,11 @@ default-groups = []
 [tool.ruff]
 target-version = "py311"
 # attic/ holds retired code kept for reference only; it is not maintained,
-# linted, type-checked, tested, or deployed.
-extend-exclude = ["attic"]
+# linted, type-checked, tested, or deployed.  state/ holds dated captures of
+# what was observed on the hardware, including verbatim copies of code that
+# ran on the Pi; a capture that were reformatted to satisfy a linter would no
+# longer be a record of what ran.
+extend-exclude = ["attic", "state"]
 
 [tool.ruff.lint]
 select = ["B", "C90", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
@@ -68,7 +71,7 @@ select = ["B", "C90", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
 max-complexity = 20
 
 [tool.ty.src]
-exclude = ["attic"]
+exclude = ["attic", "state"]
 
 [tool.deptry]
 # attic/ is retired reference code: excluded from ruff and ty, so exclude it here
@@ -76,7 +79,14 @@ exclude = ["attic"]
 # be treated as a development-only group.
 # aitrios-rpi-sample-apps/ is a vendored third-party sample tree (already in
 # deploy.EXCLUDE_NAMES); tests/ legitimately import the dev group.
-exclude = ["artifacts", "attic", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
+exclude = [
+    "artifacts",
+    "attic",
+    "aitrios-rpi-sample-apps",
+    "state",
+    "tests",
+    "\\.venv",
+]
 non_dev_dependency_groups = ["raspi"]
 
 [tool.deptry.per_rule_ignores]
