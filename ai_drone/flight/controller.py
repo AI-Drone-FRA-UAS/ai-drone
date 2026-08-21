@@ -120,6 +120,7 @@ class DroneController:
         self._manual_descent = False
         self._grounded_since: float | None = None
         self._last_force_disarm = 0.0
+        self._last_heartbeat_sent = 0.0
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -344,6 +345,7 @@ class DroneController:
             raise ValueError("max_messages must be between 1 and 1000")
         if self.connection is None:
             return
+        self._pump_heartbeat()
         self._pump_rc_override()
         # The disarm goes out before anything else, because the operator is
         # reacting to the aircraft and nothing this loop is about to learn
@@ -1283,6 +1285,32 @@ class DroneController:
             0,
         )
         self._rc_override_sent = time.monotonic()
+
+    # ArduPilot's GCS failsafe watches for traffic from SYSID_MYGCS and acts
+    # when it stops.  That makes us responsible for saying we are still here:
+    # with FS_GCS_ENABLE set and nothing sending this, the vehicle would decide
+    # it had lost its operator a few seconds into every flight.
+    HEARTBEAT_INTERVAL_S = 1.0
+
+    def _pump_heartbeat(self) -> None:
+        """Announce this ground station on the interval the vehicle expects."""
+
+        if self.connection is None:
+            return
+        now = time.monotonic()
+        if now - self._last_heartbeat_sent < self.HEARTBEAT_INTERVAL_S:
+            return
+        self._last_heartbeat_sent = now
+        try:
+            self.connection.mav.heartbeat_send(
+                mavlink.MAV_TYPE_GCS,
+                mavlink.MAV_AUTOPILOT_INVALID,
+                0,
+                0,
+                mavlink.MAV_STATE_ACTIVE,
+            )
+        except (OSError, RuntimeError) as error:
+            logger.error("could not send the ground-station heartbeat: %s", error)
 
     def _pump_rc_override(self) -> None:
         """Re-send the standing override before ArduPilot lets it lapse.

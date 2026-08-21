@@ -205,3 +205,31 @@ def test_the_flight_session_reports_whether_the_hang_up_abort_is_armed() -> None
     # Not installed yet: the operator must be able to read that.
     assert "NOT installed" in hang_up.describe()
     assert "will kill this flight" in hang_up.describe()
+
+
+def test_the_controller_announces_itself_to_the_gcs_failsafe() -> None:
+    """FS_GCS_ENABLE makes the vehicle act when SYSID_MYGCS goes quiet.
+
+    Enabling that failsafe without sending anything would make the aircraft
+    decide it had lost its operator a few seconds into every flight.
+    """
+
+    import time as _time
+
+    from pymavlink.dialects.v10 import ardupilotmega as mavlink
+
+    controller, connection = _controller()
+
+    controller.update_telemetry()
+    connection.mav.heartbeat_send.assert_called_once()
+    assert connection.mav.heartbeat_send.call_args.args[0] == mavlink.MAV_TYPE_GCS
+
+    # Rate limited, not sent on every pass of a 20 Hz loop.
+    controller.update_telemetry()
+    assert connection.mav.heartbeat_send.call_count == 1
+
+    controller._last_heartbeat_sent = (
+        _time.monotonic() - controller.HEARTBEAT_INTERVAL_S - 0.01
+    )
+    controller.update_telemetry()
+    assert connection.mav.heartbeat_send.call_count == 2
