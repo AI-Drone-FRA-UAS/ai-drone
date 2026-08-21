@@ -94,18 +94,26 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   through it. On 2026-08-20 an unverified LAND plus an immediate disconnect left
   an airborne aircraft with nobody commanding it; it was stopped by pulling the
   battery.
-- A guard that reads the same sensor the autopilot is flying on cannot see
-  that sensor being wrong. Every altitude limit in this repository reads
-  `DroneController.current_altitude`, which is the downward rangefinder and
-  nothing else -- the same rangefinder ArduPilot's altitude controller uses.
-  A rangefinder that under-reports makes the vehicle climb and makes every
-  guard see a low, healthy altitude; a staleness check does not help, because
-  a confidently wrong reading is not a stale one. On 2026-08-21 an aircraft
-  hovered correctly and then climbed into a ceiling with a 0.5 m ceiling guard
-  and a 0.60 m/s climb guard both armed and neither complaining.
-  `LOCAL_POSITION_NED` already arrives and is already decoded into
-  `local_position_altitude`; no guard has ever read it. Cross-check altitude
-  against an independent source before adding another limit that trusts one.
+- A LAND request is an altitude-controlled mode, so it is only as safe as the
+  vehicle's altitude estimate. On 2026-08-21 the EKF reported an altitude of
+  -10000 m and a descent of 38 m/s while the aircraft sat on the floor. The
+  aircraft was fine for thirteen seconds in STABILIZE, which ignores the EKF
+  entirely; the moment this software requested LAND, the altitude controller
+  read that estimate, went to full throttle in a single log sample, and flew
+  the aircraft into a ceiling in one second. `emergency_stop`, `abort_to_land`,
+  `ensure_landed`, and every guard in `flight/guards.py` route to LAND. Before
+  requesting it, check that the vertical estimate is sane -- and when the
+  aircraft is demonstrably still on the ground, disarm instead.
+- Do not report a flight as started before the aircraft has left the ground.
+  `climb_in_stabilize` and `takeoff_without_position` both set
+  `_flight_started_by_controller` and `is_flying` immediately after arming, so
+  a climb that never lifts is treated as an airborne emergency and lands, when
+  the rangefinder has been reading 0.02 m throughout and the safe ending is a
+  disarm.
+- An EKF status flag is not an EKF estimate. `preflight` passed
+  `vertical_position` on 2026-08-21 by reading the flag that says a vertical
+  estimate exists, while the estimate itself was -10000 m. Check values, not
+  only the bits that claim the values are available.
 - A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
   simulator, and the simulator encodes whatever was assumed when it was
   written. It cannot validate an assumption about how the vehicle interprets a
