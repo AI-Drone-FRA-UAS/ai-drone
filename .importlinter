@@ -38,6 +38,7 @@ source_modules =
     ai_drone.recording
     ai_drone.validation
     ai_drone.abort_key
+    ai_drone.throttle_curve
 forbidden_modules =
     ai_drone.cli
 
@@ -51,6 +52,7 @@ source_modules =
     ai_drone.recording
     ai_drone.validation
     ai_drone.abort_key
+    ai_drone.throttle_curve
 forbidden_modules =
     ai_drone.cli
     ai_drone.config

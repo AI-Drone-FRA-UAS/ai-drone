@@ -432,6 +432,7 @@ class TestTheClimbRateHasToMatchTheRangefinder:
         connection = MagicMock()
         connection.recv_match.return_value = None
         controller.connection = connection
+        controller.flight_mode = "ALT_HOLD"
         controller.current_altitude = 0.02
         controller.local_position_climb = 4.27
         controller._ground_reference = 0.02
@@ -450,3 +451,73 @@ class TestTheClimbRateHasToMatchTheRangefinder:
             controller.update_telemetry()
 
         assert stopped == [True]
+
+
+class TestStabilizeIsNotStoppedByAnEstimateItDoesNotUse:
+    """STABILIZE puts motor thrust straight on the stick and ignores the EKF.
+
+    That is why the aircraft sat unharmed in it for thirteen seconds on
+    2026-08-21 while the estimate read -10000 m and -38 m/s, and why a drifting
+    estimate is not a reason to stop a STABILIZE flight. It remains a permanent
+    reason never to hand the aircraft to LAND, which is what destroyed it.
+    """
+
+    @staticmethod
+    def _diverging(mode: str) -> DroneController:
+        controller = DroneController(device="udp:127.0.0.1:14550")
+        connection = MagicMock()
+        connection.recv_match.return_value = None
+        controller.connection = connection
+        controller.flight_mode = mode
+        controller.current_altitude = 0.02
+        controller._ground_reference = 0.02
+        controller.local_position_climb = 4.27
+        return controller
+
+    @staticmethod
+    def _let_the_window_expire(controller: DroneController) -> None:
+        controller._climb_disagreement_since = (
+            time.monotonic() - DroneController.CLIMB_DISAGREEMENT_WINDOW_S - 1.0
+        )
+        controller._climb_reference = (time.monotonic() - 1.0, 0.02)
+
+    def test_a_stabilize_flight_is_not_aborted_for_it(self, monkeypatch) -> None:
+        controller = self._diverging("STABILIZE")
+        monkeypatch.setattr(controller, "emergency_stop", lambda *_a, **_k: None)
+        controller.update_telemetry()
+        self._let_the_window_expire(controller)
+
+        controller.update_telemetry()  # must not raise
+
+    def test_but_the_estimate_is_never_trusted_again_afterwards(
+        self, monkeypatch
+    ) -> None:
+        controller = self._diverging("STABILIZE")
+        monkeypatch.setattr(controller, "emergency_stop", lambda *_a, **_k: None)
+        assert controller.vertical_estimate_is_sane()
+
+        controller.update_telemetry()
+        self._let_the_window_expire(controller)
+        controller.update_telemetry()
+
+        assert controller._estimate_untrusted
+        # LAND runs on this estimate, so it is off the table for the rest of
+        # the flight however plausible the number later looks.
+        controller.local_position_climb = 0.0
+        assert not controller.vertical_estimate_is_sane()
+
+    def test_alt_hold_is_still_stopped_because_it_flies_on_the_estimate(
+        self, monkeypatch
+    ) -> None:
+        controller = self._diverging("ALT_HOLD")
+        monkeypatch.setattr(controller, "emergency_stop", lambda *_a, **_k: None)
+        controller.update_telemetry()
+        self._let_the_window_expire(controller)
+
+        with pytest.raises(FlightSafetyError, match="rangefinder measures"):
+            controller.update_telemetry()
+
+    def test_every_estimate_flown_mode_is_covered_and_stabilize_is_not(self) -> None:
+        assert "STABILIZE" not in DroneController.ESTIMATE_FLOWN_MODES
+        for mode in ("ALT_HOLD", "LAND", "GUIDED", "GUIDED_NOGPS", "LOITER"):
+            assert mode in DroneController.ESTIMATE_FLOWN_MODES

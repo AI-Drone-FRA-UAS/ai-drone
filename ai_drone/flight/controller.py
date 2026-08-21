@@ -12,6 +12,7 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone import throttle_curve
 from ai_drone.mavlink import arming_checks
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
@@ -73,6 +74,22 @@ class ThrottleCalibration:
 
         return round(self.deadzone * self.span_pwm / 1_000.0)
 
+    @property
+    def expo(self) -> float:
+        """ArduPilot's STABILIZE throttle expo, derived from learned hover."""
+
+        return throttle_curve.expo_for_hover(self.hover)
+
+    def thrust_for_stick(self, stick: float) -> float:
+        """The motor thrust ArduPilot produces from a stick fraction."""
+
+        return throttle_curve.thrust_for_stick(stick, self.hover)
+
+    def stick_for_thrust(self, thrust: float) -> float:
+        """What stick fraction asks ArduPilot for this much thrust."""
+
+        return throttle_curve.stick_for_thrust(thrust, self.hover)
+
 
 class DroneController:
     """One controller for arm, takeoff, body velocity, hover, and landing.
@@ -128,6 +145,7 @@ class DroneController:
         self.commanded_climb_ms: float | None = None
         self._climb_reference: tuple[float, float] | None = None
         self._climb_disagreement_since: float | None = None
+        self._estimate_untrusted = False
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -382,10 +400,16 @@ class DroneController:
                 f"altitude {self.current_altitude:.2f} m exceeds {self.max_altitude:.2f} m"
             )
         disagreeing = self.climb_sources_disagree_for(time.monotonic())
+        if disagreeing is not None and disagreeing >= self.CLIMB_DISAGREEMENT_WINDOW_S:
+            # Recorded whatever the mode: STABILIZE ignores the estimate, so
+            # this is not a reason to stop there, but it is a permanent reason
+            # never to hand the aircraft to LAND for the rest of the flight.
+            self._estimate_untrusted = True
         if (
             not self._landing_commanded
             and disagreeing is not None
             and disagreeing >= self.CLIMB_DISAGREEMENT_WINDOW_S
+            and self.flight_mode in self.ESTIMATE_FLOWN_MODES
         ):
             believed = self.local_position_climb or 0.0
             measured = self.measured_climb_ms or 0.0
@@ -768,6 +792,24 @@ class DroneController:
     # reported -2.22 m/s within a second of arming, the second reached
     # +0.80 m/s three seconds in, and in each case the rangefinder said 0.00
     # and meant it.
+    # Modes whose altitude loop runs on the vehicle's own vertical estimate.
+    # STABILIZE is deliberately absent: it puts motor thrust straight on the
+    # stick and ignores the estimate entirely, which is why the aircraft sat
+    # unharmed in it for thirteen seconds on 2026-08-21 while that estimate
+    # read -10000 m, and why a drifting estimate is not a reason to stop a
+    # STABILIZE flight.  It remains a reason never to request LAND.
+    ESTIMATE_FLOWN_MODES = frozenset(
+        {
+            "ALT_HOLD",
+            "LAND",
+            "GUIDED",
+            "GUIDED_NOGPS",
+            "LOITER",
+            "POSHOLD",
+            "RTL",
+            "AUTO",
+        }
+    )
     MAX_CLIMB_DISAGREEMENT_MS = 0.50
     CLIMB_DISAGREEMENT_WINDOW_S = 0.75
     # Below this the rangefinder difference is quantisation, not a climb.
@@ -837,6 +879,11 @@ class DroneController:
         guards against.
         """
 
+        if self._estimate_untrusted:
+            # Caught contradicting the rangefinder earlier in this flight.
+            # A drift that has since wandered back through a plausible value
+            # is not a recovery, and LAND would fly on it either way.
+            return False
         climb = self.local_position_climb
         if climb is None or not math.isfinite(climb):
             return True
@@ -1489,7 +1536,8 @@ class DroneController:
             )
         calibration = self._calibration()
         bounded = min(self.MAX_THROTTLE_ABOVE_HOVER, above_hover)
-        self._set_rc_override(calibration.pwm_for(calibration.hover + bounded))
+        thrust = calibration.hover + bounded
+        self._set_rc_override(calibration.pwm_for(calibration.stick_for_thrust(thrust)))
 
     def command_alt_hold_climb(self, climb: float) -> None:
         """Command an ALT_HOLD climb rate, ``0.0`` meaning hold this altitude.

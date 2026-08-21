@@ -43,9 +43,40 @@ def _sent_throttle(connection: MagicMock) -> int:
 
 
 def test_hover_throttle_is_built_from_the_vehicles_own_learned_value() -> None:
-    # 26.3 % of a 988-2011 stick.  If this ever becomes a hardcoded PWM value
-    # it stops tracking what the aircraft learned about itself.
-    assert CALIBRATION.pwm_for(CALIBRATION.hover) == 1257
+    # If this ever becomes a hardcoded PWM value it stops tracking what the
+    # aircraft learned about itself.
+    assert CALIBRATION.stick_for_thrust(CALIBRATION.hover) == pytest.approx(0.5)
+
+
+def test_ardupilots_own_curve_reproduces_the_2026_08_21_dataflash() -> None:
+    # The aircraft never left the ground in STABILIZE that morning. The code
+    # placed the stick at `hover` -- 0.313 of travel -- believing that asked
+    # for hover thrust. The dataflash recorded ThrOut 0.128 against a learned
+    # hover of 0.263, and this curve is why.
+    assert CALIBRATION.thrust_for_stick(0.313) == pytest.approx(0.128, abs=0.01)
+
+
+def test_mid_stick_is_hover_thrust_however_much_hover_turns_out_to_be() -> None:
+    # Copter shapes the throttle so mid stick is always hover. Reading
+    # MOT_THST_HOVER as a stick position instead is the mistake that grounded
+    # this aircraft twice.
+    for hover in (0.15, 0.263, 0.277, 0.45):
+        calibration = ThrottleCalibration(
+            minimum_pwm=988,
+            maximum_pwm=2011,
+            roll_trim_pwm=1501,
+            pitch_trim_pwm=1500,
+            yaw_trim_pwm=1500,
+            hover=hover,
+            deadzone=40,
+        )
+        assert calibration.thrust_for_stick(0.5) == pytest.approx(hover, abs=0.001)
+
+
+def test_the_curve_inverts_exactly() -> None:
+    for thrust in (0.05, 0.128, 0.263, 0.377, 0.6):
+        stick = CALIBRATION.stick_for_thrust(thrust)
+        assert CALIBRATION.thrust_for_stick(stick) == pytest.approx(thrust, abs=1e-4)
 
 
 def test_stabilize_throttle_is_capped_however_much_is_asked_for() -> None:
@@ -54,12 +85,17 @@ def test_stabilize_throttle_is_capped_however_much_is_asked_for() -> None:
     controller.command_stabilize_throttle(0.9)
 
     ceiling = CALIBRATION.pwm_for(
-        CALIBRATION.hover + DroneController.MAX_THROTTLE_ABOVE_HOVER
+        CALIBRATION.stick_for_thrust(
+            CALIBRATION.hover + DroneController.MAX_THROTTLE_ABOVE_HOVER
+        )
     )
     assert _sent_throttle(connection) == ceiling
-    # Well under half stick: centring it in STABILIZE is the mistake this cap
-    # exists to make impossible.
-    assert ceiling < CALIBRATION.middle_pwm
+    # Above mid stick, because hover is mid stick and this asks for more than
+    # hover -- but the thrust it asks for stays inside MOT_SPIN_MAX.
+    assert ceiling > CALIBRATION.middle_pwm
+    assert (CALIBRATION.hover + DroneController.MAX_THROTTLE_ABOVE_HOVER) <= 0.40, (
+        "commanded thrust must stay within the configured MOT_SPIN_MAX"
+    )
 
 
 def test_alt_hold_centre_is_refused_while_the_vehicle_reports_stabilize() -> None:

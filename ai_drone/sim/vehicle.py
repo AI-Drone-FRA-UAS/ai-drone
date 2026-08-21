@@ -27,6 +27,7 @@ from typing import Any
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone import throttle_curve
 from ai_drone.validation import finite_in_range
 
 # ArduPilot Copter custom mode numbers.  Only the modes this double answers to
@@ -366,10 +367,16 @@ class SimulatedVehicle:
             gain = STABILIZE_THRUST_GAIN
             if self.fault is Fault.THROTTLE_RUNAWAY:
                 gain *= RUNAWAY_THRUST_MULTIPLIER
-            rate = (throttle - state.parameters["MOT_THST_HOVER"]) * gain
+            # Copter shapes the throttle stick so mid stick is hover thrust,
+            # not so the stick fraction *is* the thrust.  This module used to
+            # model the latter, which is the same mistake the flight code made
+            # and would have let a corrected flight code fail here for the
+            # wrong reason.
+            hover = state.parameters["MOT_THST_HOVER"]
+            thrust = throttle_curve.thrust_for_stick(throttle, hover)
+            rate = (thrust - hover) * gain
             if self.fault is Fault.EKF_DIVERGENCE:
-                # 2026-08-21: the commanded throttle was about half of hover,
-                # so no stick this command sends ever lifts the aircraft.
+                # An aircraft that will not lift however it is commanded.
                 rate = min(rate, 0.0)
         else:
             deadzone = state.parameters["THR_DZ"] / 1_000.0

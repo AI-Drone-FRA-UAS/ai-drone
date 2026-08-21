@@ -429,3 +429,65 @@ made when the vehicle would accept it, or forced.
 - `ensure_landed` escalates to the force disarm after
   `GROUNDED_FORCE_DISARM_AFTER_S = 3.0` when the rangefinder is fresh and
   holds the aircraft at its ground reference. A stale reading never qualifies.
+
+## Evening, fourth attempt: the software worked, and the fifth question answered itself
+
+Same fault, caught again -- `+0.98 m/s` reported against `+0.00 m/s` measured,
+at 9.81 s, against `+0.96 m/s` at 10.00 s on the run before. Reproducible to
+two figures. Accelerometer shift on this run: **9.812 m/s² disarmed,
+10.347 m/s² with the motors turning, +0.536 m/s²**, drift +0.46 m/s² per
+second, rangefinder 0.020 m from first sample to last.
+
+Both teardown fixes worked:
+
+```
+emergency_landing {"confirmed": true, "was_flying": false}
+```
+
+That is the case that was broken an hour earlier, verified on hardware.
+
+### The operator asked to go back to what flew this morning
+
+It had to be answered with the dataflash rather than the memory. **The hover
+this morning was not the STABILIZE flight.** For all thirteen seconds of
+STABILIZE the rangefinder read 0.02 m; the hover came from the LAND that
+followed, and on the second run the same LAND flew the aircraft into the
+ceiling. That is written up above and was true when written -- but the *reason*
+STABILIZE produced nothing had never been established, only recorded as an
+unfitted mapping.
+
+### The STABILIZE mapping, finally derived
+
+Copter does not read the throttle stick as a thrust fraction. It shapes the
+stick so mid stick is hover thrust, with a cubic expo from `MOT_THST_HOVER`:
+
+```
+expo   = -(hover - 0.5) / 0.375        = 0.632 at hover 0.263
+thrust = stick·(1 - expo) + expo·stick³
+```
+
+The flight code placed the stick at `pwm_for(hover)` -- 0.313 of travel --
+believing that asked for hover thrust.
+
+| stick | predicted thrust | dataflash `ThrOut` |
+|---|---|---|
+| 0.313 | **0.1346** | **0.128** |
+| 0.500 | 0.263 | (= learned hover) |
+
+The aircraft was commanded roughly half the thrust needed to lift it. Both
+runs. That is the whole of why STABILIZE "never flew", and it was a arithmetic
+error in this repository, not a property of the aircraft.
+
+`ai_drone/throttle_curve.py` now holds the model and both the flight controller
+and the simulated vehicle use it. **The simulator carried the identical wrong
+assumption** -- `rate = (stick - MOT_THST_HOVER) * gain` -- so no rehearsal
+could ever have caught this. With it corrected, `drone-rehearse
+stabilize-takeoff --fault none` is a clean rehearsal for the first time.
+
+### And STABILIZE is not stopped by an estimate it does not use
+
+The climb-disagreement guard added earlier this evening would have aborted a
+STABILIZE flight for a drifting estimate STABILIZE ignores. It is now scoped to
+`ESTIMATE_FLOWN_MODES`, and the disagreement instead sets `_estimate_untrusted`
+permanently, which takes LAND off the table for the rest of the flight in every
+mode. That is the 2026-08-21 morning failure expressed as a rule.

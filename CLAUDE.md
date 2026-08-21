@@ -158,6 +158,25 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   aircraft that is already on the floor cannot drop it. A stale reading is
   never grounds for this -- an airborne aircraft must not be dropped on the
   strength of a number nobody can vouch for.
+- ArduPilot's STABILIZE throttle stick is not a thrust fraction. Copter shapes
+  it so *mid stick* is hover thrust whatever hover turns out to be, with a
+  cubic expo derived from `MOT_THST_HOVER`. Reading `MOT_THST_HOVER` as a stick
+  position is why this aircraft never left the ground in STABILIZE: the code
+  placed the stick at 0.313 of travel believing it asked for hover, the curve
+  turns 0.313 into 0.135, and the 2026-08-21 dataflash recorded `ThrOut` 0.128
+  against a learned hover of 0.263 -- roughly half the thrust needed, twice,
+  for thirteen seconds each. `ai_drone.throttle_curve` is the single model and
+  both `flight/controller.py` and `sim/vehicle.py` use it; the simulator
+  carried the same wrong assumption and so could never have caught this.
+- STABILIZE ignores the vehicle's vertical estimate entirely, so a drifting
+  estimate is not a reason to stop a STABILIZE flight -- the aircraft sat
+  unharmed in it for thirteen seconds on 2026-08-21 while that estimate read
+  -10000 m. It is a permanent reason never to request LAND: once
+  `climb_sources_disagree_for` has caught the estimate contradicting the
+  rangefinder, `_estimate_untrusted` is set for the rest of the flight and
+  `vertical_estimate_is_sane` returns False however plausible the number
+  later looks. `ESTIMATE_FLOWN_MODES` is the list of modes whose altitude
+  loop actually runs on the estimate.
 - A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
   simulator, and the simulator encodes whatever was assumed when it was
   written. It cannot validate an assumption about how the vehicle interprets a
