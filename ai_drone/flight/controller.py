@@ -126,6 +126,8 @@ class DroneController:
         # number the guard is acting on instead of computing a second one.
         self.measured_climb_ms: float | None = None
         self.commanded_climb_ms: float | None = None
+        self._climb_reference: tuple[float, float] | None = None
+        self._climb_disagreement_since: float | None = None
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -378,6 +380,21 @@ class DroneController:
             self.emergency_stop()
             raise FlightSafetyError(
                 f"altitude {self.current_altitude:.2f} m exceeds {self.max_altitude:.2f} m"
+            )
+        disagreeing = self.climb_sources_disagree_for(time.monotonic())
+        if (
+            not self._landing_commanded
+            and disagreeing is not None
+            and disagreeing >= self.CLIMB_DISAGREEMENT_WINDOW_S
+        ):
+            believed = self.local_position_climb or 0.0
+            measured = self.measured_climb_ms or 0.0
+            self.emergency_stop()
+            raise FlightSafetyError(
+                f"the vehicle reports climbing at {believed:+.2f} m/s while the "
+                f"rangefinder measures {measured:+.2f} m/s, and has done for "
+                f"{disagreeing:.1f} s. ArduPilot flies ALT_HOLD on its own estimate, "
+                "so it is about to fight a climb that is not happening"
             )
         if not self._landing_commanded and not self.altitude_sources_agree():
             believed = (self.local_position_altitude or 0.0) - (
@@ -735,6 +752,53 @@ class DroneController:
     # ArduPilot flies ALT_HOLD and LAND on that estimate, so this is the check
     # that catches it before a climb rather than during one.
     MAX_ALTITUDE_DISAGREEMENT_M = 0.40
+
+    # The altitude disagreement above is the slow version of this one.  A
+    # vertical velocity error shows up in seconds, where the height error it
+    # integrates into takes long enough that thrust has already been applied.
+    # Both flights of 2026-08-21 would have been caught here: the first
+    # reported -2.22 m/s within a second of arming, the second reached
+    # +0.80 m/s three seconds in, and in each case the rangefinder said 0.00
+    # and meant it.
+    MAX_CLIMB_DISAGREEMENT_MS = 0.50
+    CLIMB_DISAGREEMENT_WINDOW_S = 0.75
+    # Below this the rangefinder difference is quantisation, not a climb.
+    CLIMB_REFERENCE_WINDOW_S = 0.30
+
+    def _measure_climb(self, now: float) -> float | None:
+        """The climb rate the rangefinder actually shows, or None yet."""
+
+        altitude = self.current_altitude
+        if altitude is None:
+            return self.measured_climb_ms
+        if self._climb_reference is None:
+            self._climb_reference = (now, altitude)
+            return self.measured_climb_ms
+        elapsed = now - self._climb_reference[0]
+        if elapsed < self.CLIMB_REFERENCE_WINDOW_S:
+            return self.measured_climb_ms
+        self.measured_climb_ms = (altitude - self._climb_reference[1]) / elapsed
+        self._climb_reference = (now, altitude)
+        return self.measured_climb_ms
+
+    def climb_sources_disagree_for(self, now: float) -> float | None:
+        """How long the vehicle's climb rate has contradicted the rangefinder.
+
+        Returns None while the two agree, or no measurement exists yet.
+        """
+
+        believed = self.local_position_climb
+        measured = self._measure_climb(now)
+        if believed is None or measured is None:
+            self._climb_disagreement_since = None
+            return None
+        if abs(believed - measured) <= self.MAX_CLIMB_DISAGREEMENT_MS:
+            self._climb_disagreement_since = None
+            return None
+        if self._climb_disagreement_since is None:
+            self._climb_disagreement_since = now
+            return 0.0
+        return now - self._climb_disagreement_since
 
     def altitude_sources_agree(self) -> bool:
         """Whether the EKF and the rangefinder tell the same story about the climb.

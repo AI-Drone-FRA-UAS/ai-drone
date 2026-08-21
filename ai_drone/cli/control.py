@@ -346,11 +346,20 @@ def _live_line(drone: DroneController, climb: float | None) -> str:
         if believed is not None and measured is not None
         else "  n/a"
     )
+    # The number that decided both flights of 2026-08-21: what the vehicle
+    # believes its climb rate is, minus what the rangefinder measures.
+    rate_gap = (
+        f"{drone.local_position_climb - drone.measured_climb_ms:+5.2f}"
+        if drone.local_position_climb is not None
+        and drone.measured_climb_ms is not None
+        else "  n/a"
+    )
     return (
         f"  {drone.flight_mode or '?':<9} rng={metres(drone.current_altitude)} m "
         f"climb={metres(climb)} m/s  ask={metres(drone.commanded_climb_ms)} m/s  "
         f"ekf={metres(drone.local_position_altitude)} m "
         f"ekfvz={metres(drone.local_position_climb)} m/s  "
+        f"dv={rate_gap} m/s  "
         f"gap={disagreement} m  batt={metres(drone.battery_voltage)} V"
     )
 
@@ -437,7 +446,7 @@ def cmd_alt_hold_takeoff(args: argparse.Namespace) -> int:
                 print(f"climbing to {args.takeoff_alt:.2f} m in ALT_HOLD")
                 print(
                     "  mode      rangefinder  measured climb   asked-for climb   "
-                    "EKF height   EKF rate   gap between them   battery"
+                    "EKF height   EKF rate   RATE GAP   height gap   battery"
                 )
             report(controller, climb)
             record.event(
