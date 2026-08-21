@@ -94,6 +94,18 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
   through it. On 2026-08-20 an unverified LAND plus an immediate disconnect left
   an airborne aircraft with nobody commanding it; it was stopped by pulling the
   battery.
+- A guard that reads the same sensor the autopilot is flying on cannot see
+  that sensor being wrong. Every altitude limit in this repository reads
+  `DroneController.current_altitude`, which is the downward rangefinder and
+  nothing else -- the same rangefinder ArduPilot's altitude controller uses.
+  A rangefinder that under-reports makes the vehicle climb and makes every
+  guard see a low, healthy altitude; a staleness check does not help, because
+  a confidently wrong reading is not a stale one. On 2026-08-21 an aircraft
+  hovered correctly and then climbed into a ceiling with a 0.5 m ceiling guard
+  and a 0.60 m/s climb guard both armed and neither complaining.
+  `LOCAL_POSITION_NED` already arrives and is already decoded into
+  `local_position_altitude`; no guard has ever read it. Cross-check altitude
+  against an independent source before adding another limit that trusts one.
 - A rehearsal against `ai_drone.sim.vehicle` proves the code matches the
   simulator, and the simulator encodes whatever was assumed when it was
   written. It cannot validate an assumption about how the vehicle interprets a
