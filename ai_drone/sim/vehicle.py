@@ -129,6 +129,9 @@ class Fault(enum.Enum):
 DIVERGED_ALTITUDE_M = -10_000.0
 DIVERGED_CLIMB_MS = -38.0
 DIVERGED_LAND_CLIMB_MS = 3.8
+# param2 of MAV_CMD_COMPONENT_ARM_DISARM: ArduPilot's documented override for
+# disarming an aircraft that is flying.
+FORCE_DISARM_MAGIC = 21196
 
 
 # Both faults report a diverged vertical estimate and make LAND climb.  They
@@ -513,7 +516,9 @@ class SimulatedVehicle:
         result = mavlink.MAV_RESULT_ACCEPTED
 
         if command == mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
-            result = self._arm_or_disarm(bool(message.param1 >= 0.5))
+            result = self._arm_or_disarm(
+                bool(message.param1 >= 0.5), force=float(message.param2)
+            )
         elif command == mavlink.MAV_CMD_NAV_TAKEOFF:
             result = self._takeoff(float(message.param7))
         elif command in {
@@ -527,9 +532,22 @@ class SimulatedVehicle:
 
         self._link().mav.command_ack_send(command, result)
 
-    def _arm_or_disarm(self, arm: bool) -> int:
+    def _arm_or_disarm(self, arm: bool, force: float = 0.0) -> int:
         state = self.state
         if not arm:
+            if int(force) == FORCE_DISARM_MAGIC:
+                # ArduPilot's documented override.  Modelling it matters: the
+                # abort key exists precisely for an aircraft that is airborne
+                # and doing something wrong, so a double that only accepts
+                # disarms on the ground can never test it.
+                if state.altitude_m > TOUCHDOWN_ALTITUDE_M:
+                    self._note("FORCED disarm while airborne; the aircraft drops")
+                else:
+                    self._note("forced disarm")
+                state.armed = False
+                state.altitude_m = 0.0
+                state.takeoff_target_m = None
+                return mavlink.MAV_RESULT_ACCEPTED
             if state.altitude_m > TOUCHDOWN_ALTITUDE_M:
                 self._note("refused disarm while airborne")
                 return mavlink.MAV_RESULT_DENIED

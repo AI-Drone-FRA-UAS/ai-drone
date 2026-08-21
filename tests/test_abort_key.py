@@ -144,3 +144,30 @@ def test_landing_cannot_swallow_the_operators_decision() -> None:
 
     assert _forced_disarms(connection)
     assert not connection.mav.set_mode_send.called
+
+
+def test_the_key_does_not_blind_the_controller_to_the_disarm() -> None:
+    """After the key, the vehicle's heartbeat is the only proof it worked.
+
+    Raising before the message pump left the landing loop unable to see the
+    disarm it had just commanded, so it reported the aircraft as possibly
+    still flying and kept shouting at it.
+    """
+
+    controller, connection = _controller()
+    controller.abort_requested = lambda: True
+
+    disarmed = MagicMock()
+    disarmed.get_type.return_value = "HEARTBEAT"
+    disarmed.get_srcSystem.return_value = controller.target_system
+    disarmed.get_srcComponent.return_value = controller.target_component
+    disarmed.base_mode = 0
+    connection.recv_match.side_effect = [disarmed, None]
+    connection.flightmode = "LAND"
+
+    with pytest.raises(FlightSafetyError, match="operator pressed the abort key"):
+        controller.update_telemetry()
+
+    assert _forced_disarms(connection)
+    # The heartbeat that arrived in the same pass must have been read.
+    assert not controller.is_armed

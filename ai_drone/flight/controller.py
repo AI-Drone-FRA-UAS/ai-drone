@@ -119,6 +119,7 @@ class DroneController:
         self._landing_commanded = False
         self._manual_descent = False
         self._grounded_since: float | None = None
+        self._last_force_disarm = 0.0
         # Set by the caller to put a human in the loop; see ai_drone.abort_key.
         self.abort_requested: Any | None = None
         self._rc_override: tuple[int, int, int, int] | None = None
@@ -344,17 +345,22 @@ class DroneController:
         if self.connection is None:
             return
         self._pump_rc_override()
-        if self._operator_asked_to_stop():
-            # Checked before reading telemetry, not after: the operator is
-            # reacting to the aircraft, and nothing this loop is about to
-            # learn changes what they asked for.
+        # The disarm goes out before anything else, because the operator is
+        # reacting to the aircraft and nothing this loop is about to learn
+        # changes what they asked for.  Reading telemetry still has to happen
+        # afterwards: the only way to know whether the disarm took effect is
+        # the vehicle's own heartbeat, and raising before the pump left the
+        # landing loop blind to exactly that.
+        asked_to_stop = self._operator_asked_to_stop()
+        if asked_to_stop:
             self.stop_now()
-            raise FlightSafetyError("operator pressed the abort key")
         for _ in range(max_messages):
             message = self.connection.recv_match(blocking=False)
             if message is None:
                 break
             self._process_message(message, time.monotonic())
+        if asked_to_stop:
+            raise FlightSafetyError("operator pressed the abort key")
         if (
             self._flight_started_by_controller
             and not self._landing_commanded
@@ -394,7 +400,15 @@ class DroneController:
         if self.connection is None:
             return
         self._landing_commanded = True
-        logger.error("FORCED DISARM: cutting the motors now")
+        now = time.monotonic()
+        if now - self._last_force_disarm < self.FORCE_DISARM_INTERVAL_S:
+            # Repeating matters -- a single command can be lost -- but a flight
+            # loop calls this twenty times a second, and that is a flood on the
+            # link at the moment the link matters most.
+            return
+        if self._last_force_disarm == 0.0:
+            logger.error("FORCED DISARM: cutting the motors now")
+        self._last_force_disarm = now
         self.connection.mav.command_long_send(
             self.target_system,
             self.target_component,
@@ -681,6 +695,8 @@ class DroneController:
     # of MAV_CMD_COMPONENT_ARM_DISARM is its documented override, and it is the
     # only way to cut the motors of an aircraft that is doing something wrong.
     FORCE_DISARM_MAGIC = 21196
+    # Fast enough that a lost command costs little, slow enough not to flood.
+    FORCE_DISARM_INTERVAL_S = 0.2
     # How far a LAND may climb before it stops being treated as a landing.
     # Larger than the rangefinder's centimetre rounding and than the settle a
     # real touchdown produces, small enough to act inside a metre.
