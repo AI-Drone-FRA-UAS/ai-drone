@@ -72,14 +72,20 @@ def test_parameter_file_is_sorted_and_stable() -> None:
     assert format_parameter_value(0.0599999987) == "0.0599999987"
 
 
-def test_project_nogps_delta_contains_only_reviewed_ekf_changes() -> None:
+def test_project_nogps_delta_contains_only_reviewed_behavioral_changes() -> None:
     settings = [
         line
         for raw in PROJECT_NOGPS_DELTA.read_text().splitlines()
         if (line := raw.strip()) and not line.startswith("#")
     ]
 
-    assert settings == ["EK3_SRC1_POSXY,0", "EK3_SRC1_POSZ,1"]
+    assert settings == [
+        "EK3_SRC1_POSXY,0",
+        "EK3_SRC1_POSZ,1",
+        "FS_DR_ENABLE,1",
+        "FS_OPTIONS,8",
+        "RNGFND1_MAX,1.0",
+    ]
 
 
 def test_parameter_json_round_trip_requires_complete_unique_indexes() -> None:

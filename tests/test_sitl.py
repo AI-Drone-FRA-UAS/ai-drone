@@ -6,9 +6,10 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
-from contextlib import closing, suppress
+from contextlib import closing, contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 from pymavlink.dialects.v20 import ardupilotmega as mavlink2
 
+from ai_drone.cli import control as control_cli
 from ai_drone.cli import record as inspect_cli
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import heartbeat_is_armed
@@ -24,7 +26,7 @@ from ai_drone.recording import request_message_intervals
 
 ARDUPILOT_COMMIT = "1511f27194f1dcc3728270883047bdf022b3fd53"
 PARAMETERS = Path(__file__).parent / "sitl" / "copter.parm"
-TARGET_ALTITUDE_M = 1.0
+TARGET_ALTITUDE_M = 0.5
 SENSOR_MAVLINK_PORT = 5762
 SENSOR_RATE_HZ = 20.0
 RANGE_MIN_CM = 2
@@ -103,8 +105,21 @@ class _ExternalMavlinkSensors:
             daemon=True,
         )
         self._failure: BaseException | None = None
+        self._condition = threading.Condition()
         self.sample_count = 0
         self.wire_protocol: str | None = None
+        self.flight_modes: list[str] = []
+        self.armed_states: list[bool] = []
+        self.flight_states: list[tuple[str, bool]] = []
+        self.altitudes_m: list[float] = []
+        self.altitudes_by_mode: list[tuple[str | None, float]] = []
+        self.ekf_by_mode: list[tuple[str | None, int]] = []
+        self.positions_by_mode: list[tuple[str | None, float, float, float]] = []
+        self.rc_channel_counts: list[int] = []
+        self.status_texts: list[str] = []
+        self.status_by_mode: list[tuple[str | None, str]] = []
+        self._current_mode: str | None = None
+        self._current_armed: bool | None = None
 
     def start(self, timeout: float = 15.0) -> None:
         self._thread.start()
@@ -129,6 +144,127 @@ class _ExternalMavlinkSensors:
         assert self._thread.is_alive()
         assert self.sample_count > 0
         assert self.wire_protocol == "2.0"
+
+    def reset_observations(self) -> None:
+        """Start a fresh observation window without interrupting sensor injection."""
+
+        with self._condition:
+            self.flight_modes.clear()
+            self.armed_states.clear()
+            self.flight_states.clear()
+            self.altitudes_m.clear()
+            self.altitudes_by_mode.clear()
+            self.ekf_by_mode.clear()
+            self.positions_by_mode.clear()
+            self.rc_channel_counts.clear()
+            self.status_texts.clear()
+            self.status_by_mode.clear()
+
+    def wait_for_mode(
+        self,
+        requested: str,
+        timeout: float,
+        process: subprocess.Popen[Any] | None = None,
+    ) -> None:
+        requested = requested.upper()
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while requested not in self.flight_modes:
+                if self._failure is not None:
+                    pytest.fail(
+                        f"external MAVLink sensor feeder failed: {self._failure!r}"
+                    )
+                if process is not None and process.poll() is not None:
+                    output = ""
+                    if process.stdout is not None:
+                        output = process.stdout.read()
+                    pytest.fail(
+                        f"production hover exited before {requested}: "
+                        f"status={process.returncode}, output={output[-4000:]}"
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    pytest.fail(
+                        f"SITL did not enter {requested}; modes={self.mode_transitions()}, "
+                        f"status={self.status_texts[-10:]}"
+                    )
+                self._condition.wait(timeout=min(remaining, 0.2))
+
+    def wait_for_disarm(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while not (True in self.armed_states and self._current_armed is False):
+                if self._failure is not None:
+                    pytest.fail(
+                        f"external MAVLink sensor feeder failed: {self._failure!r}"
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    pytest.fail(
+                        "SITL did not disarm after flight; "
+                        f"armed={self._current_armed}, modes={self.mode_transitions()}, "
+                        f"status={self.status_texts[-10:]}"
+                    )
+                self._condition.wait(timeout=min(remaining, 0.2))
+
+    def mode_transitions(self) -> list[str]:
+        transitions: list[str] = []
+        for mode in self.flight_modes:
+            if not transitions or transitions[-1] != mode:
+                transitions.append(mode)
+        return transitions
+
+    def assert_flight_result(self) -> dict[str, float]:
+        """Validate externally observed GuidedNoGPS/Loiter/Land flight."""
+
+        self.assert_healthy()
+        transitions = self.mode_transitions()
+        _assert_subsequence(transitions, ["GUIDED_NOGPS", "LOITER", "LAND"])
+        assert True in self.armed_states, "production hover never armed SITL"
+        assert self._current_armed is False, "production hover did not finish disarmed"
+        loiter_armed = [armed for mode, armed in self.flight_states if mode == "LOITER"]
+        assert loiter_armed and all(loiter_armed), (
+            "vehicle disarmed before leaving Loiter",
+            self.flight_states,
+        )
+        assert self.altitudes_m, "SITL produced no simulator altitude samples"
+        assert max(self.altitudes_m) < 0.8, max(self.altitudes_m)
+        assert max(self.altitudes_m) >= TARGET_ALTITUDE_M * 0.9, max(self.altitudes_m)
+        loiter_altitudes = [
+            altitude for mode, altitude in self.altitudes_by_mode if mode == "LOITER"
+        ]
+        assert loiter_altitudes, "Loiter produced no simulator altitude samples"
+        assert min(loiter_altitudes) >= 0.3, (
+            "Loiter descended below its bounded hold envelope",
+            min(loiter_altitudes),
+        )
+
+        loiter_ekf = [flags for mode, flags in self.ekf_by_mode if mode == "LOITER"]
+        assert loiter_ekf, "Loiter produced no externally observed EKF status"
+        assert all(flags & mavlink.EKF_POS_HORIZ_REL for flags in loiter_ekf)
+        assert all(not flags & mavlink.EKF_POS_HORIZ_ABS for flags in loiter_ekf)
+        assert all(not flags & mavlink.EKF_CONST_POS_MODE for flags in loiter_ekf)
+        assert self.rc_channel_counts, "SITL produced no RC_CHANNELS topology samples"
+        assert set(self.rc_channel_counts) == {0}, (
+            "the project topology requires no active RC receiver channels",
+            sorted(set(self.rc_channel_counts)),
+        )
+
+        loiter_positions = [
+            (x, y, altitude)
+            for mode, x, y, altitude in self.positions_by_mode
+            if mode == "LOITER"
+        ]
+        assert loiter_positions, "Loiter produced no local-position samples"
+        start_x, start_y, _ = loiter_positions[0]
+        max_drift = max(
+            math.hypot(x - start_x, y - start_y) for x, y, _altitude in loiter_positions
+        )
+        return {
+            "max_horizontal_drift_m": max_drift,
+            "maximum_altitude_m": max(self.altitudes_m),
+            "minimum_loiter_altitude_m": min(loiter_altitudes),
+        }
 
     def _connect(self, timeout: float = 10.0) -> Any:
         deadline = time.monotonic() + timeout
@@ -229,6 +365,36 @@ class _ExternalMavlinkSensors:
         )
         self.sample_count += 1
 
+    def _observe_vehicle_message(self, message: Any) -> None:
+        message_type = message.get_type()
+        with self._condition:
+            if message_type == "HEARTBEAT":
+                mode = _mode_from_heartbeat(message)
+                armed = heartbeat_is_armed(message)
+                self._current_mode = mode
+                self._current_armed = armed
+                self.flight_modes.append(mode)
+                self.armed_states.append(armed)
+                self.flight_states.append((mode, armed))
+            elif message_type == "EKF_STATUS_REPORT":
+                self.ekf_by_mode.append((self._current_mode, int(message.flags)))
+            elif message_type == "LOCAL_POSITION_NED":
+                self.positions_by_mode.append(
+                    (
+                        self._current_mode,
+                        float(message.x),
+                        float(message.y),
+                        -float(message.z),
+                    )
+                )
+            elif message_type == "RC_CHANNELS":
+                self.rc_channel_counts.append(int(message.chancount))
+            elif message_type == "STATUSTEXT":
+                text = str(message.text)
+                self.status_texts.append(text)
+                self.status_by_mode.append((self._current_mode, text))
+            self._condition.notify_all()
+
     def _run(self) -> None:
         connection = None
         try:
@@ -245,7 +411,13 @@ class _ExternalMavlinkSensors:
             connection.target_component = heartbeat.get_srcComponent()
             request_message_intervals(
                 connection,
-                {mavlink2.MAVLINK_MSG_ID_SIM_STATE: SENSOR_RATE_HZ},
+                {
+                    mavlink2.MAVLINK_MSG_ID_SIM_STATE: SENSOR_RATE_HZ,
+                    mavlink2.MAVLINK_MSG_ID_HEARTBEAT: 10.0,
+                    mavlink2.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
+                    mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
+                    mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
+                },
             )
             sender = mavlink2.MAVLink(
                 connection,
@@ -256,16 +428,25 @@ class _ExternalMavlinkSensors:
             ground_altitude_m = None
             last_state_at = time.monotonic()
             while not self._stop.is_set():
-                state = connection.recv_match(
-                    type="SIM_STATE", blocking=True, timeout=0.2
-                )
-                if state is None:
+                message = connection.recv_match(blocking=True, timeout=0.2)
+                if message is None:
                     if self._ready.is_set() and time.monotonic() - last_state_at > 1.0:
                         raise TimeoutError("SIM_STATE stream stopped")
                     continue
+                if message.get_srcSystem() != connection.target_system:
+                    continue
+                if message.get_type() != "SIM_STATE":
+                    self._observe_vehicle_message(message)
+                    continue
+                state = message
                 last_state_at = time.monotonic()
                 if ground_altitude_m is None:
                     ground_altitude_m = float(state.alt)
+                with self._condition:
+                    altitude_m = max(0.0, float(state.alt) - ground_altitude_m)
+                    self.altitudes_m.append(altitude_m)
+                    self.altitudes_by_mode.append((self._current_mode, altitude_m))
+                    self._condition.notify_all()
                 self._send_sensors(sender, state, ground_altitude_m)
                 self._ready.set()
         except BaseException as exc:
@@ -280,139 +461,22 @@ def _mode_from_heartbeat(heartbeat: Any) -> str:
     return str(mavutil.mode_string_v10(heartbeat)).upper()
 
 
-def _set_mode(connection: Any, mode: str, timeout: float = 10.0) -> None:
-    requested = mode.upper()
-    mapping = connection.mode_mapping()
-    assert requested in mapping
-    connection.mav.set_mode_send(
-        connection.target_system,
-        mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-        mapping[requested],
-    )
-    deadline = time.monotonic() + timeout
-    while (remaining := deadline - time.monotonic()) > 0:
-        heartbeat = connection.recv_match(
-            type="HEARTBEAT", blocking=True, timeout=min(remaining, 0.5)
-        )
-        if heartbeat is not None and _mode_from_heartbeat(heartbeat) == requested:
-            return
-    pytest.fail(f"SITL did not enter {requested}")
-
-
-def _wait_armed(connection: Any, armed: bool, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    status_texts: list[str] = []
-    while (remaining := deadline - time.monotonic()) > 0:
-        message = connection.recv_match(
-            type=["HEARTBEAT", "STATUSTEXT"],
-            blocking=True,
-            timeout=min(remaining, 0.5),
-        )
-        if message is None:
-            continue
-        if message.get_type() == "STATUSTEXT":
-            status_texts.append(str(message.text))
-            continue
-        if heartbeat_is_armed(message) is armed:
-            return
-    state = "arming" if armed else "disarming"
-    pytest.fail(f"SITL did not confirm {state}; status={status_texts[-10:]}")
-
-
-def _arm_when_ready(connection: Any, timeout: float = 45.0) -> None:
-    deadline = time.monotonic() + timeout
-    next_request = 0.0
-    status_texts: list[str] = []
-    while (remaining := deadline - time.monotonic()) > 0:
-        now = time.monotonic()
-        _send_rc(connection, 1000)
-        if now >= next_request:
-            connection.arducopter_arm()
-            next_request = now + 2.0
-        message = connection.recv_match(
-            type=["HEARTBEAT", "STATUSTEXT"],
-            blocking=True,
-            timeout=min(remaining, 0.2),
-        )
-        if message is None:
-            continue
-        if message.get_type() == "STATUSTEXT":
-            status_texts.append(str(message.text))
-        elif heartbeat_is_armed(message):
-            return
-    pytest.fail(f"SITL never became ready to arm; status={status_texts[-10:]}")
-
-
-def _wait_for_relative_position(connection: Any, timeout: float = 30.0) -> int:
-    deadline = time.monotonic() + timeout
-    last_flags = 0
-    while (remaining := deadline - time.monotonic()) > 0:
-        report = connection.recv_match(
-            type="EKF_STATUS_REPORT", blocking=True, timeout=min(remaining, 0.5)
-        )
-        if report is None:
-            continue
-        last_flags = int(report.flags)
-        if (
-            last_flags & mavlink.EKF_POS_HORIZ_REL
-            and not last_flags & mavlink.EKF_CONST_POS_MODE
-        ):
-            return last_flags
-    pytest.fail(f"EKF never obtained relative horizontal position; flags={last_flags}")
-
-
-def _send_rc(connection: Any, throttle_pwm: int) -> None:
-    connection.mav.rc_channels_override_send(
-        connection.target_system,
-        connection.target_component,
-        1500,
-        1500,
-        throttle_pwm,
-        1500,
-        0,
-        0,
-        0,
-        0,
-    )
-
-
-def _wait_for_takeoff(connection: Any, timeout: float = 30.0) -> Any:
-    deadline = time.monotonic() + timeout
-    last_position = None
-    while (remaining := deadline - time.monotonic()) > 0:
-        # A modest AltHold climb avoids carrying vertical momentum into Loiter.
-        _send_rc(connection, 1700)
-        position = connection.recv_match(
-            type="LOCAL_POSITION_NED", blocking=True, timeout=min(remaining, 0.2)
-        )
-        if position is None:
-            continue
-        last_position = position
-        if -float(position.z) >= TARGET_ALTITUDE_M * 0.9:
-            _send_rc(connection, 1500)
-            return position
-    altitude = None if last_position is None else -float(last_position.z)
-    pytest.fail(f"SITL did not take off; last local altitude={altitude}")
-
-
-def _settle_after_takeoff(connection: Any, duration: float = 3.0) -> None:
-    deadline = time.monotonic() + duration
-    while (remaining := deadline - time.monotonic()) > 0:
-        _send_rc(connection, 1500)
-        connection.recv_match(
-            type="LOCAL_POSITION_NED", blocking=True, timeout=min(remaining, 0.2)
-        )
-
-
-def _land_and_wait(connection: Any, timeout: float = 30.0) -> None:
-    _set_mode(connection, "LAND")
-    _wait_armed(connection, False, timeout)
+def _assert_subsequence(actual: list[str], expected: list[str]) -> None:
+    next_index = 0
+    for item in actual:
+        if next_index < len(expected) and item == expected[next_index]:
+            next_index += 1
+    assert next_index == len(expected), f"expected {expected} in mode history {actual}"
 
 
 def _assert_sitl_parameters(connection: Any) -> None:
     expected = {
         "AHRS_EKF_TYPE": 3.0,
+        "AHRS_OPTIONS": 16.0,
+        "ARMING_NEED_LOC": 0.0,
         "ARMING_SKIPCHK": 0.0,
+        "AVOID_ENABLE": 2.0,
+        "EK3_ENABLE": 1.0,
         "EK3_FLOW_USE": 1.0,
         "EK3_SRC1_POSXY": 0.0,
         "EK3_SRC1_POSZ": 1.0,
@@ -423,91 +487,44 @@ def _assert_sitl_parameters(connection: Any) -> None:
         "FLOW_TYPE": 5.0,
         "FRAME_CLASS": 1.0,
         "FRAME_TYPE": 1.0,
+        "FS_CRASH_CHECK": 1.0,
+        "FS_DR_ENABLE": 1.0,
+        "FS_EKF_ACTION": 1.0,
+        "FS_EKF_THRESH": 0.8,
+        "FS_GCS_ENABLE": 5.0,
+        "FS_GCS_TIMEOUT": 5.0,
+        "FS_OPTIONS": 8.0,
+        "FS_THR_ENABLE": 0.0,
+        "FS_VIBE_ENABLE": 1.0,
         "GPS1_TYPE": 0.0,
         "GPS2_TYPE": 0.0,
-        "RNGFND1_MAX": 8.0,
+        "GUID_OPTIONS": 0.0,
+        "LAND_SPD_MS": 0.15,
+        "MAV_GCS_SYSID": 255.0,
+        "RNGFND1_MAX": 1.0,
         "RNGFND1_MIN": 0.0,
         "RNGFND1_ORIENT": 25.0,
         "RNGFND1_TYPE": 10.0,
+        "RNGFND2_TYPE": 0.0,
         "SERIAL1_PROTOCOL": 2.0,
         "SIM_FLOW_ENABLE": 0.0,
         "SIM_GPS1_ENABLE": 0.0,
+        "SIM_RC_FAIL": 1.0,
+        "WP_SPD_UP": 0.25,
     }
     actual = {
         name: request_parameter(connection, name, timeout=5.0) for name in expected
     }
-    assert actual == expected
-
-
-def _hold_in_loiter(connection: Any, duration: float = 20.0) -> dict[str, float]:
-    deadline = time.monotonic() + duration
-    positions: list[tuple[float, float, float]] = []
-    ranges_m: list[float] = []
-    flow_qualities: list[int] = []
-    ekf_flags: list[int] = []
-    modes: list[str] = []
-    rejected_statuses: list[str] = []
-    next_rc = 0.0
-    while (remaining := deadline - time.monotonic()) > 0:
-        now = time.monotonic()
-        if now >= next_rc:
-            _send_rc(connection, 1500)
-            next_rc = now + 0.2
-        message = connection.recv_match(blocking=True, timeout=min(remaining, 0.1))
-        if message is None:
-            continue
-        message_type = message.get_type()
-        if message_type == "HEARTBEAT":
-            modes.append(_mode_from_heartbeat(message))
-            assert heartbeat_is_armed(message)
-        elif message_type == "LOCAL_POSITION_NED":
-            positions.append((float(message.x), float(message.y), -float(message.z)))
-        elif message_type == "DISTANCE_SENSOR" and int(message.orientation) == 25:
-            if int(message.current_distance) > 0:
-                ranges_m.append(float(message.current_distance) / 100.0)
-        elif message_type == "OPTICAL_FLOW":
-            flow_qualities.append(int(message.quality))
-        elif message_type == "EKF_STATUS_REPORT":
-            ekf_flags.append(int(message.flags))
-        elif message_type == "STATUSTEXT":
-            status = str(message.text)
-            normalized = status.casefold()
-            if any(
-                rejected in normalized
-                for rejected in (
-                    "stopped aiding",
-                    "ekf failsafe",
-                    "requires position",
-                    "mode change to loiter failed",
-                )
-            ):
-                rejected_statuses.append(status)
-
-    assert positions, "Loiter produced no local-position samples"
-    assert ranges_m, "Loiter produced no downward-range samples"
-    assert flow_qualities, "Loiter produced no optical-flow samples"
-    assert ekf_flags, "Loiter produced no EKF status samples"
-    assert not rejected_statuses, rejected_statuses
-    assert modes and set(modes) == {"LOITER"}
-    assert set(flow_qualities) == {FLOW_QUALITY}
-    assert all(flags & mavlink.EKF_POS_HORIZ_REL for flags in ekf_flags)
-    assert all(not flags & mavlink.EKF_POS_HORIZ_ABS for flags in ekf_flags)
-    assert all(not flags & mavlink.EKF_CONST_POS_MODE for flags in ekf_flags)
-
-    start_x, start_y, _ = positions[0]
-    max_drift = max(
-        math.hypot(x - start_x, y - start_y) for x, y, _altitude in positions
-    )
-    altitudes = [altitude for _x, _y, altitude in positions]
-    return {
-        "max_horizontal_drift_m": max_drift,
-        "minimum_altitude_m": min(altitudes),
-        "maximum_altitude_m": max(altitudes),
+    mismatches = {
+        name: {"expected": value, "actual": actual[name]}
+        for name, value in expected.items()
+        if not math.isclose(actual[name], value, rel_tol=0.0, abs_tol=1e-5)
     }
+    assert not mismatches, mismatches
 
 
-def test_no_gps_optical_flow_loiter_in_pinned_sitl(tmp_path, monkeypatch) -> None:
-    root = _ardupilot_root()
+@contextmanager
+def _running_sitl(root: Path, tmp_path: Path):
     with closing(socket.socket()) as probe:
         if probe.connect_ex(("127.0.0.1", 5760)) == 0:
             pytest.skip("TCP port 5760 is already in use")
@@ -529,8 +546,8 @@ def test_no_gps_optical_flow_loiter_in_pinned_sitl(tmp_path, monkeypatch) -> Non
         "--defaults",
         f"{defaults},{PARAMETERS.resolve()}",
     ]
-    monkeypatch.chdir(tmp_path)
     sensors = _ExternalMavlinkSensors()
+    sensors_started = False
     with log_path.open("wb") as log:
         process = subprocess.Popen(
             command,
@@ -546,77 +563,228 @@ def test_no_gps_optical_flow_loiter_in_pinned_sitl(tmp_path, monkeypatch) -> Non
             bootstrap = _connect()
             bootstrap.close()
             sensors.start()
-
-            # Exercise the companion's read-only capture path before any simulated
-            # arm or actuator command while the project-style external sensors run.
-            inspection = tmp_path / "inspection"
-            assert (
-                inspect_cli.run(
-                    [
-                        "--device",
-                        "tcp:127.0.0.1:5760",
-                        "--duration",
-                        "5",
-                        "--output-dir",
-                        str(inspection),
-                    ]
-                )
-                == 0
-            )
-            manifest = json.loads((inspection / "manifest.json").read_text())
-            assert manifest["components"]["camera"]["status"] == "unavailable"
-            assert manifest["components"]["flight_controller"]["status"] == "ok"
-            assert manifest["components"]["downward_rangefinder"]["status"] == "ok"
-            assert manifest["components"]["optical_flow"]["status"] == "ok"
-            assert manifest["components"]["optical_flow"]["quality"] == FLOW_QUALITY
-
-            connection = _connect()
-            armed = False
-            try:
-                _assert_sitl_parameters(connection)
-                sensors.assert_healthy()
-                request_message_intervals(
-                    connection,
-                    {
-                        mavlink.MAVLINK_MSG_ID_HEARTBEAT: 4.0,
-                        mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
-                        mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR: 10.0,
-                        mavlink.MAVLINK_MSG_ID_OPTICAL_FLOW: 10.0,
-                        mavlink.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
-                    },
-                )
-                _set_mode(connection, "ALT_HOLD")
-                _arm_when_ready(connection)
-                armed = True
-                _wait_for_takeoff(connection)
-                _settle_after_takeoff(connection)
-
-                relative_flags = _wait_for_relative_position(connection)
-                assert relative_flags & mavlink.EKF_POS_HORIZ_REL
-                assert not relative_flags & mavlink.EKF_POS_HORIZ_ABS
-                _set_mode(connection, "LOITER")
-                result = _hold_in_loiter(connection)
-                assert result["max_horizontal_drift_m"] <= 0.5, result
-                assert result["minimum_altitude_m"] >= 0.7, result
-                assert result["maximum_altitude_m"] <= 1.3, result
-                print(
-                    "no-GPS Loiter: "
-                    f"max XY drift={result['max_horizontal_drift_m']:.3f} m, "
-                    f"altitude={result['minimum_altitude_m']:.3f}.."
-                    f"{result['maximum_altitude_m']:.3f} m, "
-                    f"external MAVLink {sensors.wire_protocol} "
-                    f"sensor samples={sensors.sample_count}"
-                )
-
-                _land_and_wait(connection)
-                armed = False
-            finally:
-                if armed:
-                    with suppress(BaseException):
-                        _land_and_wait(connection)
-                connection.close()
+            sensors_started = True
+            yield sensors
         finally:
             try:
-                sensors.stop()
+                if sensors_started:
+                    sensors.stop()
             finally:
                 _stop_process(process)
+
+
+def _assert_running_sitl_configuration(sensors: _ExternalMavlinkSensors) -> None:
+    connection = _connect()
+    try:
+        _assert_sitl_parameters(connection)
+        sensors.assert_healthy()
+        request_message_intervals(
+            connection,
+            {mavlink.MAVLINK_MSG_ID_SYS_STATUS: 5.0},
+        )
+        deadline = time.monotonic() + 45.0
+        last_health = 0
+        next_prearm_request = 0.0
+        status_texts: list[str] = []
+        while (remaining := deadline - time.monotonic()) > 0:
+            now = time.monotonic()
+            if now >= next_prearm_request:
+                connection.mav.command_long_send(
+                    connection.target_system,
+                    connection.target_component,
+                    mavlink.MAV_CMD_RUN_PREARM_CHECKS,
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                )
+                next_prearm_request = now + 5.0
+            message = connection.recv_match(
+                type=["SYS_STATUS", "STATUSTEXT"],
+                blocking=True,
+                timeout=min(remaining, 0.5),
+            )
+            if message is None:
+                continue
+            if message.get_type() == "STATUSTEXT":
+                text = str(message.text)
+                if text not in status_texts:
+                    status_texts.append(text)
+                continue
+            last_health = int(message.onboard_control_sensors_health)
+            if last_health & mavlink.MAV_SYS_STATUS_PREARM_CHECK:
+                break
+        else:
+            pytest.fail(
+                f"SITL pre-arm checks did not settle; health={last_health:#x}, "
+                f"status={status_texts[-15:]}"
+            )
+    finally:
+        connection.close()
+
+
+def _production_hover_arguments(duration: float) -> list[str]:
+    return [
+        "hover",
+        "--device",
+        "tcp:127.0.0.1:5760",
+        "--max-alt",
+        "0.8",
+        "--takeoff-alt",
+        str(TARGET_ALTITUDE_M),
+        "--duration",
+        str(duration),
+        "--min-battery",
+        "0",
+        "--confirm-flight",
+        control_cli.FLIGHT_CONFIRMATION,
+    ]
+
+
+def _assert_no_navigation_rejections(sensors: _ExternalMavlinkSensors) -> None:
+    rejected = []
+    for mode, status in sensors.status_by_mode:
+        normalized = status.casefold()
+        if any(
+            text in normalized
+            for text in (
+                "stopped aiding",
+                "ekf failsafe",
+                "requires position",
+                "mode change to loiter failed",
+            )
+        ) or ("sim hit ground" in normalized and mode != "LAND"):
+            rejected.append(f"{mode}: {status}")
+    assert not rejected, rejected
+
+
+def test_production_hover_no_gps_loiter_in_pinned_sitl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _ardupilot_root()
+    monkeypatch.chdir(tmp_path)
+    with _running_sitl(root, tmp_path) as sensors:
+        # Prove that the same sensor streams consumed by production code remain
+        # available through the read-only inspection command before flight.
+        inspection = tmp_path / "inspection"
+        assert (
+            inspect_cli.run(
+                [
+                    "--device",
+                    "tcp:127.0.0.1:5760",
+                    "--duration",
+                    "5",
+                    "--output-dir",
+                    str(inspection),
+                ]
+            )
+            == 0
+        )
+        inspection_manifest = json.loads((inspection / "manifest.json").read_text())
+        assert inspection_manifest["components"]["camera"]["status"] == "unavailable"
+        assert inspection_manifest["components"]["flight_controller"]["status"] == "ok"
+        assert (
+            inspection_manifest["components"]["downward_rangefinder"]["status"] == "ok"
+        )
+        assert inspection_manifest["components"]["optical_flow"]["status"] == "ok"
+        assert (
+            inspection_manifest["components"]["optical_flow"]["quality"] == FLOW_QUALITY
+        )
+
+        _assert_running_sitl_configuration(sensors)
+        sensors.reset_observations()
+
+        # This is the deployable command path.  The test does not reproduce its
+        # mode, arm, takeoff, Loiter, or LAND commands with raw MAVLink helpers.
+        assert control_cli.main(_production_hover_arguments(duration=5.0)) == 0
+
+        sensors.wait_for_disarm(timeout=5.0)
+        result = sensors.assert_flight_result()
+        _assert_no_navigation_rejections(sensors)
+        assert result["max_horizontal_drift_m"] <= 0.5, result
+
+        flight_manifests = list(
+            (tmp_path / "artifacts" / "flights").glob("*/manifest.json")
+        )
+        assert len(flight_manifests) == 1
+        flight_manifest = json.loads(flight_manifests[0].read_text())
+        assert flight_manifest["completed"] is True
+        assert flight_manifest["metadata"]["command"] == "hover"
+        print(
+            "production no-GPS Loiter: "
+            f"modes={sensors.mode_transitions()}, "
+            f"max XY drift={result['max_horizontal_drift_m']:.3f} m, "
+            f"Loiter min={result['minimum_loiter_altitude_m']:.3f} m, "
+            f"max altitude={result['maximum_altitude_m']:.3f} m, "
+            f"RC chancount={sorted(set(sensors.rc_channel_counts))}, "
+            f"external MAVLink {sensors.wire_protocol} "
+            f"sensor samples={sensors.sample_count}"
+        )
+
+
+def test_gcs_heartbeat_loss_in_loiter_lands_and_disarms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _ardupilot_root()
+    monkeypatch.chdir(tmp_path)
+    with _running_sitl(root, tmp_path) as sensors:
+        _assert_running_sitl_configuration(sensors)
+        sensors.reset_observations()
+
+        repository_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        prior_pythonpath = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            str(repository_root)
+            if not prior_pythonpath
+            else os.pathsep.join((str(repository_root), prior_pythonpath))
+        )
+        command = [
+            sys.executable,
+            "-m",
+            "ai_drone.cli.control",
+            *_production_hover_arguments(duration=60.0),
+        ]
+        hover_process = subprocess.Popen(
+            command,
+            cwd=tmp_path,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            sensors.wait_for_mode("LOITER", timeout=60.0, process=hover_process)
+
+            # SIGKILL deliberately bypasses the production cleanup path.  Only
+            # ArduCopter's system-255 heartbeat failsafe can recover this flight.
+            os.killpg(hover_process.pid, signal.SIGKILL)
+            return_code = hover_process.wait(timeout=5.0)
+            assert return_code == -signal.SIGKILL
+
+            sensors.wait_for_mode("LAND", timeout=15.0)
+            sensors.wait_for_disarm(timeout=40.0)
+            result = sensors.assert_flight_result()
+            _assert_no_navigation_rejections(sensors)
+            assert result["max_horizontal_drift_m"] <= 0.5, result
+            assert any(
+                "gcs failsafe" in status.casefold() for status in sensors.status_texts
+            ), sensors.status_texts
+            print(
+                "GCS-loss no-GPS Loiter recovery: "
+                f"modes={sensors.mode_transitions()}, "
+                f"max XY drift={result['max_horizontal_drift_m']:.3f} m, "
+                f"Loiter min={result['minimum_loiter_altitude_m']:.3f} m, "
+                f"max altitude={result['maximum_altitude_m']:.3f} m, "
+                f"RC chancount={sorted(set(sensors.rc_channel_counts))}, "
+                f"status={sensors.status_texts[-5:]}"
+            )
+        finally:
+            if hover_process.poll() is None:
+                os.killpg(hover_process.pid, signal.SIGKILL)
+                hover_process.wait(timeout=5.0)

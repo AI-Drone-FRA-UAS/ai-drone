@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
+import threading
 import time
 from collections.abc import Sequence
 from contextlib import contextmanager
+from types import FrameType
+from typing import Any
 
 from ai_drone.flight.controller import DroneController, FlightSafetyError
 from ai_drone.flight.dataflash import latest_dataflash_log
@@ -15,27 +19,45 @@ from ai_drone.flight.recording import FlightRecorder
 from ai_drone.validation import finite_in_range
 
 FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
+MAX_AUTONOMOUS_CEILING_M = 0.8
+MAX_AUTONOMOUS_TAKEOFF_M = 0.6
 logger = logging.getLogger(__name__)
 
 
 def _validate_common(args: argparse.Namespace) -> None:
     if isinstance(args.baud, bool) or not 1 <= args.baud <= 4_000_000:
         raise ValueError("--baud must be between 1 and 4000000")
-    finite_in_range(args.max_alt, "--max-alt", minimum=0.1, maximum=10.0)
+    finite_in_range(
+        args.max_alt,
+        "--max-alt",
+        minimum=0.1,
+        maximum=MAX_AUTONOMOUS_CEILING_M,
+    )
     if hasattr(args, "takeoff_alt"):
         finite_in_range(
-            args.takeoff_alt, "--takeoff-alt", minimum=0.15, maximum=args.max_alt
+            args.takeoff_alt,
+            "--takeoff-alt",
+            minimum=0.15,
+            maximum=min(args.max_alt, MAX_AUTONOMOUS_TAKEOFF_M),
         )
     finite_in_range(args.duration, "--duration", minimum=0.1, maximum=3_600.0)
     if hasattr(args, "min_battery"):
         finite_in_range(args.min_battery, "--min-battery", minimum=0.0, maximum=60.0)
+    if hasattr(args, "navigation_timeout"):
+        finite_in_range(
+            args.navigation_timeout,
+            "--navigation-timeout",
+            minimum=1.0,
+            maximum=60.0,
+        )
 
 
 def _require_flight_confirmation(args: argparse.Namespace) -> None:
     if args.confirm_flight != FLIGHT_CONFIRMATION:
         raise ValueError(
             f"--confirm-flight must be exactly {FLIGHT_CONFIRMATION}; this confirms "
-            "the aircraft is complete, props are secure, the area is clear, and a pilot can take over"
+            "the aircraft is complete, props are secure, the area is clear, and an "
+            "independent emergency LAND method is ready"
         )
 
 
@@ -44,7 +66,40 @@ def _controller(args: argparse.Namespace) -> DroneController:
         device=args.device,
         baud=args.baud,
         max_altitude=args.max_alt,
+        min_battery_voltage=args.min_battery,
     )
+
+
+@contextmanager
+def _termination_event():
+    """Turn service-stop signals into a guarded LAND request.
+
+    The handler only sets an event.  Controller polling notices it and starts
+    LAND; once landing begins, later signals cannot interrupt that cleanup.
+    """
+
+    requested = threading.Event()
+    if threading.current_thread() is not threading.main_thread():
+        yield requested
+        return
+
+    previous: dict[signal.Signals, Any] = {}
+
+    def request_stop(signum: int, _frame: FrameType | None) -> None:
+        logger.warning("received signal %s; requesting guarded LAND", signum)
+        requested.set()
+
+    handled = [signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        handled.append(signal.SIGHUP)
+    try:
+        for handled_signal in handled:
+            previous[handled_signal] = signal.getsignal(handled_signal)
+            signal.signal(handled_signal, request_stop)
+        yield requested
+    finally:
+        for handled_signal, old_handler in previous.items():
+            signal.signal(handled_signal, old_handler)
 
 
 @contextmanager
@@ -89,6 +144,11 @@ def _monitor(drone: DroneController, duration: float, min_battery_v: float) -> N
     deadline = time.monotonic() + duration
     while time.monotonic() < deadline:
         drone.update_telemetry()
+        if drone.flight_mode != "LOITER":
+            drone.emergency_stop()
+            raise FlightSafetyError(
+                f"Loiter hold left LOITER mode for {drone.flight_mode or 'unknown'}"
+            )
         try:
             check_safety_guardrails(drone, min_battery_v)
         except FlightGuardError as error:
@@ -98,10 +158,16 @@ def _monitor(drone: DroneController, duration: float, min_battery_v: float) -> N
 
 def cmd_hover(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
-    with _flight_session(args) as (drone, record):
-        record.event("takeoff_started", target_alt_m=args.takeoff_alt)
+    with (
+        _termination_event() as stop_requested,
+        _flight_session(args) as (drone, record),
+    ):
+        drone.stop_requested = stop_requested.is_set
+        record.event("guided_nogps_takeoff_started", target_alt_m=args.takeoff_alt)
         drone.takeoff(args.takeoff_alt)
-        record.event("hover_started")
+        record.event("loiter_acquisition_started")
+        drone.enter_loiter(timeout=args.navigation_timeout)
+        record.event("loiter_started", ekf_flags=drone.ekf_flags)
         _monitor(drone, args.duration, args.min_battery)
         record.event("landing_started")
         drone.land()
@@ -119,10 +185,16 @@ def _parser() -> argparse.ArgumentParser:
     hover = commands.add_parser(
         "hover",
         aliases=["takeoff"],
-        help="take off, hold GUIDED position, then land",
+        help="take off in GuidedNoGPS, hold no-GPS Loiter, then land",
     )
     _add_common_options(hover)
     hover.add_argument("--duration", type=float, default=5.0)
+    hover.add_argument(
+        "--navigation-timeout",
+        type=float,
+        default=20.0,
+        help="maximum time to establish stable optical-flow relative position",
+    )
     hover.add_argument("--confirm-flight")
     hover.set_defaults(handler=cmd_hover)
 
@@ -134,8 +206,8 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--device", help="MAVLink serial path or network endpoint")
     parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--max-alt", type=float, default=0.8)
-    parser.add_argument("--takeoff-alt", type=float, default=0.4)
+    parser.add_argument("--max-alt", type=float, default=MAX_AUTONOMOUS_CEILING_M)
+    parser.add_argument("--takeoff-alt", type=float, default=0.5)
     parser.add_argument(
         "--min-battery",
         type=float,

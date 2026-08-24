@@ -20,9 +20,12 @@ class _Drone:
         self.max_altitude = 0.8
         self.is_flying = True
         self.is_armed = True
+        self.flight_mode: str | None = "LOITER"
         self.stopped = False
         self._altitude_fresh = True
         self._heartbeat_fresh = True
+        self._flow_fresh = True
+        self._relative_position_fresh = True
         for name, value in overrides.items():
             setattr(self, name, value)
 
@@ -37,6 +40,12 @@ class _Drone:
 
     def heartbeat_is_fresh(self) -> bool:
         return self._heartbeat_fresh
+
+    def optical_flow_is_fresh(self) -> bool:
+        return self._flow_fresh
+
+    def relative_position_is_fresh(self) -> bool:
+        return self._relative_position_fresh
 
     def send_velocity_body(
         self, vx: float, vy: float, vz: float, yaw_rate_deg: float = 0.0
@@ -61,6 +70,8 @@ def test_healthy_telemetry_passes() -> None:
         ({"current_altitude": 1.5}, "altitude guard"),
         ({"_altitude_fresh": False}, "altitude is stale"),
         ({"_heartbeat_fresh": False}, "heartbeat is stale"),
+        ({"_flow_fresh": False}, "optical flow is stale"),
+        ({"_relative_position_fresh": False}, "relative position estimate"),
     ],
 )
 def test_each_guard_stops_the_aircraft(overrides: dict, expected: str) -> None:
@@ -77,6 +88,22 @@ def test_unknown_battery_is_not_treated_as_empty() -> None:
 
 
 def test_staleness_is_only_checked_while_flying() -> None:
-    drone = _Drone(is_flying=False, _altitude_fresh=False, _heartbeat_fresh=False)
+    drone = _Drone(
+        is_flying=False,
+        _altitude_fresh=False,
+        _heartbeat_fresh=False,
+        _flow_fresh=False,
+        _relative_position_fresh=False,
+    )
+    check_safety_guardrails(drone, 14.4)
+    assert not drone.stopped
+
+
+def test_navigation_staleness_is_only_required_in_loiter() -> None:
+    drone = _Drone(
+        flight_mode="ALT_HOLD",
+        _flow_fresh=False,
+        _relative_position_fresh=False,
+    )
     check_safety_guardrails(drone, 14.4)
     assert not drone.stopped

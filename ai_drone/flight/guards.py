@@ -25,11 +25,14 @@ class FlightController(Protocol):
     max_altitude: float
     is_flying: bool
     is_armed: bool
+    flight_mode: str | None
 
     def update_telemetry(self) -> None: ...
     def emergency_stop(self) -> None: ...
     def altitude_is_fresh(self) -> bool: ...
     def heartbeat_is_fresh(self) -> bool: ...
+    def optical_flow_is_fresh(self) -> bool: ...
+    def relative_position_is_fresh(self) -> bool: ...
 
 
 class FlightGuardError(RuntimeError):
@@ -62,3 +65,11 @@ def check_safety_guardrails(drone: FlightController, min_battery_v: float) -> No
     if not drone.heartbeat_is_fresh():
         drone.emergency_stop()
         raise FlightGuardError("flight stopped because heartbeat is stale")
+    if drone.flight_mode == "LOITER" and not drone.optical_flow_is_fresh():
+        drone.emergency_stop()
+        raise FlightGuardError("flight stopped because optical flow is stale")
+    if drone.flight_mode == "LOITER" and not drone.relative_position_is_fresh():
+        drone.emergency_stop()
+        raise FlightGuardError(
+            "flight stopped because the relative position estimate is unhealthy"
+        )
