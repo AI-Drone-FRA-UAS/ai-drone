@@ -150,45 +150,78 @@ td:last-child{ font-weight:600; }
   box-shadow:0 0 0 .35mm var(--blau-hell);
 }
 .ablauf li.offen::before{ background:#fff; box-shadow:0 0 0 .35mm var(--akzent); border-color:#fff; }
+.ablauf li.kritisch::before{ background:#c0391b; box-shadow:0 0 0 .35mm #c0391b; }
 .ablauf li b{ color:var(--blau); }
 .ablauf li span{ display:block; color:var(--grau); font-size:4.4mm; }
 
-/* ---------------- Fotoplatzhalter ---------------- */
-/* Foto einsetzen: <div class="foto"><img src="fotos/foto1.jpg" alt=""></div>
-   Der gestrichelte Rahmen verschwindet dann automatisch.              */
+/* ---------------- Foto ---------------- */
 .foto{
-  border:.8mm dashed var(--linie); border-radius:2.5mm;
-  background:var(--flaeche);
-  display:flex; flex-direction:column; align-items:center; justify-content:center;
-  text-align:center; color:var(--grau); overflow:hidden; position:relative;
+  border:.35mm solid var(--linie); border-radius:2.5mm;
+  background:var(--flaeche); overflow:hidden;
 }
-.foto-gross{ flex:1; min-height:118mm; }
-.foto-mittel{ height:96mm; }
+.foto-gross{ flex:1; min-height:110mm; }
 .foto img{ width:100%; height:100%; object-fit:cover; display:block; }
-.foto:has(img){ border-style:solid; border-color:var(--linie); }
-.foto-icon{ font-size:16mm; opacity:.35; margin-bottom:3mm; }
-.foto-text{ font-size:5.2mm; font-weight:700; }
-.foto-hinweis{ font-size:4.2mm; margin-top:1.5mm; opacity:.8; }
 .bildunterschrift{
   font-size:4.4mm; color:var(--grau); margin-top:2mm; line-height:1.3;
 }
 
-/* ---------------- Platzhalter autonomer Flug ---------------- */
-.platzhalter{
-  border:.8mm dashed var(--akzent);
-  background:#fffaf5;
-  border-radius:2.5mm;
-  padding:6mm;
-  flex:1; min-height:135mm;
-  display:flex; flex-direction:column;
+/* ---------------- Chronik der Flugversuche ---------------- */
+table.chronik td{ font-size:4.5mm; line-height:1.35; padding:2.6mm 0; }
+table.chronik td:first-child{
+  width:26mm; padding-right:3.5mm; color:var(--blau); font-weight:700;
+  white-space:nowrap;
 }
-.platzhalter .fuellhinweis{
-  font-size:4.4mm; color:#a8662a; font-style:italic; margin-top:auto;
-  border-top:.35mm dashed #e7c19a; padding-top:3mm;
+table.chronik td:first-child span{
+  display:block; font-weight:400; color:var(--grau); font-size:4mm;
 }
-.linien{ margin:3mm 0 4mm 0; }
-.linien div{
-  border-bottom:.3mm dashed #e0c3a3; height:8mm;
+table.chronik td:last-child{ font-weight:400; }
+table.chronik tr.crash td{
+  background:#fff3f0; border-bottom-color:#f2c4b8;
+}
+table.chronik tr.crash td:first-child{ color:#b3341a; padding-left:2.5mm; }
+table.chronik tr.crash td:last-child{ padding-right:2.5mm; }
+
+/* ---------------- Nummerierte Befunde ---------------- */
+ol.befunde{ margin:0; padding:0; list-style:none; counter-reset:befund; }
+ol.befunde li{
+  position:relative; padding-left:9mm; margin-bottom:3.6mm;
+  font-size:4.7mm; line-height:1.38;
+}
+ol.befunde li::before{
+  counter-increment:befund; content:counter(befund);
+  position:absolute; left:0; top:.2mm;
+  width:6mm; height:6mm; border-radius:50%;
+  background:var(--blau); color:#fff;
+  font-size:4mm; font-weight:700; text-align:center; line-height:6mm;
+}
+
+/* ---------------- QR-Code ---------------- */
+.qr-karte{
+  display:flex; gap:6mm; align-items:center;
+  background:var(--flaeche); border:.35mm solid var(--linie);
+  border-radius:2.5mm; padding:6mm;
+}
+.qr-bild{ flex:none; width:44mm; height:44mm; }
+.qr-bild svg{ width:100%; height:100%; display:block; }
+.qr-text b{ display:block; font-size:5.2mm; color:var(--blau); margin-bottom:2mm; }
+.qr-text span{ display:block; font-size:4.5mm; line-height:1.35; }
+.qr-url{
+  margin-top:2.5mm; font-family:"SF Mono", Menlo, Consolas, monospace;
+  font-size:4mm; color:var(--grau); word-break:break-all;
+}
+
+/* ---------------- Hervorhebungen ---------------- */
+h2.h2-erfolg::before{ background:var(--tuerkis); }
+.karte-erfolg{ background:#f0faf8; border-color:#a9dcd4; }
+.karte-erfolg p:first-child{ margin-top:0; }
+.fussnote{
+  font-size:4.4mm; color:var(--grau); font-style:italic;
+  margin:3mm 0 0 0;
+}
+.merksatz{
+  background:var(--flaeche); border-left:1.2mm solid var(--akzent);
+  border-radius:0 2mm 2mm 0; padding:4mm 5mm; font-size:4.8mm;
+  line-height:1.4; margin:0;
 }
 
 /* ---------------- Diagramm ---------------- */
@@ -217,11 +250,11 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
   <!-- ============================ KOPF ============================ -->
   <header>
     <div class="hochschule">Frankfurt University of Applied Sciences <span>&nbsp;·&nbsp; Fachbereich 2 &nbsp;·&nbsp; Projektarbeit</span></div>
-    <h1>KI-Drohne mit Personen&shy;erkennung</h1>
+    <h1>KI-Drohne mit AprilTag-Abwurf</h1>
     <div class="untertitel">
-      Von der FPV-Renndrohne zur autonomen Indoor-Plattform: ArduPilot-Autopilot,
-      Raspberry&nbsp;Pi als Companion-Computer, On-Sensor-KI der IMX500-Kamera und
-      ein servogesteuerter Lastenabwurf.
+      Von der FPV-Renndrohne zur GPS-freien Indoor-Plattform: ArduPilot-Autopilot,
+      Raspberry&nbsp;Pi als Companion-Computer, AprilTag-Erkennung auf der Kamera und ein
+      servogesteuerter Nutzlast-Abwurf — mit den Flugversuchen, die dahin geführt haben.
     </div>
     <div class="kopf-meta">
       <div><span>Team (4 Personen)</span><b>Jannik&nbsp;Höhler &nbsp;·&nbsp; Julian&nbsp;Veerkamp &nbsp;·&nbsp; Sebastian&nbsp;Urmann &nbsp;·&nbsp; Serkan&nbsp;Savranoglu</b></div>
@@ -238,20 +271,19 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
         <h2>Ziel des Projekts</h2>
         <p>
           Ausgangspunkt ist eine flugfertige 3,5"-CineWhoop-FPV-Drohne, die ausschließlich
-          manuell per Fernsteuerung geflogen wird. Ziel ist der Umbau zu einer
-          <b>teilautonomen Plattform</b>, die auch <b>ohne GPS in Innenräumen</b> stabil
-          fliegt, ihre Umgebung per KI-Kamera auswertet und eine Nutzlast gezielt abwerfen
-          kann.
+          manuell per Fernsteuerung geflogen wird. Ziel ist der Umbau zu einer Plattform,
+          die <b>ohne GPS in Innenräumen</b> fliegt, am Boden angebrachte <b>AprilTags</b>
+          erkennt und über einem Tag eine <b>Nutzlast abwirft</b>.
         </p>
         <h3>Teilziele</h3>
         <ul>
           <li><b>Autopilot:</b> Betaflight durch ArduPilot Copter ersetzen, Konfiguration
-              und Missionsplanung über QGroundControl.</li>
+              über QGroundControl.</li>
           <li><b>Position &amp; Altitude Hold</b> ohne GPS über LiDAR und optischen Fluss.</li>
-          <li><b>Abwurfmechanismus</b> mit 9g-Servo, angesteuert über den Flight Controller.</li>
+          <li><b>Markererkennung</b> auf dem Companion-Computer statt Fernsteuerung durch
+              den Piloten.</li>
+          <li><b>Abwurfmechanismus</b> mit 9g-Servo, ausgelöst durch die Erkennung.</li>
           <li><b>Rahmenerweiterung</b> (3D-Druck) für Sensor, Servo, Pi und Kamera.</li>
-          <li><b>Companion-Computer</b> mit KI-Objekterkennung als Basis für autonomes
-              Verhalten.</li>
         </ul>
       </section>
 
@@ -265,12 +297,44 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
             <tr><td>Antrieb</td><td>4 × Emax Eco II 2004, 3000 KV, ESC 45 A</td></tr>
             <tr><td>Funkstrecke</td><td>ExpressLRS, RadioMaster XR4 Gemini</td></tr>
             <tr><td>Companion</td><td>Raspberry Pi Zero 2 WH</td></tr>
-            <tr><td>KI-Kamera</td><td>Raspberry Pi AI Camera (Sony IMX500)</td></tr>
+            <tr><td>Kamera</td><td>Raspberry Pi AI Camera (Sony IMX500)</td></tr>
             <tr><td>Navigation</td><td>MicoAir MTF-01P — LiDAR + Optical Flow</td></tr>
             <tr><td>Aktuator</td><td>Micro-Servo 9g (MS18-F) für Abwurf</td></tr>
             <tr><td>FPV-Video</td><td>RunCam Phoenix 2 → SpeedyBee TX800</td></tr>
           </table>
         </div>
+      </section>
+
+      <section>
+        <h2>Projekt in Zahlen</h2>
+        <div class="kennzahlen">
+          <div class="kennzahl"><b>29 fps</b><span>Aufnahme + Tag-Erkennung bei 640×480 auf dem Pi</span></div>
+          <div class="kennzahl"><b>36h11</b><span>AprilTag-Familie, zwei Detektor-Backends</span></div>
+          <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für die Navigation nötig</span></div>
+          <div class="kennzahl"><b>500+</b><span>Offline-Tests, 11 injizierbare Fehlerbilder</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Vorgehen</h2>
+        <ul class="ablauf">
+          <li><b>Bestandsaufnahme &amp; Sicherheitskonzept</b>
+              <span>Hardware sichten, Failsafe-Regeln, Prüfliste</span></li>
+          <li><b>ArduPilot flashen &amp; konfigurieren</b>
+              <span>Betaflight ersetzt, Parametersatz gesichert</span></li>
+          <li><b>MTF-01P in Betrieb nehmen</b>
+              <span>UART5, EKF3-Fusion, Telemetrie als CSV verifiziert</span></li>
+          <li><b>Raspberry Pi anbinden</b>
+              <span>UART4-MAVLink, automatisierter Health-Check</span></li>
+          <li><b>AprilTag-Erkennung auf dem Pi</b>
+              <span>tag36h11, zwei Backends, Durchsatz vermessen</span></li>
+          <li><b>Abwurf durch die Erkennung ausgelöst</b>
+              <span>Servo öffnet bei stabil erkanntem Tag</span></li>
+          <li class="kritisch"><b>Flugversuche → Absturz</b>
+              <span>21.08.: Totalschaden an der Hallendecke, Aufbau repariert</span></li>
+          <li class="offen"><b>Autonome Mission im Flug</b>
+              <span>Suchen, Anfliegen, Zentrieren, Abwerfen — offen</span></li>
+        </ul>
       </section>
 
       <!-- ############ FOTO 1 ############ -->
@@ -280,8 +344,8 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <img src="fotos/drohne-flug-quer.jpg" alt="Die CineWhoop-Drohne im Flug auf dem Campus der Frankfurt UAS">
         </div>
         <div class="bildunterschrift">
-          <b>Abb. 1:</b> Die 3,5"-CineWhoop im Flug auf dem Campus — ducted Propeller
-          und Propellerschutz erlauben Flüge in Personennähe.
+          <b>Abb. 1:</b> Die 3,5"-CineWhoop im Flug — ducted Propeller und Propellerschutz
+          erlauben Flüge in Innenräumen und in Personennähe.
         </div>
       </section>
 
@@ -303,7 +367,7 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <rect x="4" y="6" width="104" height="30" rx="3" fill="#334a5e"/>
           <text class="dg-label" x="14" y="19">Laptop / Bodenstation</text>
           <text class="dg-sub" x="14" y="26">QGroundControl · MAVProxy</text>
-          <text class="dg-sub" x="14" y="32">uv run drone-console / -health</text>
+          <text class="dg-sub" x="14" y="32">Start, Abbruchtaste, Protokoll</text>
 
           <!-- Fernsteuerung -->
           <rect x="152" y="6" width="104" height="30" rx="3" fill="#334a5e"/>
@@ -315,19 +379,19 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <rect x="60" y="80" width="140" height="38" rx="3" fill="#0b3d67"/>
           <text class="dg-label" x="72" y="94">Flight Controller — GN745 AIO</text>
           <text class="dg-sub" x="72" y="102">ArduPilot Copter 4.6.3 · EKF3</text>
-          <text class="dg-sub" x="72" y="109">Motorregelung · Modi · Failsafe</text>
-          <text class="dg-sub" x="72" y="115">Servo-Ausgang für Abwurf</text>
+          <text class="dg-sub" x="72" y="109">Motorregelung · Flugmodi · Failsafe</text>
+          <text class="dg-sub" x="72" y="115">Höhe aus Baro, Lage aus IMU</text>
 
           <!-- Raspberry Pi -->
           <rect x="4" y="140" width="104" height="34" rx="3" fill="#1573b8"/>
           <text class="dg-label" x="14" y="153">Raspberry Pi Zero 2 WH</text>
-          <text class="dg-sub" x="14" y="160">Python · pymavlink · modlib</text>
-          <text class="dg-sub" x="14" y="167">Follow-Logik &amp; MJPEG-Stream</text>
+          <text class="dg-sub" x="14" y="160">Python · pymavlink · OpenCV</text>
+          <text class="dg-sub" x="14" y="167">Tag-Erkennung → Abwurf-Trigger</text>
 
           <!-- Kamera -->
           <rect x="4" y="184" width="104" height="22" rx="3" fill="#0d9488"/>
-          <text class="dg-label" x="14" y="194">IMX500 AI-Kamera</text>
-          <text class="dg-sub" x="14" y="201">NanoDet läuft auf dem Sensor</text>
+          <text class="dg-label" x="14" y="194">IMX500-Kamera (Nadir)</text>
+          <text class="dg-sub" x="14" y="201">AprilTag 3 / ArUco · tag36h11</text>
 
           <!-- Sensorik -->
           <rect x="152" y="140" width="104" height="34" rx="3" fill="#0d9488"/>
@@ -357,11 +421,11 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <text class="dg-kante" x="196" y="133">UART5</text>
 
           <path d="M204,184 L204,174" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
-          <text class="dg-kante" x="207" y="181">PWM</text>
+          <text class="dg-kante" x="200" y="181">GPIO</text>
         </svg>
         <div class="bildunterschrift">
           <b>Abb. 2:</b> Signalfluss zwischen Bodenstation, Fernsteuerung, Autopilot,
-          Companion-Computer und Sensorik.
+          Companion-Computer, Sensorik und Abwurf.
         </div>
       </section>
 
@@ -372,32 +436,64 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           Messgrößen, die der EKF3-Zustandsschätzer von ArduPilot direkt verarbeitet:
         </p>
         <ul>
-          <li><b>LiDAR</b> misst den Abstand zum Boden (1–800 cm) → stabile Höhe
-              (<i>Altitude Hold</i>).</li>
+          <li><b>LiDAR</b> misst den Abstand zum Boden (1–800 cm) → Höhe über Grund.</li>
           <li><b>Optischer Fluss</b> schätzt aus der Bildverschiebung die horizontale
-              Geschwindigkeit → Halten der Position (<i>Position Hold</i>).</li>
+              Geschwindigkeit → Halten der Position ohne Satelliten.</li>
         </ul>
         <p>
-          Angebunden über <code>SERIAL5</code>, konfiguriert mit <code>FLOW_TYPE=5</code>
-          und <code>RNGFND1_TYPE=10</code>. Ein eigenes Testskript liest Range- und
-          Flow-Telemetrie aus und protokolliert sie als CSV — ohne die Drohne zu armieren.
+          Angebunden über <code>SERIAL5</code> mit <code>FLOW_TYPE=5</code> und
+          <code>RNGFND1_TYPE=10</code>. <b>Wichtige Einschränkung:</b> EKF3 startet die
+          Flussnavigation erst, wenn es ein Abheben erkannt hat — die Positionslösung, die
+          <code>GUIDED</code> verlangt, existiert am Boden also noch nicht.
         </p>
       </section>
 
       <section>
-        <h2>Nutzlast-Abwurf</h2>
+        <h2 class="h2-erfolg">Zwischenergebnis: Tag erkannt → Last fällt</h2>
+        <div class="karte karte-erfolg">
+          <p>
+            Die Kette <b>Kamera → Erkennung → Aktuator funktioniert</b> und ist der
+            vorzeigbare Stand des Projekts: Die nach unten gerichtete IMX500 erkennt
+            <code>tag36h11</code>-Marker, und sobald ein Tag stabil erkannt ist, öffnet der
+            Servo den Haltebügel und lässt die Nutzlast fallen.
+          </p>
+          <ul>
+            <li><b>Zwei Detektor-Backends:</b> AprilTag&nbsp;3.4.2 nativ (meldet Hamming-
+                Korrektur und Decision Margin) und OpenCV&nbsp;4.11 <code>ArucoDetector</code>
+                mit <code>DICT_APRILTAG_36h11</code> als Rückfall und für die Kalibrierung.</li>
+            <li><b>Durchsatz auf dem Pi Zero 2 W</b> (gemessen 18.08.): 29 fps bei 640×480,
+                13–15 fps bei 1280×960 jeweils inklusive Bildaufnahme; der Detektor allein
+                schafft bis 76 fps.</li>
+            <li><b>Auslösung:</b> Erst mehrere aufeinanderfolgende Frames mit derselben
+                erlaubten ID lösen aus; der Servo wird direkt vom Pi über GPIO angesteuert
+                und die Freigabe ist verriegelt, sodass sie sich nicht wiederholen kann.</li>
+            <li><b>Metrische Distanz nur mit Kalibrierung:</b> ohne hinterlegte Intrinsics
+                meldet die Software bewusst nur IDs und Eckpunkte statt einer erfundenen
+                Entfernung.</li>
+          </ul>
+          <p class="fussnote">
+            Verifiziert am Boden und handgeführt — nicht im autonomen Flug.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <h2>Rahmen &amp; 3D-Druck</h2>
         <p>
-          Ein <b>Micro-Servo 9g</b> öffnet auf Kommando einen 3D-gedruckten Haltebügel.
-          Angesteuert wird es über einen Servo-Ausgang des Flight Controllers, sodass der
-          Abwurf sowohl per Fernsteuerungskanal als auch aus einer Mission ausgelöst
-          werden kann.
+          Die Rahmenerweiterung trägt Sensor, Servo, Pi und Kamera. Jedes Teil liegt
+          zweifach im Repository: als <b>STL</b> (die Geometrie, für jeden Slicer) und als
+          <b>3MF</b> mit den Einstellungen, mit denen tatsächlich gedruckt wurde.
         </p>
         <ul>
-          <li>Sicherer Stellbereich <code>900–2100&nbsp;µs</code>, Neutralstellung
-              <code>1500&nbsp;µs</code> (≈ 120° Stellweg).</li>
-          <li>Anlaufstrom bis 1,6&nbsp;A — Versorgung über den geregelten 5-V-Zweig,
-              gemeinsame Masse.</li>
-          <li>Halterung in Tinkercad konstruiert, mit Cura gesliced und in PLA gedruckt.</li>
+          <li><b>Pi-Gehäuse</b> in PETG, 37,6 × 72,6 × 13,4 mm, Stützen sind Teil des
+              Modells statt vom Slicer erzeugt.</li>
+          <li><b>Weiche Rahmenteile</b> (vorn, hinten, 2 × seitlich) in TPU&nbsp;95A. Sie
+              sind bewusst flexibel: sie dämpfen Schwingungen, und genau davon hängen
+              optischer Fluss und die Zustandsschätzung ab — in starrem Filament gedruckt
+              sind sie kein Ersatz.</li>
+          <li><b>Servohalter</b> für den 9g-Servo, Stellbereich 900–2100&nbsp;µs, Neutral
+              1500&nbsp;µs; Anlaufstrom bis 1,6&nbsp;A über den geregelten 5-V-Zweig.</li>
+          <li>Gedruckt auf einer Prusa XL, 0,4-mm-Düse, 0,20&nbsp;mm Schichthöhe, 30 % Infill.</li>
         </ul>
       </section>
 
@@ -407,42 +503,12 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <table>
             <tr><td>Autopilot</td><td>ArduPilot Copter · QGroundControl</td></tr>
             <tr><td>Protokoll</td><td>MAVLink 2 (pymavlink, MAVProxy)</td></tr>
-            <tr><td>Companion</td><td>Raspberry Pi OS · Python 3.12 · uv</td></tr>
-            <tr><td>KI-Modell</td><td>NanoDet, On-Sensor auf IMX500 (modlib)</td></tr>
-            <tr><td>Qualität</td><td>ruff · ty · pytest</td></tr>
-            <tr><td>CAD / Druck</td><td>Tinkercad · Cura · PLA-Druckteile</td></tr>
+            <tr><td>Companion</td><td>Raspberry Pi OS · Python 3.13 · uv</td></tr>
+            <tr><td>Erkennung</td><td>AprilTag 3 · OpenCV ArUco (36h11)</td></tr>
+            <tr><td>Qualität</td><td>ruff · ty · pytest · import-linter</td></tr>
+            <tr><td>CAD / Druck</td><td>Tinkercad · PrusaSlicer · PETG / TPU 95A</td></tr>
           </table>
         </div>
-      </section>
-
-      <section>
-        <h2>Projekt in Zahlen</h2>
-        <div class="kennzahlen">
-          <div class="kennzahl"><b>3,5"</b><span>CineWhoop mit Propellerschutz — indoor&shy;tauglich</span></div>
-          <div class="kennzahl"><b>800 cm</b><span>maximale LiDAR-Reichweite nach unten</span></div>
-          <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für Position Hold nötig</span></div>
-          <div class="kennzahl"><b>&lt; 1 m</b><span>Flughöhe in allen autonomen Tests</span></div>
-        </div>
-      </section>
-
-      <section style="display:flex; flex-direction:column; flex:1;">
-        <h2>Vorgehen</h2>
-        <ul class="ablauf">
-          <li><b>Bestandsaufnahme &amp; Sicherheitskonzept</b>
-              <span>Hardware sichten, Flugsicherheitsnetz, Failsafe-Regeln</span></li>
-          <li><b>ArduPilot flashen &amp; konfigurieren</b>
-              <span>Betaflight ersetzt, Parametersatz gesichert</span></li>
-          <li><b>MTF-01P in Betrieb nehmen</b>
-              <span>UART5, EKF3-Fusion, Telemetrie als CSV verifiziert</span></li>
-          <li><b>Raspberry Pi anbinden</b>
-              <span>UART4-MAVLink, automatisierter Health-Check</span></li>
-          <li><b>KI-Kamera integrieren</b>
-              <span>NanoDet auf der IMX500, annotierter Live-Stream</span></li>
-          <li class="offen"><b>Rahmenerweiterung &amp; Abwurf</b>
-              <span>3D-Druckteile, Servo am FC-Ausgang</span></li>
-          <li class="offen"><b>Autonome Flugversuche</b>
-              <span>Personenfolge im Netz, Auswertung der Regelgüte</span></li>
-        </ul>
       </section>
 
     </div>
@@ -450,57 +516,122 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
     <!-- ======================= SPALTE 3 ======================= -->
     <div class="spalte">
 
-      <!-- ############ AUTONOMER FLUG — PLATZ ZUM FÜLLEN ############ -->
-      <section style="display:flex; flex-direction:column; flex:1;">
-        <h2>Autonomer Flug</h2>
-        <div class="platzhalter">
-          <h3>Ansatz</h3>
-          <p style="font-size:4.8mm;">
-            Der Pi wertet die Detektionen der KI-Kamera aus, berechnet daraus Ablage und
-            geschätzte Distanz zur Person und sendet über MAVLink&nbsp;2 Geschwindigkeits&shy;befehle
-            im Body-Frame an den Autopiloten. Sicherheitswächter für Batterie, Maximalhöhe und
-            Zielverlust brechen den Flug automatisch ab.
-          </p>
-          <h3>Ergebnisse</h3>
-          <div class="linien">
-            <div></div><div></div><div></div><div></div><div></div><div></div>
-          </div>
-          <h3>Erkenntnisse / Grenzen</h3>
-          <div class="linien">
-            <div></div><div></div><div></div><div></div>
-          </div>
-          <div class="fuellhinweis">
-            ✎ Freier Bereich — hier die Ergebnisse der autonomen Flugversuche eintragen
-            (Testaufbau im Flugsicherheitsnetz, erreichte Regelgüte, Messwerte, Videostills).
-          </div>
-        </div>
+      <section>
+        <h2>Flugversuche</h2>
+        <p>
+          Der vollständig autonome Flug wurde <b>nicht erreicht</b>. Die Versuche sind
+          trotzdem das lehrreichste Ergebnis der Arbeit — jeder ist über Telemetrie und
+          Dataflash-Log ausgewertet.
+        </p>
+        <table class="chronik">
+          <tr>
+            <td>20.08.</td>
+            <td><b>Erster Flug überhaupt.</b> Stieg über die befohlene Höhe hinaus und
+                blieb oben; die Drohne hing an einer Leine und wurde durch Abziehen des
+                Akkus gestoppt.</td>
+          </tr>
+          <tr>
+            <td>21.08.<br><span>vormittags</span></td>
+            <td><b>Zwei STABILIZE-Starts, kein Abheben.</b> Der Rangefinder meldet über
+                13 s konstant 0,02 m. Der befohlene Schub lag bei 0,128 gegen einen
+                gelernten Hover von 0,263.</td>
+          </tr>
+          <tr class="crash">
+            <td>21.08.<br><span>Totalschaden</span></td>
+            <td><b>Der Abbruch flog die Drohne.</b> Der Timeout löste eine Landung aus —
+                und LAND ist höhengeregelt. In einem einzigen Log-Sample ging der Schub von
+                0,128 auf 1,000 und die Drohne stieg in einer Sekunde in die Hallendecke.</td>
+          </tr>
+          <tr>
+            <td>21.08.<br><span>abends</span></td>
+            <td><b>Erstes echtes Abheben</b> nach dem Wiederaufbau: 0,02 m → 0,57 m in
+                0,4 s. Der Höhenwächter stoppte den Steigflug korrekt.</td>
+          </tr>
+          <tr>
+            <td>21.08.<br><span>abends</span></td>
+            <td><b>Wächter greift.</b> „Steigt mit +0,96 m/s“ meldet das Fahrzeug, während
+                der Rangefinder 0,00 m/s misst — Abbruch nach 0,8 s Widerspruch, noch bevor
+                Schub aufgebaut wurde.</td>
+          </tr>
+        </table>
       </section>
 
-      <!-- ############ FOTO 2 ############ -->
       <section>
-        <h2>Autonomer Testflug</h2>
-        <div class="foto foto-mittel">
-          <!-- Foto einsetzen: <img src="fotos/foto2.jpg" alt="Testflug im Sicherheitsnetz"> -->
-          <div class="foto-icon">📷</div>
-          <div class="foto-text">Foto&nbsp;2 — Platz für ein Bild</div>
-          <div class="foto-hinweis">z.&nbsp;B. Testflug im Sicherheitsnetz oder<br>Screenshot der Personenerkennung</div>
+        <h2>Drei Ursachen, gemessen</h2>
+        <ol class="befunde">
+          <li>
+            <b>Der EKF hatte keine Höhenquelle.</b> <code>EK3_SRC1_POSZ=2</code> benannte
+            den Rangefinder, <code>EK3_RNG_USE_HGT=-1</code> verbot dessen Nutzung. Der
+            Filter meldete <b>−10 000 m</b> und <b>−38 m/s Sinken</b>, während die Drohne
+            auf dem Boden stand. STABILIZE ignoriert das; LAND regelt danach.
+            Mit dem Barometer als Quelle: +0,05 m und +0,01 m/s.
+          </li>
+          <li>
+            <b>Die Schubkennlinie war falsch angenommen.</b> ArduPilot formt den
+            STABILIZE-Stick kubisch, sodass <i>Stickmitte</i> Hover-Schub ist. Der Code
+            setzte den Stick auf 0,313 im Glauben, das sei Hover — die Kennlinie macht
+            daraus 0,135, also etwa die halbe nötige Kraft.
+          </li>
+          <li>
+            <b>Ein Beschleunigungs-Offset im Betrieb.</b> Stillstehend misst die Drohne
+            9,79 m/s²; mit laufenden Motoren im Leerlauf 10,65 m/s² bei unveränderter Lage.
+            EKF3 integriert die Differenz zu 0,75 m/s² Drift pro Sekunde — daher „Steigt mit
+            4,27 m/s“ bei 0,020 m Bodenabstand. Die Vibrationsmetrik bleibt dabei blind,
+            weil sie Streuung misst und ein gleichgerichteter Rüttler ein Gleichanteil ist.
+          </li>
+        </ol>
+      </section>
+
+      <!-- ############ QR-CODE STATT FOTO ############ -->
+      <section>
+        <h2>Video: der Absturz</h2>
+        <div class="qr-karte">
+          <div class="qr-bild"><svg class="qr" viewBox="0 0 33 33" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" role="img" aria-label="QR-Code zum Video des Absturzes"><rect width="33" height="33" fill="#ffffff"/><path d="M0 0h7v1h-7zM9 0h1v1h-1zM15 0h1v1h-1zM18 0h1v1h-1zM21 0h1v1h-1zM26 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM8 1h1v1h-1zM10 1h1v1h-1zM12 1h1v1h-1zM16 1h2v1h-2zM19 1h1v1h-1zM21 1h2v1h-2zM26 1h1v1h-1zM32 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM9 2h2v1h-2zM13 2h2v1h-2zM16 2h3v1h-3zM20 2h2v1h-2zM23 2h1v1h-1zM26 2h1v1h-1zM28 2h3v1h-3zM32 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM8 3h1v1h-1zM10 3h2v1h-2zM14 3h2v1h-2zM19 3h3v1h-3zM23 3h1v1h-1zM26 3h1v1h-1zM28 3h3v1h-3zM32 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM8 4h1v1h-1zM10 4h1v1h-1zM12 4h2v1h-2zM16 4h1v1h-1zM18 4h1v1h-1zM20 4h4v1h-4zM26 4h1v1h-1zM28 4h3v1h-3zM32 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM12 5h2v1h-2zM16 5h1v1h-1zM21 5h3v1h-3zM26 5h1v1h-1zM32 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h7v1h-7zM8 7h1v1h-1zM10 7h2v1h-2zM14 7h1v1h-1zM16 7h1v1h-1zM19 7h2v1h-2zM22 7h1v1h-1zM1 8h1v1h-1zM3 8h4v1h-4zM8 8h1v1h-1zM10 8h2v1h-2zM13 8h1v1h-1zM16 8h4v1h-4zM22 8h1v1h-1zM24 8h3v1h-3zM28 8h2v1h-2zM31 8h1v1h-1zM1 9h2v1h-2zM4 9h1v1h-1zM7 9h2v1h-2zM10 9h3v1h-3zM14 9h1v1h-1zM18 9h2v1h-2zM22 9h2v1h-2zM28 9h3v1h-3zM1 10h2v1h-2zM4 10h1v1h-1zM6 10h1v1h-1zM8 10h1v1h-1zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h3v1h-3zM21 10h4v1h-4zM28 10h3v1h-3zM32 10h1v1h-1zM3 11h1v1h-1zM5 11h1v1h-1zM7 11h1v1h-1zM9 11h1v1h-1zM11 11h1v1h-1zM14 11h4v1h-4zM19 11h2v1h-2zM22 11h2v1h-2zM26 11h2v1h-2zM30 11h1v1h-1zM0 12h2v1h-2zM3 12h1v1h-1zM6 12h3v1h-3zM10 12h2v1h-2zM13 12h1v1h-1zM15 12h1v1h-1zM17 12h4v1h-4zM23 12h1v1h-1zM26 12h3v1h-3zM0 13h1v1h-1zM3 13h1v1h-1zM5 13h1v1h-1zM7 13h1v1h-1zM9 13h2v1h-2zM12 13h1v1h-1zM15 13h3v1h-3zM19 13h5v1h-5zM25 13h1v1h-1zM27 13h1v1h-1zM29 13h1v1h-1zM1 14h1v1h-1zM3 14h4v1h-4zM12 14h2v1h-2zM15 14h1v1h-1zM17 14h3v1h-3zM24 14h1v1h-1zM26 14h1v1h-1zM28 14h2v1h-2zM0 15h2v1h-2zM4 15h1v1h-1zM7 15h2v1h-2zM10 15h1v1h-1zM13 15h2v1h-2zM19 15h1v1h-1zM22 15h2v1h-2zM25 15h1v1h-1zM28 15h3v1h-3zM32 15h1v1h-1zM0 16h2v1h-2zM3 16h1v1h-1zM6 16h1v1h-1zM8 16h3v1h-3zM17 16h2v1h-2zM20 16h1v1h-1zM22 16h2v1h-2zM25 16h4v1h-4zM2 17h1v1h-1zM9 17h2v1h-2zM12 17h3v1h-3zM16 17h1v1h-1zM18 17h3v1h-3zM22 17h1v1h-1zM25 17h2v1h-2zM28 17h1v1h-1zM30 17h1v1h-1zM32 17h1v1h-1zM0 18h4v1h-4zM5 18h2v1h-2zM8 18h6v1h-6zM15 18h9v1h-9zM25 18h3v1h-3zM29 18h2v1h-2zM32 18h1v1h-1zM0 19h1v1h-1zM2 19h1v1h-1zM4 19h2v1h-2zM8 19h2v1h-2zM15 19h2v1h-2zM23 19h1v1h-1zM26 19h1v1h-1zM28 19h3v1h-3zM1 20h3v1h-3zM5 20h2v1h-2zM8 20h1v1h-1zM10 20h3v1h-3zM14 20h2v1h-2zM18 20h1v1h-1zM20 20h2v1h-2zM23 20h1v1h-1zM29 20h1v1h-1zM0 21h1v1h-1zM2 21h1v1h-1zM8 21h1v1h-1zM11 21h1v1h-1zM14 21h1v1h-1zM17 21h1v1h-1zM19 21h2v1h-2zM23 21h2v1h-2zM27 21h2v1h-2zM30 21h1v1h-1zM0 22h1v1h-1zM3 22h1v1h-1zM6 22h2v1h-2zM9 22h1v1h-1zM11 22h1v1h-1zM13 22h3v1h-3zM18 22h1v1h-1zM21 22h1v1h-1zM23 22h2v1h-2zM26 22h1v1h-1zM30 22h3v1h-3zM0 23h1v1h-1zM4 23h2v1h-2zM8 23h1v1h-1zM10 23h2v1h-2zM13 23h1v1h-1zM16 23h2v1h-2zM29 23h4v1h-4zM0 24h9v1h-9zM12 24h1v1h-1zM15 24h1v1h-1zM17 24h4v1h-4zM23 24h6v1h-6zM31 24h1v1h-1zM8 25h1v1h-1zM10 25h1v1h-1zM13 25h2v1h-2zM17 25h2v1h-2zM20 25h1v1h-1zM22 25h1v1h-1zM24 25h1v1h-1zM28 25h1v1h-1zM30 25h2v1h-2zM0 26h7v1h-7zM9 26h2v1h-2zM12 26h1v1h-1zM14 26h4v1h-4zM19 26h1v1h-1zM23 26h2v1h-2zM26 26h1v1h-1zM28 26h1v1h-1zM30 26h1v1h-1zM0 27h1v1h-1zM6 27h1v1h-1zM8 27h1v1h-1zM10 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM20 27h1v1h-1zM23 27h2v1h-2zM28 27h3v1h-3zM0 28h1v1h-1zM2 28h3v1h-3zM6 28h1v1h-1zM8 28h1v1h-1zM10 28h1v1h-1zM12 28h5v1h-5zM18 28h1v1h-1zM22 28h7v1h-7zM31 28h1v1h-1zM0 29h1v1h-1zM2 29h3v1h-3zM6 29h1v1h-1zM8 29h1v1h-1zM11 29h4v1h-4zM19 29h1v1h-1zM22 29h4v1h-4zM27 29h1v1h-1zM30 29h1v1h-1zM32 29h1v1h-1zM0 30h1v1h-1zM2 30h3v1h-3zM6 30h1v1h-1zM9 30h2v1h-2zM12 30h1v1h-1zM14 30h4v1h-4zM19 30h1v1h-1zM21 30h3v1h-3zM25 30h1v1h-1zM27 30h6v1h-6zM0 31h1v1h-1zM6 31h1v1h-1zM8 31h1v1h-1zM11 31h4v1h-4zM18 31h1v1h-1zM23 31h1v1h-1zM27 31h6v1h-6zM0 32h7v1h-7zM9 32h4v1h-4zM14 32h2v1h-2zM17 32h4v1h-4zM23 32h2v1h-2zM27 32h4v1h-4z" fill="#0b3d67"/></svg></div>
+          <div class="qr-text">
+            <b>Aufnahme vom 21.08.2026</b>
+            <span>Der zweite STABILIZE-Start: 13 Sekunden ohne Bewegung, dann der Abbruch,
+              der die Drohne in einem Zug in die Hallendecke fliegt.</span>
+            <span class="qr-url">photos.app.goo.gl/q4YqJamv6uWtpWg16</span>
+          </div>
         </div>
         <div class="bildunterschrift">
-          <b>Abb. 3:</b> Bildunterschrift hier eintragen.
+          <b>Abb. 3:</b> Der Absturz, gefilmt vom Boden — QR-Code scannen.
         </div>
       </section>
 
       <section>
-        <h2>Sicherheit</h2>
+        <h2>Was die Simulation leistet</h2>
+        <p>
+          Jeder Flugbefehl lässt sich gegen ein simuliertes Fahrzeug proben
+          (<code>drone-rehearse</code>), in das <b>11 Fehlerbilder</b> injiziert werden
+          können — verweigertes Armieren, weglaufende Höhe, Batterieeinbruch, veraltete
+          Telemetrie, Heartbeat-Verlust, divergierender EKF. Der Unfall vom 21.08. ist als
+          Fehlerbild nachgebaut, dazu über 500 Offline-Tests.
+        </p>
+        <p class="merksatz">
+          Und die eigentliche Lehre: Der Simulator enthielt <b>dieselbe falsche Annahme
+          über die Schubkennlinie</b> wie der Flugcode. Eine Probe gegen ihn konnte den
+          Fehler deshalb prinzipiell nicht finden — eine Simulation prüft Code gegen
+          Annahmen, nicht Annahmen gegen die Wirklichkeit.
+        </p>
+      </section>
+
+      <section>
+        <h2>Konsequenzen im Code</h2>
         <div class="karte karte-akzent">
           <ul>
-            <li>Alle Tests im <b>Flugsicherheitsnetz</b>, Propellerschutz montiert.</li>
-            <li>Flughöhe im autonomen Betrieb softwareseitig auf <b>&lt; 1 m</b> begrenzt.</li>
-            <li>Der Pilot kann über die Fernsteuerung jederzeit übernehmen; separater
-                Not-Aus schaltet in den LAND-Modus.</li>
-            <li>Testskripte für Sensorik armieren die Drohne nicht und schreiben keine
-                Parameter.</li>
-            <li>Parameterstände werden vor jeder Änderung als Backup gesichert.</li>
+            <li><b>Landen ist keine Notbremse mehr.</b> Steht die Drohne noch am Boden,
+                wird entwaffnet statt gelandet.</li>
+            <li>Ein Flug gilt erst als begonnen, wenn die Drohne <b>abgehoben ist</b> —
+                vorher ist ein Fehler kein Notfall in der Luft.</li>
+            <li>Vor dem Armieren muss die Vertikalschätzung <b>3 s ruhig</b> sein
+                (±0,10 m/s); gemeldete Steigrate und Rangefinder werden laufend verglichen.</li>
+            <li>Jeder Abbau prüft den Disarm und erzwingt ihn, wenn ein frischer
+                Rangefinder die Drohne am Boden hält.</li>
+            <li>Bricht die WLAN-Verbindung ab, beendet das den Flug geordnet, statt ihn
+                sich selbst zu überlassen.</li>
+            <li>Vorflugprüfungen nie abschalten: erlaubt sind nur „alle“ oder „alle außer
+                GPS“ — und geprüft werden Werte, nicht nur Statusbits.</li>
           </ul>
         </div>
       </section>
@@ -508,12 +639,13 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
       <section>
         <h2>Stand &amp; Ausblick</h2>
         <ul>
-          <li>ArduPilot geflasht und konfiguriert, Parametersatz gesichert.</li>
-          <li>MTF-01P an UART5 in Betrieb, Telemetrie verifiziert.</li>
-          <li>Pi an UART4 angebunden, MAVLink-Verbindung automatisiert prüfbar.</li>
-          <li>Personenerkennung auf der IMX500 läuft mit annotiertem Live-Stream.</li>
-          <li><b>Nächste Schritte:</b> Abwurfmechanik am Servo-Ausgang integrieren,
-              autonome Zielanflüge erweitern, Flugzeit und Regelgüte vermessen.</li>
+          <li><b>Erreicht:</b> ArduPilot in Betrieb, GPS-freie Sensorik verifiziert,
+              Pi angebunden, AprilTag-Erkennung und der davon ausgelöste Abwurf.</li>
+          <li><b>Offen:</b> die autonome Mission im Flug — Suchen, Anfliegen, Zentrieren,
+              Abwerfen.</li>
+          <li><b>Nächste Schritte:</b> den Beschleunigungs-Offset mechanisch beseitigen
+              (der Motortest misst ihn), Geofence und Failsafes fahrzeugseitig aktivieren,
+              Kamera starr montieren und kalibrieren — dann gefesselte Tests.</li>
         </ul>
       </section>
 
