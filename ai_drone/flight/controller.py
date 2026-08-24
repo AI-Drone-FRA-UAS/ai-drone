@@ -294,10 +294,11 @@ class DroneController:
         self._process_message(heartbeat, time.monotonic())
 
     def verify_arming_checks(self) -> None:
-        value = request_parameter(self._connection(), "ARMING_CHECK")
-        if value != 1.0:
+        value = request_parameter(self._connection(), "ARMING_SKIPCHK")
+        if value != 0.0:
             raise FlightSafetyError(
-                f"ARMING_CHECK={value:g}; flight requires exact value 1 (all checks)"
+                f"ARMING_SKIPCHK={value:g}; flight requires exact value 0 "
+                "(no checks skipped)"
             )
 
     def verify_onboard_logging(self) -> None:

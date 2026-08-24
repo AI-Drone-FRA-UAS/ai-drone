@@ -129,8 +129,9 @@ Two realistic operating envelopes are:
 9. Dummy payload release over a soft, isolated test area.
 10. Only then, bounded search behavior.
 
-Do not proceed to an armed test unless `ARMING_CHECK` is exactly `1`, a valid
-local position is available, and the Pi clock is synchronized.
+Do not proceed to an armed test unless `ARMING_SKIPCHK` is exactly `0` (no
+checks skipped), a valid local position is available, and the Pi clock is
+synchronized.
 
 ## Primary references
 

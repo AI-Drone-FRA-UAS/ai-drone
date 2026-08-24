@@ -26,7 +26,7 @@ the [AprilTag mission architecture](APRILTAG_MISSION.md).
 | --- | --- |
 | Frame | SpeedyBee BEE35 Pro 3.5-inch CineWhoop |
 | Flight controller | Flywoo GOKU GN745 AIO / STM32F745 / 45 A AM32 ESC |
-| Firmware baseline | ArduPilot Copter 4.6.3 custom build |
+| Firmware baseline | Official ArduCopter 4.7.0, commit `1511f271` |
 | Motors | Four Emax Eco II 2004, 3000 KV |
 | Propellers | Gemfan D90-5, 3.5-inch ducted five-blade |
 | GPS/compass | HGLRC M100 |

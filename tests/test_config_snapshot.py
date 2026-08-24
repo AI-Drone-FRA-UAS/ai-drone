@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,10 @@ from ai_drone.config.snapshot import (
     records_from_json,
     records_to_json,
     render_parameter_file,
+)
+
+PROJECT_NOGPS_DELTA = (
+    Path(__file__).parents[1] / "params" / "project-drone-4.7-nogps-loiter-delta.param"
 )
 
 
@@ -65,6 +70,16 @@ def test_parameter_file_is_sorted_and_stable() -> None:
 
     assert render_parameter_file(records) == "ALPHA,2\nBETA,1.25\n"
     assert format_parameter_value(0.0599999987) == "0.0599999987"
+
+
+def test_project_nogps_delta_contains_only_reviewed_ekf_changes() -> None:
+    settings = [
+        line
+        for raw in PROJECT_NOGPS_DELTA.read_text().splitlines()
+        if (line := raw.strip()) and not line.startswith("#")
+    ]
+
+    assert settings == ["EK3_SRC1_POSXY,0", "EK3_SRC1_POSZ,1"]
 
 
 def test_parameter_json_round_trip_requires_complete_unique_indexes() -> None:

@@ -101,12 +101,15 @@ def test_stale_and_future_downward_samples_are_rejected() -> None:
 def test_arming_checks_must_be_exactly_all(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
+    requested = []
     monkeypatch.setattr(
-        "ai_drone.flight.controller.request_parameter", lambda *_args: 0.0
+        "ai_drone.flight.controller.request_parameter",
+        lambda _connection, name: requested.append(name) or 4.0,
     )
 
-    with pytest.raises(FlightSafetyError, match="ARMING_CHECK=0"):
+    with pytest.raises(FlightSafetyError, match="ARMING_SKIPCHK=4"):
         controller.verify_arming_checks()
+    assert requested == ["ARMING_SKIPCHK"]
 
 
 @pytest.mark.parametrize(

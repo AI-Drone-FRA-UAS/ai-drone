@@ -93,10 +93,11 @@ def test_motor_test_requires_exact_physical_confirmations() -> None:
         )
 
 
-@pytest.mark.parametrize("arming_check", [0.0, 1.4, 2.0])
+@pytest.mark.parametrize("arming_skipchk", [1.0, 4.0, 2097150.0])
 def test_motor_test_requires_exact_all_checks_value(
-    monkeypatch, arming_check: float
+    monkeypatch, arming_skipchk: float
 ) -> None:
+    requested = []
     heartbeat = SimpleNamespace(
         base_mode=0,
         get_srcSystem=lambda: 1,
@@ -119,10 +120,10 @@ def test_motor_test_requires_exact_all_checks_value(
     monkeypatch.setattr(
         motor_test,
         "_request_parameter",
-        lambda *_args: arming_check,
+        lambda _connection, name: requested.append(name) or arming_skipchk,
     )
 
-    with pytest.raises(SystemExit, match=r"ARMING_CHECK=.*ARMING_CHECK=1"):
+    with pytest.raises(SystemExit, match=r"ARMING_SKIPCHK=.*ARMING_SKIPCHK=0"):
         motor_test.main(
             [
                 "--motor",
@@ -133,6 +134,7 @@ def test_motor_test_requires_exact_all_checks_value(
                 "VEHICLE_SECURED",
             ]
         )
+    assert requested == ["ARMING_SKIPCHK"]
 
 
 def test_motor_cleanup_closes_connection_when_stop_command_fails(
@@ -246,7 +248,7 @@ def test_partial_motor_command_write_still_triggers_stop_cleanup(monkeypatch) ->
         "mavlink_connection",
         lambda *_args, **_kwargs: connection,
     )
-    monkeypatch.setattr(motor_test, "_request_parameter", lambda *_args, **_kwargs: 1.0)
+    monkeypatch.setattr(motor_test, "_request_parameter", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(motor_test, "_configured_motor_count", lambda _connection: 4)
     monkeypatch.setattr(motor_test, "_send_motor_test", fail_first_send)
     monkeypatch.setattr(

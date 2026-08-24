@@ -29,11 +29,11 @@ guarantee that the physical build is unchanged.
 
 ## Arming checks
 
-`ARMING_CHECK=1` has special meaning in ArduPilot: run every available
-configurable pre-arm check. `0` skips those categories, while other non-zero
-values select only a subset.
+ArduCopter 4.7 replaced `ARMING_CHECK` with the inverse
+`ARMING_SKIPCHK` bitmask. `ARMING_SKIPCHK=0` means no configurable pre-arm
+checks are skipped; every set bit skips its corresponding check category.
 
-Never arm, fly, or run the motor utility unless the live value is exactly `1`
+Never arm, fly, or run the motor utility unless the live value is exactly `0`
 and every reported `PreArm:` or `Arm:` failure has been resolved. Restoring the
 checks does not itself prove the airframe, camera, payload, surroundings, or
 failsafes safe.
@@ -63,6 +63,9 @@ firmware support before writing `SERIALx`, `RNGFND2`, proximity, or avoidance
 parameters. One forward beam is not full obstacle avoidance.
 
 See [sensor recording and wiring](SENSOR_RECORDING.md).
+The reviewed ArduCopter 4.7 EKF correction, comparison evidence, and SITL
+acceptance result are in the
+[no-GPS Loiter review](ARDUCOPTER_4_7_NOGPS_LOITER.md).
 
 ## Capture the live configuration
 

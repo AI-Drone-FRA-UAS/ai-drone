@@ -90,7 +90,8 @@ not power, arm, or move the aircraft.
 
 Before any servo or motor test, remove all propellers, secure the frame, verify
 power and wiring, and follow the command's confirmation gates. The motor
-utility also requires `ARMING_CHECK=1` and resolved pre-arm failures. Follow
+utility also requires ArduCopter 4.7's `ARMING_SKIPCHK=0` (no checks skipped)
+and resolved pre-arm failures. Follow
 the [bench motor procedure](docs/BENCH_MOTOR_TEST.md).
 
 No live arm, takeoff, or altitude-hold flight has been validated by
@@ -114,6 +115,7 @@ git diff --check
 
 - [Hardware inventory](docs/drone-project.md)
 - [Flight-controller configuration](docs/DRONE_CONFIGURATION.md)
+- [ArduCopter 4.7 no-GPS Loiter review](docs/ARDUCOPTER_4_7_NOGPS_LOITER.md)
 - [MAVLink control and staged flight tests](docs/PI_MAVLINK_CONTROL.md)
 - [Sensor recording and wiring](docs/SENSOR_RECORDING.md)
 - [AprilTag mission architecture](docs/APRILTAG_MISSION.md)

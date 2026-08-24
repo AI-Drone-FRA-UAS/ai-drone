@@ -75,8 +75,8 @@ entry points and `scripts/` directly; do not add duplicate wrappers.
 - Treat live vehicle access as disarmed and read-only unless the user asks for
   an actuator test.
 - Never arm, fly, or run a motor test while optional pre-arm checks are
-  bypassed (`ARMING_CHECK` other than exactly `1`). `drone-motor-test` enforces
-  this in code; do not weaken that gate.
+  bypassed (`ARMING_SKIPCHK` other than exactly `0`). `drone-motor-test`
+  enforces this in code; do not weaken that gate.
 - Sensor, camera, and recording paths must not send arm, disarm, flight-mode,
   throttle, RC override, mission-start, motor, servo, or parameter-write
   commands.

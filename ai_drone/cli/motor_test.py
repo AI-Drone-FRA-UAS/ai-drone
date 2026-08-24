@@ -248,11 +248,12 @@ def main(arguments: list[str] | None = None) -> int:
         connection.target_system = heartbeat.get_srcSystem()
         connection.target_component = heartbeat.get_srcComponent()
 
-        arming_check = float(_request_parameter(connection, "ARMING_CHECK"))
-        if arming_check != 1.0:
+        arming_skipchk = float(_request_parameter(connection, "ARMING_SKIPCHK"))
+        if arming_skipchk != 0.0:
             raise SystemExit(
-                f"ARMING_CHECK={arming_check:g}. Set ARMING_CHECK=1 (all checks) and "
-                "resolve every pre-arm failure before using this utility."
+                f"ARMING_SKIPCHK={arming_skipchk:g}. Set ARMING_SKIPCHK=0 "
+                "(no checks skipped) and resolve every pre-arm failure before "
+                "using this utility."
             )
 
         motor_count = _configured_motor_count(connection)

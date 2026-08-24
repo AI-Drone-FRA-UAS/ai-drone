@@ -39,7 +39,7 @@ The flight controller remains responsible for attitude stabilization and EKF
 fusion.
 
 The controller filters telemetry to the selected vehicle, rejects stale data,
-requires exactly `ARMING_CHECK=1` before an arm path, verifies state
+requires exactly `ARMING_SKIPCHK=0` before an arm path, verifies state
 transitions, caps commands, and uses bounded timeouts. Cleanup lands only a
 flight started by that controller instance.
 
@@ -88,7 +88,7 @@ ceiling, lands, and verifies disarm. Ordinary test runs skip it when
    including rejected arm, stale telemetry, interruption, and landing timeout.
 2. Rigidly mount and calibrate the IMU, compass, optical flow, downward
    rangefinder, and any camera needed by later missions.
-3. In an authorized configuration session, restore `ARMING_CHECK=1`, resolve
+3. In an authorized configuration session, restore `ARMING_SKIPCHK=0`, resolve
    every pre-arm message, and define an appropriate indoor boundary/recovery
    behavior.
 4. With all propellers removed and the frame secured, verify motor numbering

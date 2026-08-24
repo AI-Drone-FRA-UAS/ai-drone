@@ -1,0 +1,6 @@
+# Reviewed behavioral delta for the project drone captured on 2026-08-24.
+# Apply only to that aircraft after a fresh parameter backup and disarmed review.
+# All other project-owned hardware, calibration, output, battery, and serial
+# parameters deliberately remain untouched.
+EK3_SRC1_POSXY,0
+EK3_SRC1_POSZ,1

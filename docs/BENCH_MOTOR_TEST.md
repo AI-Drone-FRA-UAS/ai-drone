@@ -10,9 +10,9 @@ does not test flight control.
 3. Keep hands, cables, the camera ribbon, and clothing outside all motor bells.
 4. Turn on the RC transmitter and keep a second person ready to disconnect the
    LiPo.
-5. Restore `ARMING_CHECK=1` and resolve every reported pre-arm problem. The
-   utility intentionally refuses to run with any other value, including a
-   partial check mask.
+5. Restore ArduCopter 4.7's `ARMING_SKIPCHK=0` and resolve every reported
+   pre-arm problem. The utility intentionally refuses to run when any skip bit
+   is set.
 
 The commands below prefer Tailscale MagicDNS. When Tailscale is offline and the
 laptop is joined to `AI-Drone-Zero`, use `PI_HOST=seb@192.168.4.1` instead.
