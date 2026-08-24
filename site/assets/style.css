@@ -440,3 +440,61 @@ h2:hover .anker, h3:hover .anker { opacity: 1; }
   padding: 8px 0 0; border-top: 1px solid var(--linie-weich);
 }
 .seiten-original b { font-weight: 600; color: var(--text); }
+
+/* --------------------------------------------------------------------------
+   Videokarte mit QR-Code (Flugversuche)
+   Der QR-Code bleibt in beiden Themes dunkel auf weiß, sonst ist er nicht
+   mehr scanbar.
+   -------------------------------------------------------------------------- */
+
+.video-karte {
+  display: flex;
+  gap: 26px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: var(--flaeche);
+  border: 1px solid var(--linie);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin: 24px 0 30px;
+}
+
+.video-qr {
+  flex: none;
+  width: 168px;
+  height: 168px;
+  padding: 10px;
+  background: #ffffff;
+  border-radius: 10px;
+  box-shadow: var(--schatten);
+}
+
+.video-qr svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.video-karte > div:last-child {
+  flex: 1 1 260px;
+}
+
+.video-karte b {
+  display: block;
+  font-size: 1.02rem;
+  margin-bottom: 6px;
+}
+
+.video-karte p {
+  margin: 0 0 14px;
+  color: var(--text-leise);
+}
+
+.hinweis-kasten {
+  background: var(--flaeche);
+  border-left: 3px solid var(--akzent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 14px 18px;
+  margin: 18px 0;
+  color: var(--text-leise);
+}

@@ -5,19 +5,40 @@
     <h1>Projektplakat</h1>
 
     <p>
-      Das Plakat fasst die Projektarbeit auf einer Seite im Format
-      <b>A1 hoch (594 × 841 mm)</b> zusammen: Ziele, Plattform, Systemarchitektur,
-      die Navigation ohne GPS, der Nutzlast-Abwurf, das Sicherheitskonzept und der
-      Projektstand.
+      Das Plakat fasst die Projektarbeit auf einer Seite zusammen: Ziele, Plattform,
+      Systemarchitektur, die Navigation ohne GPS, das erreichte Zwischenergebnis aus
+      <a href="apriltag.html">Tag-Erkennung und Abwurf</a>, die
+      <a href="flugversuche.html">Flugversuche</a> mit ihren drei gemessenen Ursachen und
+      den Projektstand.
     </p>
 
-    <div class="hero-knoepfe" style="margin-bottom:26px">
-      <a class="knopf knopf-primaer" href="assets/plakat.pdf">Druck-PDF öffnen</a>
+    <h2 id="formate"><a class="anker" href="#formate" aria-hidden="true">#</a>Druck-PDF in vier Formaten</h2>
+
+    <p>
+      Gesetzt ist das Plakat in <b>A1 hoch</b>. Die übrigen Formate sind daraus maßstäblich
+      abgeleitet — gleiches Layout, gleiche Vektorschrift, nur andere Blattgröße:
+    </p>
+
+    <div class="hero-knoepfe" style="margin-bottom:20px">
+      <a class="knopf knopf-primaer" href="assets/plakat-a1.pdf">A1 · 594 × 841 mm</a>
       <a class="knopf knopf-sekundaer"
          style="color:var(--text);border-color:var(--linie);background:var(--bg)"
-         href="https://github.com/AI-Drone-FRA-UAS/ai-drone/blob/main/docs/poster/plakat.html"
-         target="_blank" rel="noopener">HTML-Quelle</a>
+         href="assets/plakat-a0.pdf">A0 · 841 × 1189 mm</a>
+      <a class="knopf knopf-sekundaer"
+         style="color:var(--text);border-color:var(--linie);background:var(--bg)"
+         href="assets/plakat-a2.pdf">A2 · 420 × 594 mm</a>
+      <a class="knopf knopf-sekundaer"
+         style="color:var(--text);border-color:var(--linie);background:var(--bg)"
+         href="assets/plakat-a3.pdf">A3 · 297 × 420 mm</a>
     </div>
+
+    <p>
+      <b>A1</b> ist das Format, für das die Schriftgrößen gewählt sind, und die übliche
+      Wahl für eine Posterwand. <b>A0</b> ist derselbe Satz für einen Stand, an dem aus
+      mehreren Metern gelesen wird — das Foto erreicht dort noch rund 185 dpi. <b>A2</b>
+      passt an eine Bürowand, <b>A3</b> ist der Handout- und Korrekturausdruck; auf A3
+      sind die kleinsten Fließtexte nur noch etwa 2,5 mm hoch.
+    </p>
 
     <div class="plakat-bild" style="margin-bottom:30px">
       <img src="assets/plakat-vorschau.jpg" alt="Das A1-Projektplakat in voller Höhe"
@@ -29,20 +50,22 @@
     <p>
       Das Plakat ist eine einzelne HTML-Datei, <code>docs/poster/plakat.html</code>, ohne
       externe Abhängigkeiten. Alle Maße stehen in Millimetern, das Seitenformat setzt eine
-      <code>@page</code>-Regel. Das PDF ist daraus erzeugt und wird mitversioniert, damit
-      niemand für einen Druck erst eine Toolchain aufsetzen muss.
+      <code>@page</code>-Regel. Die PDFs sind daraus erzeugt und werden mitversioniert,
+      damit niemand für einen Druck erst eine Toolchain aufsetzen muss.
     </p>
 
-    <p>PDF neu erzeugen:</p>
+    <p>A1-PDF neu erzeugen:</p>
 
     <pre><code>"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --headless --disable-gpu --no-pdf-header-footer \
-  --print-to-pdf=docs/poster/plakat.pdf \
+  --print-to-pdf=docs/poster/plakat-a1.pdf \
   "file://$PWD/docs/poster/plakat.html"</code></pre>
 
     <p>
-      Alternativ im Browser öffnen und drucken — Papierformat <b>A1</b>, Ränder
-      <b>keine</b>, Option <b>Hintergrundgrafiken</b> aktiviert, Skalierung 100 %.
+      Die anderen drei Formate entstehen daraus durch maßstäbliche Skalierung; das Rezept
+      steht in <code>docs/poster/README.md</code>. Alternativ im Browser öffnen und
+      drucken — Papierformat wählen, Ränder <b>keine</b>, Option
+      <b>Hintergrundgrafiken</b> aktiviert, Skalierung „an Seite anpassen“.
     </p>
 
     <h2 id="inhalt"><a class="anker" href="#inhalt" aria-hidden="true">#</a>Woher der Inhalt stammt</h2>
@@ -60,22 +83,13 @@
         <tbody>
           <tr><td>Ziel des Projekts, Vorgehen</td><td><a href="ziele.html">Ziele und Hardware</a></td></tr>
           <tr><td>Plattform &amp; Hardware, Fliegen ohne GPS</td><td><a href="konfiguration.html">Drohnenkonfiguration</a></td></tr>
-          <tr><td>Systemarchitektur, Autonomer Flug, Sicherheit</td><td><a href="mavlink.html">MAVLink-Steuerung</a></td></tr>
-          <tr><td>Nutzlast-Abwurf</td><td><a href="abwurf.html">Abwurfmechanismus</a></td></tr>
-          <tr><td>Software &amp; Werkzeuge</td><td><a href="architektur.html">Softwarearchitektur</a></td></tr>
+          <tr><td>Zwischenergebnis: Tag erkannt → Last fällt</td><td><a href="apriltag.html">AprilTag-Erkennung und Abwurf</a></td></tr>
+          <tr><td>Flugversuche, Ursachen, Konsequenzen</td><td><a href="flugversuche.html">Flugversuche und Absturz</a></td></tr>
+          <tr><td>Rahmen &amp; 3D-Druck</td><td><a href="rahmen.html">Rahmen und 3D-Druck</a></td></tr>
+          <tr><td>Systemarchitektur, Software &amp; Werkzeuge</td><td><a href="architektur.html">Softwarearchitektur</a></td></tr>
         </tbody>
       </table>
     </div>
-
-    <h2 id="offen"><a class="anker" href="#offen" aria-hidden="true">#</a>Was noch einzutragen ist</h2>
-
-    <ul>
-      <li><b>Foto 2</b> in der rechten Spalte: ein Testflug im Sicherheitsnetz oder ein
-        Screenshot der Personenerkennung, danach die Bildunterschrift zu Abb. 3.</li>
-      <li>Der orange umrandete Bereich <b>Autonomer Flug</b>: Ergebnisse der Flugversuche
-        sowie Erkenntnisse und Grenzen. Der Ansatz ist beschrieben, die Zeilen darunter
-        sind bewusst frei.</li>
-    </ul>
 
     <div class="seiten-fuss">
       <span>Diese Seite wird aus dem Repository erzeugt.</span>

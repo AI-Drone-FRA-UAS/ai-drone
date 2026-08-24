@@ -42,17 +42,26 @@ site/
 │   ├── style.css       the design, matching the A1 poster's palette
 │   └── plakat-vorschau.jpg
 ├── content/
-│   ├── index.html      the German landing page, hand-written
-│   └── plakat.html     the poster page, hand-written
-└── _build/             generated output, git-ignored
+│   ├── index.html         the German landing page, hand-written
+│   ├── apriltag.html      AprilTag detection and the drop, hand-written
+│   ├── flugversuche.html  the flight attempts and the crash, hand-written
+│   └── plakat.html        the poster page, hand-written
+└── _build/                generated output, git-ignored
 ```
 
-Photos and the poster PDF are copied out of `docs/poster/` at build time, so
+Photos and the poster PDFs are copied out of `docs/poster/` at build time, so
 there is only one copy of each in the repository.
+
+Every `Page` without a `source` reads its markup from `content/<slug>.html`.
+Those four pages are written by hand because they present material that has no
+single Markdown document behind it — the landing page, the two result pages,
+and the poster page.
 
 ## Adding a page
 
-Add a `Page(...)` entry to `PAGES` in [build.py](build.py):
+Add a `Page(...)` entry to `PAGES` in [build.py](build.py). A page rendered from
+a Markdown file gets a `source`; a hand-written page leaves it out and gets a
+`content/<slug>.html` instead:
 
 ```python
 Page(

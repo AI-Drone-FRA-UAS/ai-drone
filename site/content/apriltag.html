@@ -1,0 +1,132 @@
+<div class="doku">
+  <nav class="seitennav"><!--NAV--></nav>
+  <main class="inhalt">
+    <div class="brotkrumen"><a href="index.html">Start</a> › Projekt</div>
+    <h1>AprilTag-Erkennung und Abwurf</h1>
+    <p class="seiten-lead">
+      Das erreichte Zwischenergebnis: Marker erkennen und daraufhin die Nutzlast fallen
+      lassen.
+    </p>
+
+    <p>
+      Die Kette <b>Kamera → Erkennung → Aktuator funktioniert</b>. Die nach unten
+      gerichtete IMX500-Kamera erkennt <code>tag36h11</code>-Marker, und sobald ein Tag
+      stabil erkannt ist, öffnet der Servo den Haltebügel und lässt die Nutzlast fallen.
+      Verifiziert ist das am Boden und handgeführt — <b>nicht im autonomen Flug</b>; siehe
+      <a href="flugversuche.html">Flugversuche und Absturz</a>.
+    </p>
+
+    <h2 id="warum"><a class="anker" href="#warum" aria-hidden="true">#</a>Warum AprilTags statt Personenerkennung</h2>
+
+    <p>
+      Ursprünglich sollte ein neuronales Netz Personen erkennen und die Drohne ihnen
+      folgen. Für einen gezielten Abwurf ist ein <b>geometrischer Marker die bessere
+      Wahl</b>: Ein AprilTag hat eine eindeutige ID, seine vier Ecken lassen sich
+      subpixelgenau bestimmen, und aus ihnen folgt bei bekannter Kamerakalibrierung die
+      vollständige Lage des Tags relativ zur Kamera. Eine neuronale Bounding Box liefert
+      dagegen nur ein Rechteck ohne belastbare Geometrie.
+    </p>
+
+    <p>
+      Deshalb wird der KI-Beschleuniger der IMX500 für die Tag-Erkennung <b>nicht</b>
+      benutzt: Bei einem Fiducial zählen genaue Ecken, nicht eine gelernte Klassifikation.
+    </p>
+
+    <h2 id="backends"><a class="anker" href="#backends" aria-hidden="true">#</a>Zwei Detektor-Backends</h2>
+
+    <ul>
+      <li><b>AprilTag 3.4.2</b> nativ aus dem Debian-Paket. Bevorzugt, weil es
+        Hamming-Korrektur und Decision Margin meldet — zwei Maße dafür, wie sicher eine
+        Erkennung ist.</li>
+      <li><b>OpenCV 4.11 <code>ArucoDetector</code></b> mit <code>DICT_APRILTAG_36h11</code>
+        als Rückfallebene und für Kalibrierung, Pose-Berechnung, Reprojektionsprüfung und
+        die Bildannotation.</li>
+    </ul>
+
+    <h2 id="durchsatz"><a class="anker" href="#durchsatz" aria-hidden="true">#</a>Durchsatz auf dem Pi Zero 2 W</h2>
+
+    <p>
+      Gemessen am 18.08.2026, ohne Tag im Bild — es sind reine Durchsatzwerte, keine
+      Erkennungsraten:
+    </p>
+
+    <div class="tabelle-huelle">
+      <table>
+        <thead>
+          <tr><th>Backend</th><th>Auflösung</th><th>Aufnahme + Erkennung</th><th>Nur Detektor</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>AprilTag 3 nativ</td><td>640 × 480</td><td>29,7 fps</td><td>36,5 fps</td></tr>
+          <tr><td>AprilTag 3 nativ</td><td>1280 × 960</td><td>13,2 fps</td><td>15,1 fps</td></tr>
+          <tr><td>OpenCV ArUco</td><td>640 × 480</td><td>29,1 fps</td><td>76,2 fps</td></tr>
+          <tr><td>OpenCV ArUco</td><td>1280 × 960</td><td>14,9 fps</td><td>20,4 fps</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Bei 640 × 480 begrenzt die Bildaufnahme, nicht der Detektor. Für den Abwurf reicht
+      das deutlich: Der Marker steht still, und die Freigabe verlangt ohnehin mehrere
+      aufeinanderfolgende Bilder.
+    </p>
+
+    <h2 id="ausloesung"><a class="anker" href="#ausloesung" aria-hidden="true">#</a>Wie der Abwurf ausgelöst wird</h2>
+
+    <ul>
+      <li>Ausgelöst wird erst, wenn <b>mehrere aufeinanderfolgende Bilder</b> dieselbe
+        erlaubte Tag-ID zeigen, ohne Hamming-Korrektur und mit ausreichendem Decision
+        Margin.</li>
+      <li>Der Servo wird direkt vom Raspberry Pi über einen GPIO-Ausgang gestellt, im
+        sicheren Bereich <code>900–2100 µs</code> um die Neutrallage <code>1500 µs</code>.</li>
+      <li>Die Freigabe ist <b>verriegelt</b>: Sie kann sich innerhalb eines Laufs nicht
+        wiederholen.</li>
+      <li>Der Servo zieht anlaufend bis 1,6 A. Er hängt deshalb an einem eigenen
+        geregelten 5-V-Zweig mit gemeinsamer Masse, nicht an der Logikversorgung des Pi.</li>
+    </ul>
+
+    <h2 id="kommandos"><a class="anker" href="#kommandos" aria-hidden="true">#</a>Kommandos</h2>
+
+    <p>Erkennung auf dem Pi starten, vom Entwicklungsrechner aus:</p>
+
+    <pre><code>uv run drone-deploy --apriltag --backend auto --tag-size 0.160</code></pre>
+
+    <p class="hinweis-kasten">
+      Der Erkennungs- und Abwurfcode entsteht auf den Arbeitsbranches
+      (<code>preflight-and-nogps-takeoff</code> für den Flugcode,
+      <code>experimental-*</code> für die Abwurf-Mission) und ist noch nicht nach
+      <code>main</code> übernommen. Diese Seite beschreibt den erreichten Stand, nicht
+      den Inhalt des Hauptbranches.
+    </p>
+
+    <p>
+      <code>--tag-size</code> ist die gemessene Kantenlänge des schwarzen Rahmens in
+      Metern; die mitgelieferten A3-Tags messen 0,224 m. Das Kommando armiert nicht,
+      bewegt die Drohne nicht und stellt den Servo nicht — Erkennung und Aktuator sind im
+      Repository bewusst getrennte Werkzeuge.
+    </p>
+
+    <h2 id="grenzen"><a class="anker" href="#grenzen" aria-hidden="true">#</a>Grenzen, die bewusst so bleiben</h2>
+
+    <ul>
+      <li><b>Ohne Kalibrierung keine metrische Distanz.</b> Ohne hinterlegte Intrinsics
+        meldet die Software nur IDs und Eckpunkte statt einer erfundenen Entfernung. Eine
+        Kalibrierung gilt außerdem nur für genau denselben Fokus, Sensorausschnitt und
+        dieselbe Auflösung wie im Flug.</li>
+      <li><b>Die Kamera muss starr sitzen</b> und nach unten schauen (Nadir), mit
+        entlastetem Flachbandkabel und fixiertem Fokus. Solange sie das nicht tut, ist
+        jede Posenangabe wertlos.</li>
+      <li><b>Ein nach unten gerichteter Aufbau sieht keine Hindernisse.</b> Der LiDAR
+        misst Höhe, der optische Fluss Geschwindigkeit, die Kamera den Boden — nichts
+        davon sieht eine Wand voraus.</li>
+    </ul>
+
+    <div class="seiten-fuss">
+      <span>Diese Seite fasst den Stand der Erkennung zusammen.</span>
+    </div>
+
+    <div class="blaettern">
+      <a href="ziele.html"><span>Zurück</span><b>Ziele &amp; Hardware</b></a>
+      <a class="weiter" href="architektur.html"><span>Weiter</span><b>Softwarearchitektur</b></a>
+    </div>
+  </main>
+</div>

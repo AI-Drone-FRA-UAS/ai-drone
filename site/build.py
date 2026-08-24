@@ -23,12 +23,11 @@ from urllib.parse import urlsplit
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-
 SITE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SITE_DIR.parent
 BUILD_DIR = SITE_DIR / "_build"
 
-SITE_TITLE = "KI-Drohne mit Personenerkennung"
+SITE_TITLE = "KI-Drohne mit AprilTag-Abwurf"
 REPO_URL = "https://github.com/AI-Drone-FRA-UAS/ai-drone"
 BLOB_URL = f"{REPO_URL}/blob/main"
 
@@ -73,6 +72,13 @@ PAGES: list[Page] = [
         lead="Was gebaut werden soll, mit welcher Ausrüstung und auf welcher Drohne.",
     ),
     Page(
+        slug="apriltag",
+        title="AprilTag-Erkennung und Abwurf",
+        group="Projekt",
+        nav_title="AprilTag & Abwurf",
+        lead="Das erreichte Zwischenergebnis: Marker erkennen und daraufhin die Nutzlast fallen lassen.",
+    ),
+    Page(
         slug="architektur",
         title="Softwarearchitektur",
         source="docs/SOFTWARE_ARCHITECTURE.md",
@@ -112,12 +118,19 @@ PAGES: list[Page] = [
         lead="Die Druckteile im Repository, ihre Slicer-Einstellungen und was noch fehlt.",
     ),
     Page(
+        slug="flugversuche",
+        title="Flugversuche und Absturz",
+        group="Fliegen",
+        nav_title="Flugversuche & Absturz",
+        lead="Jeder Startversuch, der Absturz vom 21.08. und die drei gemessenen Ursachen.",
+    ),
+    Page(
         slug="mavlink",
         title="Autonome MAVLink-Steuerung",
         source="docs/PI_MAVLINK_CONTROL.md",
         group="Fliegen",
         nav_title="MAVLink-Steuerung",
-        lead="DroneController, Body-Frame-Geschwindigkeiten, Personenfolge und die Sicherheitsregeln.",
+        lead="DroneController, Geschwindigkeiten im Body-Frame und die Sicherheitsregeln.",
     ),
     Page(
         slug="verbindung",
@@ -194,7 +207,10 @@ EXTRA_LINKS: dict[str, str] = {
 ASSETS = {
     "docs/poster/fotos/drohne-flug-quer.jpg": "assets/drohne-flug-quer.jpg",
     "docs/poster/fotos/drohne-flug-hoch.jpg": "assets/drohne-flug-hoch.jpg",
-    "docs/poster/plakat.pdf": "assets/plakat.pdf",
+    "docs/poster/plakat-a0.pdf": "assets/plakat-a0.pdf",
+    "docs/poster/plakat-a1.pdf": "assets/plakat-a1.pdf",
+    "docs/poster/plakat-a2.pdf": "assets/plakat-a2.pdf",
+    "docs/poster/plakat-a3.pdf": "assets/plakat-a3.pdf",
 }
 
 
@@ -436,7 +452,7 @@ FOOT = """<footer class="fuss">
     </div>
     <div class="fuss-recht">
       <a href="{repo}" target="_blank" rel="noopener">Quellcode auf GitHub</a> ·
-      <a href="assets/plakat.pdf">Plakat als PDF</a>
+      <a href="assets/plakat-a1.pdf">Plakat als PDF (A1)</a>
     </div>
   </div>
 </footer>
@@ -508,14 +524,17 @@ def doc_page(page: Page, rendered: Rendered) -> str:
 
 
 def _special_pages() -> dict[str, str]:
-    """Hand-written page bodies, keyed by slug."""
+    """Hand-written page bodies, one ``content/<slug>.html`` per source-less page."""
 
-    index_body = (SITE_DIR / "content" / "index.html").read_text(encoding="utf-8")
-    poster_body = (SITE_DIR / "content" / "plakat.html").read_text(encoding="utf-8")
-    return {
-        "index": index_body,
-        "plakat": poster_body.replace("<!--NAV-->", _nav("plakat")),
-    }
+    bodies: dict[str, str] = {}
+    for page in PAGES:
+        if page.source:
+            continue
+        markup = (SITE_DIR / "content" / f"{page.slug}.html").read_text(
+            encoding="utf-8"
+        )
+        bodies[page.slug] = markup.replace("<!--NAV-->", _nav(page.slug))
+    return bodies
 
 
 def build() -> None:
@@ -553,7 +572,8 @@ def build() -> None:
                 description=page.lead
                 or (
                     "Projektarbeit an der Frankfurt UAS: eine FPV-Drohne wird zur "
-                    "teilautonomen Indoor-Plattform mit KI-Personenerkennung."
+                    "GPS-freien Indoor-Plattform, die AprilTags erkennt und eine "
+                    "Nutzlast abwirft."
                 ),
                 body=specials[page.slug],
                 active=page.slug,

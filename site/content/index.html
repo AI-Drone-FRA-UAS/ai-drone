@@ -3,11 +3,11 @@
   <div class="hero-verlauf"></div>
   <div class="hero-inner">
     <p class="hero-kicker">Frankfurt UAS · Fachbereich 2 · Projektarbeit</p>
-    <h1>KI-Drohne mit Personen&shy;erkennung</h1>
+    <h1>KI-Drohne mit AprilTag-Abwurf</h1>
     <p class="hero-text">
-      Von der FPV-Renndrohne zur autonomen Indoor-Plattform: ArduPilot als Autopilot,
-      ein Raspberry Pi als Companion-Computer, On-Sensor-KI der IMX500-Kamera und ein
-      servogesteuerter Lastenabwurf.
+      Von der FPV-Renndrohne zur GPS-freien Indoor-Plattform: ArduPilot als Autopilot,
+      ein Raspberry Pi als Companion-Computer, AprilTag-Erkennung auf der Kamera und ein
+      servogesteuerter Lastenabwurf — mit den Flugversuchen, die dahin geführt haben.
     </p>
     <div class="hero-knoepfe">
       <a class="knopf knopf-primaer" href="ziele.html">Dokumentation lesen</a>
@@ -31,13 +31,14 @@
       manuell per Fernsteuerung geflogen wird. Sie hat kein GPS-taugliches Einsatzgebiet,
       keinen Bordrechner und keine Möglichkeit, etwas zu transportieren. Ziel der
       Projektarbeit ist der Umbau zu einer teilautonomen Plattform: stabil fliegen ohne
-      GPS, die Umgebung mit einer KI-Kamera auswerten und eine Nutzlast gezielt abwerfen.
+      GPS, am Boden angebrachte AprilTags erkennen und über einem Tag eine Nutzlast
+      abwerfen.
     </p>
     <div class="kennzahlen">
-      <div class="kennzahl"><b>3,5"</b><span>CineWhoop mit Propellerschutz — indoortauglich</span></div>
-      <div class="kennzahl"><b>800 cm</b><span>maximale LiDAR-Reichweite nach unten</span></div>
-      <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für Position Hold nötig</span></div>
-      <div class="kennzahl"><b>&lt; 1 m</b><span>Flughöhe in allen autonomen Tests</span></div>
+      <div class="kennzahl"><b>29 fps</b><span>Aufnahme + Tag-Erkennung bei 640 × 480 auf dem Pi</span></div>
+      <div class="kennzahl"><b>36h11</b><span>AprilTag-Familie, zwei Detektor-Backends</span></div>
+      <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für die Navigation nötig</span></div>
+      <div class="kennzahl"><b>500+</b><span>Offline-Tests, 11 injizierbare Fehlerbilder</span></div>
     </div>
   </div>
 </section>
@@ -66,7 +67,7 @@
           <path d="M165 110 V141 H380 V166" />
           <path d="M755 110 V141 H540 V166" />
           <path d="M380 276 V310 H155 V338" />
-          <path d="M460 276 V338" />
+          <path d="M280 382 H341" />
           <path d="M540 276 V310 H765 V338" />
           <path d="M155 440 V464" />
         </g>
@@ -76,7 +77,7 @@
           <text x="272" y="135">USB · MAVLink</text>
           <text x="592" y="135">ELRS-Funk</text>
           <text x="196" y="304">UART4 · MAVLink 2</text>
-          <text x="470" y="308">PWM</text>
+          <text x="292" y="374">GPIO</text>
           <text x="600" y="304">UART5</text>
           <text x="165" y="457">CSI</text>
         </g>
@@ -110,16 +111,16 @@
         <text x="344" y="243" font-family="Inter, sans-serif" font-size="12"
               fill="rgba(255,255,255,.82)">Motorregelung · Flugmodi · Failsafe</text>
         <text x="344" y="262" font-family="Inter, sans-serif" font-size="12"
-              fill="rgba(255,255,255,.82)">Servo-Ausgang für den Abwurf</text>
+              fill="rgba(255,255,255,.82)">Höhe aus dem Barometer, Lage aus der IMU</text>
 
         <!-- Raspberry Pi -->
         <rect x="30" y="344" width="250" height="96" rx="10" fill="var(--blau-500)" />
         <text x="52" y="374" font-family="Inter, sans-serif" font-size="14.5"
               font-weight="700" fill="#ffffff">Raspberry Pi Zero 2 WH</text>
         <text x="52" y="396" font-family="Inter, sans-serif" font-size="12"
-              fill="rgba(255,255,255,.88)">Python · pymavlink · modlib</text>
+              fill="rgba(255,255,255,.88)">Python · pymavlink · OpenCV</text>
         <text x="52" y="415" font-family="Inter, sans-serif" font-size="12"
-              fill="rgba(255,255,255,.88)">Follow-Logik &amp; MJPEG-Stream</text>
+              fill="rgba(255,255,255,.88)">Tag-Erkennung → Abwurf-Trigger</text>
 
         <!-- Abwurf -->
         <rect x="345" y="344" width="230" height="76" rx="10" fill="var(--akzent)" />
@@ -140,16 +141,15 @@
         <!-- Kamera -->
         <rect x="30" y="470" width="250" height="70" rx="10" fill="#33495e" />
         <text x="52" y="500" font-family="Inter, sans-serif" font-size="14.5"
-              font-weight="700" fill="#ffffff">IMX500 AI-Kamera</text>
+              font-weight="700" fill="#ffffff">IMX500-Kamera (Nadir)</text>
         <text x="52" y="521" font-family="Inter, sans-serif" font-size="12"
-              fill="rgba(255,255,255,.88)">NanoDet läuft auf dem Sensor</text>
+              fill="rgba(255,255,255,.88)">AprilTag 3 / ArUco · tag36h11</text>
       </svg>
     </div>
     <p class="bildunterschrift">
-      Der Pi berechnet nur <em>wohin</em> geflogen werden soll und schickt
-      Geschwindigkeitsbefehle. <em>Wie</em> die Drohne dabei stabil bleibt, entscheidet
-      allein ArduPilot — und ein Kippschalter auf der Fernsteuerung beendet jederzeit
-      den autonomen Betrieb.
+      Der Pi entscheidet nur <em>was</em> geschehen soll — anfliegen, abwerfen — und
+      schickt Geschwindigkeitsbefehle. <em>Wie</em> die Drohne dabei stabil bleibt,
+      entscheidet allein ArduPilot, und die Fernsteuerung hat jederzeit Vorrang.
     </p>
   </div>
 </section>
@@ -170,15 +170,16 @@
         </p>
         <span class="karte-mehr">Parameter und verifizierter Stand →</span>
       </a>
-      <a class="karte" href="mavlink.html">
-        <span class="karte-marke">Autonomie</span>
-        <h3>KI direkt auf dem Sensor</h3>
+      <a class="karte" href="apriltag.html">
+        <span class="karte-marke">Erkennung</span>
+        <h3>Tag erkannt → Last fällt</h3>
         <p>
-          Das NanoDet-Modell läuft auf der IMX500-Kamera selbst, nicht auf der CPU des Pi.
-          Der Pi bekommt fertige Detektionen, rechnet daraus Ablage und geschätzte Distanz
-          zur Person und sendet Geschwindigkeitsbefehle im Body-Frame an den Autopiloten.
+          Die nach unten gerichtete Kamera erkennt <code>tag36h11</code>-Marker, und sobald
+          ein Tag über mehrere Bilder stabil erkannt ist, öffnet der Servo den Haltebügel.
+          Ein geometrischer Marker liefert dafür, was eine neuronale Bounding Box nicht
+          kann: eine eindeutige ID und subpixelgenaue Ecken.
         </p>
-        <span class="karte-mehr">Regelung und Sicherheitswächter →</span>
+        <span class="karte-mehr">Backends, Durchsatz und Grenzen →</span>
       </a>
       <a class="karte" href="abwurf.html">
         <span class="karte-marke">Nutzlast</span>
@@ -221,8 +222,14 @@
       </div>
       <div class="status-zeile">
         <span class="status-punkt">✓</span>
-        <span><b>Personenerkennung</b>
-          NanoDet auf der IMX500, annotierter Live-Stream als MJPEG vom Pi.</span>
+        <span><b>AprilTag-Erkennung</b>
+          <code>tag36h11</code> auf dem Pi, zwei Detektor-Backends, Durchsatz vermessen.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Abwurf durch die Erkennung ausgelöst</b>
+          Der Servo öffnet den Haltebügel, sobald ein Tag stabil erkannt ist — am Boden
+          und handgeführt verifiziert.</span>
       </div>
       <div class="status-zeile">
         <span class="status-punkt">✓</span>
@@ -232,7 +239,7 @@
       <div class="status-zeile offen">
         <span class="status-punkt">○</span>
         <span><b>Abwurf am Flight Controller</b>
-          Servo auf der Werkbank und am Pi getestet; der Servo-Ausgang des GN745 ist noch
+          Der Servo hängt am Raspberry Pi; ein Ausgang des GN745 ist als zweiter Weg noch
           nicht zugewiesen.</span>
       </div>
       <div class="status-zeile offen">
@@ -243,9 +250,10 @@
       </div>
       <div class="status-zeile offen">
         <span class="status-punkt">○</span>
-        <span><b>Autonome Flugversuche</b>
-          Regelkette steht und ist simuliert geflogen; die Vermessung der Regelgüte im
-          Sicherheitsnetz steht aus.</span>
+        <span><b>Autonome Mission im Flug</b>
+          Nicht erreicht. Am 21.08. wurde die Drohne bei einem Startversuch zerstört; die
+          drei gemessenen Ursachen und alle Konsequenzen stehen unter
+          <a href="flugversuche.html">Flugversuche und Absturz</a>.</span>
       </div>
     </div>
   </div>
@@ -264,6 +272,16 @@
         <span class="karte-marke">Projekt</span>
         <h3>Ziele und Hardware</h3>
         <p>Die fünf Teilziele der Projektarbeit, die gestellte Ausrüstung und die vollständige Spezifikation des Drohnenaufbaus.</p>
+      </a>
+      <a class="karte" href="apriltag.html">
+        <span class="karte-marke">Projekt</span>
+        <h3>AprilTag-Erkennung und Abwurf</h3>
+        <p>Warum ein geometrischer Marker statt eines neuronalen Netzes, die zwei Backends, der gemessene Durchsatz und wie der Abwurf freigegeben wird.</p>
+      </a>
+      <a class="karte" href="flugversuche.html">
+        <span class="karte-marke">Fliegen</span>
+        <h3>Flugversuche und Absturz</h3>
+        <p>Jeder Startversuch, das Video des Absturzes, die drei gemessenen Ursachen und was daraus im Code geworden ist.</p>
       </a>
       <a class="karte" href="architektur.html">
         <span class="karte-marke">Projekt</span>
@@ -288,7 +306,7 @@
       <a class="karte" href="mavlink.html">
         <span class="karte-marke">Fliegen</span>
         <h3>MAVLink-Steuerung</h3>
-        <p>Der <code>DroneController</code>, Geschwindigkeiten im Body-Frame, die Personenfolge und die Sicherheitsregeln.</p>
+        <p>Der <code>DroneController</code>, Geschwindigkeiten im Body-Frame, die Wächter und die Sicherheitsregeln.</p>
       </a>
       <a class="karte" href="verbindung.html">
         <span class="karte-marke">Fliegen</span>
@@ -336,12 +354,12 @@
         <p class="augenbraue">Projektplakat</p>
         <h2>Das Projekt auf einer A1-Seite</h2>
         <p class="band-lead">
-          Ziele, Plattform, Architektur, Sicherheitskonzept und Projektstand — gesetzt für
-          den Druck im Format A1 hoch (594 × 841 mm). Die Quelle ist eine einzelne
-          HTML-Datei im Repository, das PDF wird daraus erzeugt.
+          Ziele, Plattform, Architektur, die Flugversuche und der Projektstand — gesetzt
+          für den Druck in A0, A1, A2 und A3 hoch. Die Quelle ist eine einzelne HTML-Datei
+          im Repository, die PDFs werden daraus erzeugt.
         </p>
         <div class="hero-knoepfe" style="margin-bottom:0">
-          <a class="knopf knopf-primaer" href="assets/plakat.pdf">PDF ansehen</a>
+          <a class="knopf knopf-primaer" href="assets/plakat-a1.pdf">PDF ansehen (A1)</a>
           <a class="knopf knopf-sekundaer" href="plakat.html"
              style="color:var(--text);border-color:var(--linie);background:var(--bg)">Details</a>
         </div>
