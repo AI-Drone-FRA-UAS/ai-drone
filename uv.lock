@@ -16,7 +16,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "future" },
-    { name = "mavproxy" },
     { name = "numpy" },
     { name = "pillow" },
     { name = "pymavlink" },
@@ -38,7 +37,6 @@ raspi = [
 [package.metadata]
 requires-dist = [
     { name = "future", specifier = ">=1.0.0" },
-    { name = "mavproxy", specifier = ">=1.8.74" },
     { name = "numpy", specifier = ">=2.3.5" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "pymavlink", specifier = ">=2.4.49" },
@@ -348,21 +346,6 @@ wheels = [
 ]
 
 [[package]]
-name = "mavproxy"
-version = "1.8.74"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pymavlink" },
-    { name = "pynmeagps" },
-    { name = "pyserial" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/84/45/bcc0fb129d21bc750f2752c963c35b706c2aad8b9b07d81fe0b465e521a0/mavproxy-1.8.74.tar.gz", hash = "sha256:083db2eb11e960987bfd3ec0b0007758531fd93f775141db279af56f0a95a34c", size = 27889926, upload-time = "2025-08-01T23:39:07.263Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/ae/a4903e8231cc2563af8f215e4ce89374ac7f5ff5996a372494d74ea53ae3/mavproxy-1.8.74-py3-none-any.whl", hash = "sha256:8951fe9d76fc8f3ba56f993e43c1fc0f559f6cfdb5cc7aca71b96d1d557f0ebb", size = 28764115, upload-time = "2025-08-01T23:39:04.574Z" },
-]
-
-[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -582,15 +565,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/41/bb/49b83c6d212751c88a29cebe413c940ee1d0b7991a667710689eb0cd648e/pymavlink-2.4.49-cp313-cp313-win32.whl", hash = "sha256:9f14bbe1ce3d5c0af4994f0f76d1a8d0c2f915d7dcb7645c1ecba42eeff89536", size = 6230635, upload-time = "2025-08-01T23:32:33.613Z" },
     { url = "https://files.pythonhosted.org/packages/1a/c4/d3e9e414dd7ba0124ef07d33d9492cc01db1b76ae3cec45443ec4d6a7935/pymavlink-2.4.49-cp313-cp313-win_amd64.whl", hash = "sha256:9777a0375ebcda0efda3f4eae6d8d2e5ce6de8e26c2f0ac7be1a016d0d386b82", size = 6242260, upload-time = "2025-08-01T23:32:35.256Z" },
     { url = "https://files.pythonhosted.org/packages/e5/36/52616b4fdd076177f1ba22e6ef40782b48e14efb47fce2c3bd4f8496ec23/pymavlink-2.4.49-cp313-cp313-win_arm64.whl", hash = "sha256:712ee4240a9489c6dab6158882c7e1f37516c5951db5841cd408ad7b4c6db0d4", size = 6231575, upload-time = "2025-08-01T23:32:36.845Z" },
-]
-
-[[package]]
-name = "pynmeagps"
-version = "1.1.5"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/45/4f/a42a5bdd4983d13cf68bfde8a045a61be89bf61682ec18ddcbc746a91075/pynmeagps-1.1.5.tar.gz", hash = "sha256:e903c502e15ec7e8fcbd0bc68121470b548448518d89be5b681a2a8e093984bc", size = 99329, upload-time = "2026-06-12T08:55:42.79Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/23/e682493256f56c9a4576838ff52b6585a63e43cbe75664a918f4af2e2807/pynmeagps-1.1.5-py3-none-any.whl", hash = "sha256:8bbe45ba3c64647deee6dfccbd3dc7725de5475372cd7bdf648520da0b22e58a", size = 64672, upload-time = "2026-06-12T08:55:41.326Z" },
 ]
 
 [[package]]

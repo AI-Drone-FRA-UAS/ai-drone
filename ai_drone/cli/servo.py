@@ -142,7 +142,7 @@ def main(arguments: list[str] | None = None) -> int:
     if not is_raspberry_pi():
         print("ERROR: This command must be run on a Raspberry Pi.", file=sys.stderr)
         print(
-            "Run it via 'uv run drone-deploy --servo --mode <mode> "
+            "Run it via 'uv run drone-deploy --run servo -- --mode <mode> "
             f"--confirm-actuation {ACTUATION_CONFIRMATION}' from the laptop.",
             file=sys.stderr,
         )

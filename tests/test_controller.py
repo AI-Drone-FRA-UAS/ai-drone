@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -145,22 +144,6 @@ def test_land_timeout_never_force_disarms(monkeypatch) -> None:
         controller.land(timeout=1.0)
 
     connection.arducopter_disarm.assert_not_called()
-
-
-def test_velocity_command_is_bounded_and_uses_body_ned() -> None:
-    controller = DroneController(device="udp:127.0.0.1:14550")
-    connection = MagicMock()
-    controller.connection = connection
-    controller.is_armed = controller.is_flying = True
-    controller._flight_started_by_controller = True
-    controller.send_velocity_body(0.5, 0.0, -0.1, 15.0)
-    values = connection.mav.set_position_target_local_ned_send.call_args.args
-    assert values[3] == mavlink.MAV_FRAME_BODY_NED
-    assert values[4] == 0x05C7
-    assert values[8:11] == (0.5, 0.0, -0.1)
-    assert math.isclose(values[15], math.radians(15.0))
-    with pytest.raises(ValueError):
-        controller.send_velocity_body(float("nan"), 0.0, 0.0)
 
 
 def test_flight_confirmation_is_checked_before_device_access(monkeypatch) -> None:

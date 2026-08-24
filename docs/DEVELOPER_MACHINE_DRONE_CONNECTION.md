@@ -45,34 +45,29 @@ Serial access commonly uses `uucp` on Arch Linux and `dialout` on Debian or
 Ubuntu. Add the user to the applicable group and log in again; do not solve the
 problem with a permanent world-writable `chmod`.
 
-## Inspect with project tools
+## Inspect
 
-The normal read-only health check is:
+Capture a best-effort read-only report over direct USB:
 
 ```bash
-uv run drone-health --usb-only
+uv run drone-inspect --device /dev/ttyACM0 --duration 10
 ```
 
-To verify both direct USB and the Pi UART path:
+To inspect through the Pi UART instead, deploy and run the same inspector:
 
 ```bash
-uv run drone-health
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+  uv run drone-deploy --run inspect -- --duration 10
 ```
 
-Each successful path must receive a heartbeat and a response to a read-only
-`SYSID_THISMAV` parameter request.
+The manifest distinguishes a live flight-controller heartbeat, downward and
+forward range streams, optical flow, camera frames, and AprilTags. Missing
+components are reported rather than failing the run.
 
-For an interactive expert console:
-
-```bash
-uv run drone-console
-```
-
-`drone-console` prefers the stable by-id path, falls back to `/dev/ttyACM*`,
-and uses 115200 baud. Override when necessary:
+MAVProxy remains available as a separately installed expert tool:
 
 ```bash
-uv run drone-console --device /dev/ttyACM0 --baud 115200
+mavproxy.py --master=/dev/ttyACM0 --baudrate=115200
 ```
 
 Useful read-only MAVProxy commands are:
@@ -113,18 +108,6 @@ fuser /dev/ttyACM0
 
 Confirm the cable carries data, the selected path exists, no process owns it,
 and the baud rate is 115200.
-
-### MAVProxy import failure
-
-Use the locked project environment:
-
-```bash
-uv sync
-uv run drone-console
-```
-
-The repository declares MAVProxy's required compatibility dependencies. Do not
-add ad hoc packages unless the locked environment itself is being updated.
 
 ### Traceback during shutdown
 

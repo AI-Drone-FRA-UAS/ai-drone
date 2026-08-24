@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "future>=1.0.0",
-    "mavproxy>=1.8.74",
     "numpy>=2.3.5",
     "pillow>=12.2.0",
     "pymavlink>=2.4.49",
@@ -14,19 +13,13 @@ dependencies = [
 ]
 
 [project.scripts]
-autoconnect = "ai_drone.link.connect:auto_main"
-drone-apriltag = "ai_drone.cli.apriltag:main"
-drone-config-export = "ai_drone.cli.config_export:main"
+drone-connect = "ai_drone.link.connect:main"
 drone-config-sync = "ai_drone.config.sync:main"
-drone-console = "ai_drone.mavlink.console:main"
 drone-control = "ai_drone.cli.control:main"
 drone-deploy = "ai_drone.link.deploy:main"
-drone-health = "ai_drone.mavlink.health:main"
-drone-lidar = "ai_drone.cli.lidar:main"
+drone-inspect = "ai_drone.cli.record:main"
 drone-motor-test = "ai_drone.cli.motor_test:main"
-drone-record = "ai_drone.cli.record:main"
 drone-servo = "ai_drone.cli.servo:main"
-manuconnect = "ai_drone.link.connect:manual_main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13"]
@@ -78,10 +71,9 @@ non_dev_dependency_groups = ["raspi"]
 
 [tool.deptry.per_rule_ignores]
 # DEP002: declared on purpose, never imported by name.
-#   mavproxy - invoked as a subprocess CLI by drone-console.
 #   pyserial, future - runtime requirements of pymavlink's serial transport.
 #   pillow - required by the Pi camera/JPEG path via Picamera2.
-DEP002 = ["mavproxy", "pyserial", "future", "pillow"]
+DEP002 = ["pyserial", "future", "pillow"]
 # DEP001: Pi-native packages installed from Debian apt, not from PyPI, and
 # imported lazily inside Pi-only execution paths.  The Pi venv is created with
 # --system-site-packages so these resolve at runtime; see CLAUDE.md.
@@ -95,3 +87,4 @@ opencv-python = ["cv2"]
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]
 testpaths = ["tests"]
+markers = ["sitl: opt-in ArduCopter software-in-the-loop integration tests"]

@@ -22,17 +22,17 @@ adapter selected only by a broad auto-detection heuristic.
 Preview first:
 
 ```bash
-USB_IFACE=usb0 uv run autoconnect --dry-run
+USB_IFACE=usb0 uv run drone-connect --dry-run
 ```
 
 Then connect through the normal transport sequence or select USB directly:
 
 ```bash
-USB_IFACE=usb0 uv run autoconnect
-USB_IFACE=usb0 uv run manuconnect
+USB_IFACE=usb0 uv run drone-connect
+USB_IFACE=usb0 uv run drone-connect --transport usb
 ```
 
-Replace `usb0` with the adapter verified on the host. `autoconnect` tries
+Replace `usb0` with the adapter verified on the host. `drone-connect` tries
 Tailscale, the Pi hotspot, then USB.
 
 ## Linux
@@ -60,8 +60,8 @@ settings:
 
 ```powershell
 $env:USB_IFACE = "Ethernet 4"
-uv run autoconnect --dry-run
-uv run manuconnect
+uv run drone-connect --dry-run
+uv run drone-connect --transport usb
 ```
 
 Manual connection:
@@ -82,8 +82,8 @@ Identify the new USB Ethernet hardware port with
 verified BSD name to the helper:
 
 ```bash
-USB_IFACE=en7 uv run autoconnect --dry-run
-USB_IFACE=en7 uv run manuconnect
+USB_IFACE=en7 uv run drone-connect --dry-run
+USB_IFACE=en7 uv run drone-connect --transport usb
 ```
 
 Manual connection:

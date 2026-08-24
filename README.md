@@ -31,17 +31,13 @@ apt-installed Picamera2 and libcamera bindings.
 
 | Command | Purpose |
 | --- | --- |
-| `autoconnect` / `manuconnect` | Open Pi SSH over Tailscale, hotspot, or USB |
-| `drone-deploy` | Synchronize the runtime to the Pi and optionally start one task |
-| `drone-health` | Read-only heartbeat and parameter checks over USB and Pi UART |
-| `drone-console` | Interactive MAVProxy console for expert inspection |
-| `drone-lidar` | Record rangefinder and optical-flow telemetry while disarmed |
-| `drone-apriltag` | Detect AprilTags; metric pose requires camera calibration |
-| `drone-record` | Record synchronized camera, AprilTag, and MAVLink data while disarmed |
+| `drone-connect` | Open Pi SSH over Tailscale, hotspot, or USB |
+| `drone-deploy` | Synchronize the runtime and optionally run an allowlisted task |
+| `drone-inspect` | Report and save all available disarmed camera/MAVLink streams |
 | `drone-servo` | Guarded direct-BCM12 payload-servo bench test |
 | `drone-motor-test` | Guarded, low-power, propeller-off ArduPilot motor check |
-| `drone-control` | Status, takeoff/hover, and bounded velocity tests |
-| `drone-config-export` / `drone-config-sync` | Capture the ArduPilot configuration |
+| `drone-control hover` | Guarded takeoff, timed hold, and landing |
+| `drone-config-sync` | Capture the ArduPilot configuration |
 
 Run `uv run <command> --help` for authoritative options. Pi-only commands are
 normally started through `drone-deploy` or from a Pi shell.
@@ -63,8 +59,9 @@ ssh -F /dev/null seb@192.168.4.1
 The connection helpers try Tailscale, hotspot, then USB:
 
 ```bash
-uv run autoconnect
-uv run manuconnect
+uv run drone-connect
+uv run drone-connect --transport hotspot
+uv run drone-connect --transport usb
 ```
 
 USB setup requires `USB_IFACE` to identify the adapter that appeared when the
@@ -84,10 +81,8 @@ switching commands.
 The following commands are read-only while the vehicle remains disarmed:
 
 ```bash
-uv run drone-health
-uv run drone-lidar --duration 10
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
-  uv run drone-deploy --record --duration 15
+  uv run drone-deploy --run inspect -- --duration 15
 ```
 
 The flight battery may be needed to power attached sensors; these commands do
@@ -98,7 +93,7 @@ power and wiring, and follow the command's confirmation gates. The motor
 utility also requires `ARMING_CHECK=1` and resolved pre-arm failures. Follow
 the [bench motor procedure](docs/BENCH_MOTOR_TEST.md).
 
-No live arm, takeoff, altitude-hold, or velocity flight has been validated by
+No live arm, takeoff, or altitude-hold flight has been validated by
 the repository documentation. Flight work must progress through SITL,
 propeller-off checks, calibrated sensors, and restrained tests. See
 [MAVLink control](docs/PI_MAVLINK_CONTROL.md).

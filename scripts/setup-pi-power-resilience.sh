@@ -271,7 +271,7 @@ note "Recovery unit installed (left disabled; armed by pi-safe-upgrade.sh)"
 echo "Verifying no unit auto-starts vehicle control ..."
 autostart="$(systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
     | awk '{print $1}' \
-    | grep -Ei 'drone-(control|motor|servo|record|lidar|apriltag|picam|health)|mavproxy|mavlink' \
+    | grep -Ei 'drone-(control|motor|servo|inspect|picam)|mavlink' \
     || true)"
 if [[ -n "$autostart" ]]; then
     die "Refusing to finish: these units would command the vehicle on boot:

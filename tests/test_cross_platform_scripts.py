@@ -92,14 +92,14 @@ def test_deploy_target_uses_explicit_host_user_and_dir(tmp_path: Path) -> None:
 
 def test_deploy_plan_uses_tar_fallback_on_windows(tmp_path: Path) -> None:
     plan = deploy.build_plan(
-        ["--apriltag", "--dry-run", "--port", "9090"],
+        ["--dry-run", "--run", "inspect", "--", "--port", "9090"],
         environ={"HOME": str(tmp_path)},
         system="Windows",
         ping=lambda _host: False,
         rsync_path="/usr/bin/rsync",
     )
 
-    assert plan.mode == "apriltag"
+    assert plan.mode == "inspect"
     assert plan.extra_args == ("--port", "9090")
     assert plan.dry_run is True
     assert plan.sync_method == "tar"
@@ -143,9 +143,20 @@ def test_deploy_install_command_preserves_system_site_packages(tmp_path: Path) -
     )
 
 
-def test_deploy_mode_command_forwards_lidar_arguments(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("task", "module", "task_args"),
+    [
+        ("inspect", "ai_drone.cli.record", ("--duration", "12.5")),
+        ("servo", "ai_drone.cli.servo", ("--mode", "center")),
+        ("motor-test", "ai_drone.cli.motor_test", ("--motor", "1")),
+        ("control", "ai_drone.cli.control", ("hover", "--duration", "2")),
+    ],
+)
+def test_deploy_run_uses_allowlisted_module_and_forwards_arguments(
+    tmp_path: Path, task: str, module: str, task_args: tuple[str, ...]
+) -> None:
     plan = deploy.build_plan(
-        ["--lidar", "--duration", "10"],
+        ["--run", task, "--", *task_args],
         environ={"HOME": str(tmp_path)},
         system="Linux",
         ping=lambda _host: False,
@@ -154,95 +165,22 @@ def test_deploy_mode_command_forwards_lidar_arguments(tmp_path: Path) -> None:
 
     command = deploy.mode_command(plan)
 
+    assert plan.extra_args == task_args
     assert command is not None
     assert command[:2] == ["ssh", "-t"]
-    assert (
-        ".venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0 --duration 10"
-        in command[-1]
-    )
+    assert f".venv/bin/python -m {module}" in command[-1]
+    assert all(argument in command[-1] for argument in task_args)
 
 
-def test_deploy_mode_command_uses_module_for_apriltag(tmp_path: Path) -> None:
-    plan = deploy.build_plan(
-        ["--apriltag", "--backend", "native", "--duration", "10"],
-        environ={"HOME": str(tmp_path)},
-        system="Linux",
-        ping=lambda _host: False,
-        rsync_path=None,
-    )
-
-    command = deploy.mode_command(plan)
-
-    assert command is not None
-    assert command[:2] == ["ssh", "-t"]
-    assert (
-        ".venv/bin/python -m ai_drone.cli.apriltag "
-        "--backend native --duration 10" in command[-1]
-    )
-
-
-def test_deploy_mode_command_uses_module_for_record(tmp_path: Path) -> None:
-    plan = deploy.build_plan(
-        ["--record", "--duration", "12.5"],
-        environ={"HOME": str(tmp_path)},
-        system="Linux",
-        ping=lambda _host: False,
-        rsync_path=None,
-    )
-
-    command = deploy.mode_command(plan)
-
-    assert command is not None
-    assert command[:2] == ["ssh", "-t"]
-    assert ".venv/bin/python -m ai_drone.cli.record --duration 12.5" in command[-1]
-
-
-def test_deploy_mode_command_uses_module_for_servo(tmp_path: Path) -> None:
-    plan = deploy.build_plan(
-        [
-            "--servo",
-            "--mode",
-            "center",
-            "--confirm-actuation",
-            "SERVO_CLEAR",
-        ],
-        environ={"HOME": str(tmp_path)},
-        system="Linux",
-        ping=lambda _host: False,
-        rsync_path=None,
-    )
-
-    command = deploy.mode_command(plan)
-
-    assert command is not None
-    assert command[:2] == ["ssh", "-t"]
-    assert ".venv/bin/python -m ai_drone.cli.servo --mode center" in command[-1]
-    assert "--confirm-actuation SERVO_CLEAR" in command[-1]
-
-
-def test_deploy_mode_command_uses_guarded_motor_test_module(tmp_path: Path) -> None:
-    plan = deploy.build_plan(
-        [
-            "--motor-test",
-            "--motor",
-            "1",
-            "--confirm-props-removed",
-            "PROPS_REMOVED",
-            "--confirm-vehicle-secured",
-            "VEHICLE_SECURED",
-        ],
-        environ={"HOME": str(tmp_path)},
-        system="Linux",
-        ping=lambda _host: False,
-        rsync_path=None,
-    )
-
-    command = deploy.mode_command(plan)
-
-    assert command is not None
-    assert command[:2] == ["ssh", "-t"]
-    assert ".venv/bin/python -m ai_drone.cli.motor_test" in command[-1]
-    assert "PROPS_REMOVED" in command[-1]
+def test_deploy_rejects_task_arguments_without_run(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        deploy.build_plan(
+            ["--", "--duration", "10"],
+            environ={"HOME": str(tmp_path)},
+            system="Linux",
+            ping=lambda _host: False,
+            rsync_path=None,
+        )
 
 
 def test_tar_sync_paths_exclude_local_caches(tmp_path: Path) -> None:
@@ -432,23 +370,23 @@ def test_usb_rejects_unsafe_network_arguments_before_mutation(
 def test_connect_entrypoints_replace_drone_connect() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
-    assert scripts["autoconnect"] == "ai_drone.link.connect:auto_main"
-    assert scripts["manuconnect"] == "ai_drone.link.connect:manual_main"
-    assert "drone-connect" not in scripts
+    assert scripts["drone-connect"] == "ai_drone.link.connect:main"
+    assert "autoconnect" not in scripts
+    assert "manuconnect" not in scripts
     assert "drone-pi-usb-ssh" not in scripts
 
 
 def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
-    assert scripts["drone-apriltag"] == "ai_drone.cli.apriltag:main"
-    assert scripts["drone-record"] == "ai_drone.cli.record:main"
-    assert scripts["drone-lidar"] == "ai_drone.cli.lidar:main"
+    assert scripts["drone-inspect"] == "ai_drone.cli.record:main"
     assert scripts["drone-servo"] == "ai_drone.cli.servo:main"
 
     # Flight functionality is consolidated behind one guarded command; the
     # former duplicate wrappers are intentionally not installed.
     assert scripts["drone-control"] == "ai_drone.cli.control:main"
+    assert "drone-health" not in scripts
+    assert "drone-console" not in scripts
     assert "drone-follow" not in scripts
     assert "drone-fly-and-land" not in scripts
 
@@ -488,7 +426,7 @@ def test_wifi_scan_detects_ssid_per_platform() -> None:
 def test_auto_dry_run_lists_transports_in_priority_order(monkeypatch, capsys) -> None:
     monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
 
-    result = connect.run_auto(["--dry-run"], environ={"TIMEOUT_SECONDS": "1"})
+    result = connect.run(["--dry-run"], environ={"TIMEOUT_SECONDS": "1"})
 
     output = capsys.readouterr().out
     assert result == 0
@@ -513,7 +451,7 @@ def test_auto_connects_over_tailscale_first(monkeypatch) -> None:
     monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
     monkeypatch.setattr(connect.subprocess, "run", fake_run)
 
-    result = connect.run_auto([], environ={"TIMEOUT_SECONDS": "1"})
+    result = connect.run([], environ={"TIMEOUT_SECONDS": "1"})
 
     assert result == 0
     assert ["ssh", "-F", os.devnull, "-t", "seb@seb-is-pm"] in calls
@@ -538,15 +476,14 @@ def test_auto_falls_through_to_usb_when_others_fail(monkeypatch) -> None:
 
     monkeypatch.setattr(connect, "connect_usb", fake_usb)
 
-    result = connect.run_auto([], environ={"TIMEOUT_SECONDS": "1"})
+    result = connect.run([], environ={"TIMEOUT_SECONDS": "1"})
 
     assert result == 0
     assert usb_calls  # USB was reached as the last resort
 
 
-def test_manual_choice_dispatches_wifi(monkeypatch) -> None:
+def test_explicit_hotspot_dispatches_only_wifi(monkeypatch) -> None:
     monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
-    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
 
     dispatched: list[str] = []
     monkeypatch.setattr(
@@ -562,23 +499,22 @@ def test_manual_choice_dispatches_wifi(monkeypatch) -> None:
         ),
     )
 
-    result = connect.run_manual([], environ={"TIMEOUT_SECONDS": "1"})
+    result = connect.run(["--transport", "hotspot"], environ={"TIMEOUT_SECONDS": "1"})
 
     assert result == 0
     assert dispatched == ["wifi"]
 
 
-@pytest.mark.parametrize("choice", ["1", "2", "3"])
-def test_manual_dry_run_is_successful_for_every_transport(
-    monkeypatch, choice: str
+@pytest.mark.parametrize("transport", ["tailscale", "hotspot", "usb"])
+def test_explicit_dry_run_is_successful_for_every_transport(
+    monkeypatch, transport: str
 ) -> None:
     monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
-    monkeypatch.setattr("builtins.input", lambda _prompt="": choice)
     monkeypatch.setattr(connect, "connect_tailscale", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(connect, "connect_wifi_ap", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(connect, "connect_usb", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(connect, "connect_usb", lambda *_args, **_kwargs: True)
 
-    assert connect.run_manual(["--dry-run"], environ={}) == 0
+    assert connect.run(["--dry-run", "--transport", transport], environ={}) == 0
 
 
 def test_auto_dry_run_threads_explicit_ssh_config_to_every_transport(
@@ -586,7 +522,7 @@ def test_auto_dry_run_threads_explicit_ssh_config_to_every_transport(
 ) -> None:
     monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
 
-    result = connect.run_auto(
+    result = connect.run(
         ["--dry-run"],
         environ={
             "SSH_CONFIG": "/tmp/custom-ssh-config",

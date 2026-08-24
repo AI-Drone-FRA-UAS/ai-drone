@@ -33,7 +33,7 @@ class FlightSafetyError(RuntimeError):
 
 
 class DroneController:
-    """One controller for arm, takeoff, body velocity, hover, and landing.
+    """One controller for arm, takeoff, hover, and landing.
 
     The context manager only cleans up arming/flight initiated by this object.
     Merely observing an already-armed aircraft never sends LAND or DISARM.
@@ -455,40 +455,4 @@ class DroneController:
             self.target_system,
             mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mapping["LAND"],
-        )
-
-    def send_velocity_body(
-        self,
-        vx: float,
-        vy: float,
-        vz: float,
-        yaw_rate_deg: float = 0.0,
-    ) -> None:
-        forward = finite_in_range(vx, "vx", minimum=-1.0, maximum=1.0)
-        right = finite_in_range(vy, "vy", minimum=-1.0, maximum=1.0)
-        down = finite_in_range(vz, "vz", minimum=-0.5, maximum=0.5)
-        yaw_rate = finite_in_range(
-            yaw_rate_deg, "yaw_rate_deg", minimum=-45.0, maximum=45.0
-        )
-        if not self.is_flying or not self.is_armed or self._landing_commanded:
-            raise FlightSafetyError(
-                "velocity commands require an active controller-owned flight"
-            )
-        self._connection().mav.set_position_target_local_ned_send(
-            0,
-            self.target_system,
-            self.target_component,
-            mavlink.MAV_FRAME_BODY_NED,
-            0x05C7,
-            0,
-            0,
-            0,
-            forward,
-            right,
-            down,
-            0,
-            0,
-            0,
-            0,
-            math.radians(yaw_rate),
         )

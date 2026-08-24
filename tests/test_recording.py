@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+import ai_drone.cli.record as inspect_cli
 from ai_drone.cli.record import (
     AnalysisFrame,
     CaptureState,
@@ -20,6 +21,8 @@ from ai_drone.cli.record import (
     DetectionWorker,
     TelemetryWorker,
     _cleanup_capture,
+    _component_report,
+    _observe_sensor_message,
     _parser,
     _safe_video_timestamp_summary,
     _start_capture_epoch,
@@ -27,6 +30,7 @@ from ai_drone.cli.record import (
     _validate_args,
     _wait_for_fresh_disarmed_heartbeat,
     _write_preview_frame,
+    run,
 )
 from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.durability import IntervalSync
@@ -642,3 +646,125 @@ def test_cleanup_does_not_replace_original_capture_error(tmp_path) -> None:
     )
 
     assert state.worker_error == "original capture failure"
+
+
+def test_inspector_classifies_observed_range_and_flow_streams() -> None:
+    state = CaptureState()
+    _observe_sensor_message(
+        state,
+        SimpleNamespace(
+            get_type=lambda: "DISTANCE_SENSOR",
+            orientation=25,
+            current_distance=42,
+            min_distance=2,
+            max_distance=1200,
+        ),
+    )
+    _observe_sensor_message(
+        state,
+        SimpleNamespace(get_type=lambda: "OPTICAL_FLOW_RAD", quality=180),
+    )
+
+    components = _component_report(
+        state,
+        on_pi=True,
+        flight_controller="ok",
+        camera="unavailable",
+        detector="unavailable",
+        details={},
+        duration=2.0,
+    )
+
+    assert components["downward_rangefinder"] == {
+        "status": "ok",
+        "samples": 1,
+        "latest_m": 0.42,
+        "rate_hz": 0.5,
+    }
+    assert components["forward_rangefinder"]["status"] == "no_data"
+    assert components["optical_flow"]["status"] == "ok"
+    assert components["servo"]["status"] == "not_detectable"
+
+
+@pytest.mark.parametrize(
+    ("flight_controller", "camera", "detector", "range_status", "tag_status"),
+    [
+        ("ok", "ok", "ok", "no_data", "no_data"),
+        ("ok", "unavailable", "unavailable", "no_data", "unavailable"),
+        ("unavailable", "ok", "ok", "unavailable", "no_data"),
+        ("unavailable", "unavailable", "unavailable", "unavailable", "unavailable"),
+    ],
+)
+def test_inspector_reports_every_source_availability_combination(
+    flight_controller: str,
+    camera: str,
+    detector: str,
+    range_status: str,
+    tag_status: str,
+) -> None:
+    components = _component_report(
+        CaptureState(),
+        on_pi=False,
+        flight_controller=flight_controller,
+        camera=camera,
+        detector=detector,
+        details={},
+        duration=1.0,
+    )
+
+    assert components["downward_rangefinder"]["status"] == range_status
+    assert components["apriltags"]["status"] == tag_status
+
+
+def test_inspector_succeeds_and_writes_manifest_when_all_hardware_is_absent(
+    tmp_path, monkeypatch
+) -> None:
+    output = tmp_path / "inspection"
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(
+        inspect_cli,
+        "resolve_mavlink_endpoint",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("none")),
+    )
+
+    assert run(["--duration", "0.01", "--output-dir", str(output)]) == 0
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["completed"] is True
+    assert manifest["components"]["flight_controller"]["status"] == "unavailable"
+    assert manifest["components"]["camera"]["status"] == "unavailable"
+
+
+def test_inspector_aborts_armed_vehicle_and_still_writes_manifest(
+    tmp_path, monkeypatch
+) -> None:
+    output = tmp_path / "armed"
+
+    class Connection:
+        target_system = 1
+        target_component = 1
+        closed = False
+        logfile = None
+
+        def wait_heartbeat(self, *, timeout):
+            return _Heartbeat(system=1, armed=True)
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = Connection()
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(
+        inspect_cli, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "tcp:sim"
+    )
+    monkeypatch.setattr(
+        inspect_cli.mavutil,
+        "mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+
+    assert run(["--duration", "0.01", "--output-dir", str(output)]) == 3
+    assert connection.closed
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["armed_abort"] is True
+    assert manifest["safety"]["initial_vehicle_state"] == "armed"

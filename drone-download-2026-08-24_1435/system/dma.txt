@@ -1,0 +1,5 @@
+DMAV1
+DMA=1:2 TX=       1 ULCK=       0 CLCK=       0 CONT= 0.0%
+DMA=1:7 TX=       1 ULCK=       0 CLCK=       0 CONT= 0.0%
+DMA=2:5 TX=       1 ULCK=       0 CLCK=       0 CONT= 0.0%
+DMA=2:6 TX=       1 ULCK=       0 CLCK=       0 CONT= 0.0%

@@ -1,0 +1,75 @@
+{
+  "autopilot_version": {
+    "board_version": 67305472,
+    "capabilities": 63983,
+    "flight_custom_version": [
+      56,
+      49,
+      50,
+      55,
+      99,
+      49,
+      48,
+      52
+    ],
+    "flight_sw_version": 67567616,
+    "mavpackettype": "AUTOPILOT_VERSION",
+    "middleware_custom_version": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "middleware_sw_version": 0,
+    "os_custom_version": [
+      52,
+      102,
+      51,
+      52,
+      101,
+      50,
+      49,
+      55
+    ],
+    "os_sw_version": 0,
+    "product_id": 22337,
+    "uid": 0,
+    "uid2": [
+      46,
+      0,
+      61,
+      0,
+      7,
+      81,
+      51,
+      52,
+      54,
+      53,
+      53,
+      49,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "vendor_id": 4617
+  },
+  "heartbeat": {
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "mavlink_version": 3,
+    "mavpackettype": "HEARTBEAT",
+    "system_status": 3,
+    "type": 2
+  },
+  "source_component": 1,
+  "source_system": 1,
+  "usb_serial": "2E003D000751333436353531"
+}

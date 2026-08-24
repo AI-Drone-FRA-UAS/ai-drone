@@ -179,26 +179,16 @@ def _parser() -> argparse.ArgumentParser:
         description="Sync ai-drone to the Raspberry Pi and optionally run a task."
     )
     parser.add_argument(
-        "--apriltag", action="store_true", help="start safe AprilTag detection"
+        "--run",
+        choices=("inspect", "servo", "motor-test", "control"),
+        help="run one allowlisted task after deployment",
     )
-    parser.add_argument(
-        "--record",
-        action="store_true",
-        help="record camera and all available disarmed sensor telemetry",
-    )
-    parser.add_argument(
-        "--lidar", action="store_true", help="sample lidar over Pi UART"
-    )
-    parser.add_argument(
-        "--servo", action="store_true", help="start the SG90 servo test"
-    )
-    parser.add_argument(
-        "--motor-test",
-        action="store_true",
-        help="run the guarded, propeller-free ArduPilot bench motor test",
-    )
-    parser.add_argument("--ssh", action="store_true", help="open a shell on the Pi")
     parser.add_argument("--dry-run", action="store_true", help="print commands only")
+    parser.add_argument(
+        "task_args",
+        nargs=argparse.REMAINDER,
+        help="task arguments after --, for example -- --duration 10",
+    )
     return parser
 
 
@@ -211,29 +201,12 @@ def build_plan(
     rsync_path: str | None = None,
 ) -> DeployPlan:
     parser = _parser()
-    args, extra_args = parser.parse_known_args(arguments)
-    modes = [
-        name
-        for name in (
-            "apriltag",
-            "record",
-            "lidar",
-            "servo",
-            "motor_test",
-            "ssh",
-        )
-        if getattr(args, name)
-    ]
-    if len(modes) > 1:
-        parser.error(
-            "--apriltag, --record, --lidar, --servo, --motor-test, "
-            "and --ssh are mutually exclusive"
-        )
-    if not modes and extra_args:
-        parser.error(
-            "extra command options require --apriltag, --record, --lidar, "
-            "--servo, or --motor-test"
-        )
+    args = parser.parse_args(arguments)
+    extra_args = tuple(args.task_args)
+    if extra_args[:1] == ("--",):
+        extra_args = extra_args[1:]
+    if args.run is None and extra_args:
+        parser.error("task arguments require --run")
 
     target = resolve_deploy_target(environ, ping=ping, system=system)
     _validated_remote_project_dir(target)
@@ -243,8 +216,8 @@ def build_plan(
     )
     return DeployPlan(
         target=target,
-        mode=modes[0] if modes else None,
-        extra_args=tuple(extra_args),
+        mode=args.run,
+        extra_args=extra_args,
         dry_run=args.dry_run,
         sync_method=sync_method,
     )
@@ -384,40 +357,17 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
     extra = " ".join(shlex.quote(argument) for argument in plan.extra_args)
     suffix = f" {extra}" if extra else ""
 
-    if plan.mode == "apriltag":
-        command = (
-            f"cd {shlex.quote(project_dir)} && "
-            f".venv/bin/python -m ai_drone.cli.apriltag{suffix}"
-        )
-        return remote_command(target, command, tty=True)
-    if plan.mode == "record":
-        command = (
-            f"cd {shlex.quote(project_dir)} && "
-            f".venv/bin/python -m ai_drone.cli.record{suffix}"
-        )
-        return remote_command(target, command, tty=True)
-    if plan.mode == "lidar":
-        command = (
-            f"cd {shlex.quote(project_dir)} && "
-            f".venv/bin/python -m ai_drone.cli.lidar --device /dev/serial0{suffix}"
-        )
-        return remote_command(target, command, tty=True)
-    if plan.mode == "servo":
-        command = (
-            f"cd {shlex.quote(project_dir)} && "
-            f".venv/bin/python -m ai_drone.cli.servo{suffix}"
-        )
-        return remote_command(target, command, tty=True)
-    if plan.mode == "motor_test":
-        command = (
-            f"cd {shlex.quote(project_dir)} && "
-            f".venv/bin/python -m ai_drone.cli.motor_test{suffix}"
-        )
-        return remote_command(target, command, tty=True)
-    if plan.mode == "ssh":
-        command = f"cd {shlex.quote(project_dir)} && exec $SHELL --login"
-        return remote_command(target, command, tty=True)
-    return None
+    modules = {
+        "inspect": "ai_drone.cli.record",
+        "servo": "ai_drone.cli.servo",
+        "motor-test": "ai_drone.cli.motor_test",
+        "control": "ai_drone.cli.control",
+    }
+    module = modules.get(plan.mode or "")
+    if module is None:
+        return None
+    command = f"cd {shlex.quote(project_dir)} && .venv/bin/python -m {module}{suffix}"
+    return remote_command(target, command, tty=True)
 
 
 def _iter_sync_paths(repo_root: Path) -> list[Path]:
@@ -719,28 +669,23 @@ def run(arguments: Sequence[str] | None = None) -> int:
     command = mode_command(plan)
     if command is None:
         print(
-            "Done. Use --apriltag, --record, --lidar, --servo, --motor-test, or --ssh.",
+            "Done. Use --run TASK -- TASK_ARGS to start an allowlisted task.",
             flush=True,
         )
         return 0
 
-    if plan.mode == "apriltag":
-        print("Starting safe AprilTag detection on the Pi ...", flush=True)
-        print("This mode never arms, moves, or actuates the servo.", flush=True)
-    elif plan.mode == "record":
+    if plan.mode == "inspect":
         print(
-            "Recording camera and disarmed sensor telemetry on the Pi ...", flush=True
+            "Inspecting camera and disarmed sensor telemetry on the Pi ...", flush=True
         )
         print("This mode never arms, changes mode, or actuates anything.", flush=True)
-    elif plan.mode == "lidar":
-        print("Sampling MTF-01P through the Pi flight-controller link ...", flush=True)
     elif plan.mode == "servo":
         print("Starting the SG90 servo test on the Pi ...", flush=True)
-    elif plan.mode == "motor_test":
+    elif plan.mode == "motor-test":
         print("Starting the guarded ArduPilot bench motor test ...", flush=True)
         print("PROPELLERS MUST BE REMOVED and the vehicle secured.", flush=True)
-    elif plan.mode == "ssh":
-        print("Opening shell on the Pi ...", flush=True)
+    elif plan.mode == "control":
+        print("Starting the explicitly selected flight-control task ...", flush=True)
 
     _run(command, dry_run=plan.dry_run)
     return 0

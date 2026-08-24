@@ -1,18 +1,4 @@
-"""Connect to the Pi over Tailscale, its own Wi-Fi AP, or a USB cable.
-
-Two entry points share the same three transports and priority order:
-
-* ``autoconnect`` (:func:`run_auto`) tries them in order — Tailscale, then the
-  Pi's ``AI-Drone-Zero`` AP, then the USB gadget — and stops at the first that
-  connects. This mirrors how the Pi is expected to come up: it prefers a known
-  Wi-Fi (so it is on Tailscale), self-hosts its AP only when offline, and the
-  cable is the always-there last resort.
-* ``manuconnect`` (:func:`run_manual`) shows the same three as a menu and runs
-  the one the user picks.
-
-This module owns transport selection. The Wi-Fi command builders live in
-``link.wifi`` and the USB link setup lives in ``link.usb_ssh``.
-"""
+"""Connect to the Pi over Tailscale, its Wi-Fi hotspot, or USB."""
 
 from __future__ import annotations
 
@@ -51,6 +37,12 @@ def interactive_ssh_command(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Connect to the Pi (Tailscale -> Pi Wi-Fi AP -> USB cable)."
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("auto", "tailscale", "hotspot", "usb"),
+        default="auto",
+        help="connection to use; auto tries Tailscale, hotspot, then USB",
     )
     parser.add_argument(
         "--dry-run",
@@ -178,7 +170,7 @@ def _tailscale_target(target: ConnectionTarget) -> str:
     return f"{target.pi_user}@{target.pi_hostname}"
 
 
-def run_auto(
+def run(
     arguments: Sequence[str] | None = None,
     *,
     environ: Mapping[str, str] | None = None,
@@ -188,8 +180,8 @@ def run_auto(
     target = resolve_connection_target(environ)
     tailscale_target = _tailscale_target(target)
 
-    if args.dry_run:
-        print("autoconnect would try, in order:", flush=True)
+    if args.dry_run and args.transport == "auto":
+        print("drone-connect would try, in order:", flush=True)
         connect_tailscale(
             tailscale_target,
             ssh_config=target.ssh_config,
@@ -200,63 +192,25 @@ def run_auto(
         usb_ssh.run(["--dry-run"], environ=environ)
         return 0
 
-    if connect_tailscale(
+    if args.transport in {"auto", "tailscale"} and connect_tailscale(
         tailscale_target,
         ssh_config=target.ssh_config,
-        dry_run=False,
+        dry_run=args.dry_run,
     ):
         return 0
-    if connect_wifi_ap(target, system, dry_run=False):
+    if args.transport == "tailscale":
+        return 0 if args.dry_run else 1
+    if args.transport in {"auto", "hotspot"} and connect_wifi_ap(
+        target, system, dry_run=args.dry_run
+    ):
         return 0
+    if args.transport == "hotspot":
+        return 0 if args.dry_run else 1
+    if args.transport == "usb":
+        return 0 if connect_usb(environ=environ, dry_run=args.dry_run) else 1
     print("Falling back to the USB cable...", flush=True)
     return 0 if connect_usb(environ=environ) else 1
 
 
-def _prompt_choice(prompt: str = "Enter 1, 2, or 3: ") -> str:
-    while True:
-        choice = input(prompt).strip()
-        if choice in {"1", "2", "3"}:
-            return choice
-        print("Please enter 1, 2, or 3.", flush=True)
-
-
-def run_manual(
-    arguments: Sequence[str] | None = None,
-    *,
-    environ: Mapping[str, str] | None = None,
-) -> int:
-    args = _parser().parse_args(arguments)
-    system = platform.system()
-    target = resolve_connection_target(environ)
-    tailscale_target = _tailscale_target(target)
-    tailscale_command = interactive_ssh_command(
-        tailscale_target,
-        target.ssh_config,
-    )
-
-    print("How do you want to connect to the Pi?", flush=True)
-    print(f"  1) Tailscale     ({shlex.join(tailscale_command)})", flush=True)
-    print(f"  2) Pi Wi-Fi AP   ({target.ap_ssid} -> {target.ap_ip})", flush=True)
-    print("  3) USB cable", flush=True)
-    choice = _prompt_choice()
-
-    if choice == "1":
-        connected = connect_tailscale(
-            tailscale_target,
-            ssh_config=target.ssh_config,
-            dry_run=args.dry_run,
-        )
-        return 0 if args.dry_run or connected else 1
-    if choice == "2":
-        connected = connect_wifi_ap(target, system, dry_run=args.dry_run)
-        return 0 if args.dry_run or connected else 1
-    connected = connect_usb(environ=environ, dry_run=args.dry_run)
-    return 0 if args.dry_run or connected else 1
-
-
-def auto_main() -> None:
-    raise SystemExit(run_auto())
-
-
-def manual_main() -> None:
-    raise SystemExit(run_manual())
+def main() -> None:
+    raise SystemExit(run())

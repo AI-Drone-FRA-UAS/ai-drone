@@ -1,4 +1,4 @@
-"""Record the Pi camera and all available disarmed ArduPilot telemetry."""
+"""Inspect and record every available disarmed camera and MAVLink stream."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,7 +25,7 @@ from ai_drone.durability import (
     atomic_write_text,
     synced_stream,
 )
-from ai_drone.mavlink.devices import find_serial_device
+from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_armed_vehicle_heartbeat,
@@ -32,7 +33,6 @@ from ai_drone.mavlink.safety import (
 )
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.recording import (
-    HARDWARE_TOPOLOGY,
     RecordingPaths,
     create_recording_paths,
     json_safe,
@@ -58,14 +58,14 @@ _TAG36H11_MAX_ID = 586
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Record camera video, AprilTag detections, and all available FC sensor "
-            "telemetry for an exact requested interval. This command never arms, "
+            "Inspect camera video, AprilTags, and all available FC sensor telemetry "
+            "for an exact requested interval. This command never arms, "
             "changes flight mode, moves a motor, or actuates a servo."
         )
     )
     parser.add_argument("--duration", type=float, default=10.0, metavar="SECONDS")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--device", default="/dev/serial0")
+    parser.add_argument("--device", help="serial path or pymavlink network endpoint")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--resolution", type=parse_even_resolution, default=(1280, 960))
@@ -85,6 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--calibration", type=Path)
     parser.add_argument("--tag-size", type=float, default=0.160, metavar="METRES")
     parser.add_argument("--max-reprojection-error", type=float, default=2.0)
+    parser.add_argument("--stream", action="store_true", help="serve browser MJPEG")
+    parser.add_argument("--port", type=int, default=8081)
     parser.add_argument(
         "--sync-interval",
         type=float,
@@ -124,6 +126,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error(
             f"--target-id must be between 0 and {_TAG36H11_MAX_ID} for tag36h11"
         )
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
     if args.resolution[0] / args.resolution[1] != (
         args.analysis_resolution[0] / args.analysis_resolution[1]
     ):
@@ -142,6 +146,10 @@ class CaptureState:
     dropped_analysis_frames: int = 0
     tag_detections: int = 0
     tag_ids: Counter[int] = field(default_factory=Counter)
+    distance_samples: Counter[int] = field(default_factory=Counter)
+    latest_distance_m: dict[int, float] = field(default_factory=dict)
+    optical_flow_samples: int = 0
+    latest_flow_quality: int | None = None
     armed_abort: bool = False
     worker_error: str | None = None
     _error_lock: threading.Lock = field(
@@ -276,6 +284,7 @@ class TelemetryWorker(threading.Thread):
                         return
                     message_type = message.get_type()
                     self.state.telemetry_counts[message_type] += 1
+                    _observe_sensor_message(self.state, message)
                     write_json_line(
                         handle,
                         telemetry_record(
@@ -321,6 +330,7 @@ class DetectionWorker(threading.Thread):
         self.sync = sync
 
     def run(self) -> None:
+        visible_ids: set[int] = set()
         try:
             with synced_stream(self.output, self.sync) as handle:
                 while True:
@@ -365,6 +375,24 @@ class DetectionWorker(threading.Thread):
                             self.state.tag_ids[detection.tag_id] += 1
                         self.state.tag_detections += len(tags)
                         self.state.processed_frames += 1
+                        current_ids = {int(tag["id"]) for tag in tags}
+                        for event, identifiers in (
+                            ("detected", current_ids - visible_ids),
+                            ("lost", visible_ids - current_ids),
+                        ):
+                            for identifier in sorted(identifiers):
+                                print(
+                                    json.dumps(
+                                        {
+                                            "event": f"apriltag_{event}",
+                                            "id": identifier,
+                                            "elapsed_s": round(item.elapsed_s, 6),
+                                        },
+                                        sort_keys=True,
+                                    ),
+                                    flush=True,
+                                )
+                        visible_ids = current_ids
                         write_json_line(
                             handle,
                             {
@@ -381,6 +409,30 @@ class DetectionWorker(threading.Thread):
         except Exception as error:
             self.state.record_error(f"AprilTag worker: {error}")
             self.stop.set()
+
+
+def _observe_sensor_message(state: CaptureState, message: Any) -> None:
+    """Keep the small live summary separate from the lossless JSONL record."""
+
+    message_type = message.get_type()
+    if message_type == "DISTANCE_SENSOR":
+        orientation = int(message.orientation)
+        current_cm = int(message.current_distance)
+        minimum_cm = int(message.min_distance)
+        maximum_cm = int(message.max_distance)
+        if current_cm > 0 and minimum_cm <= current_cm <= maximum_cm:
+            state.distance_samples[orientation] += 1
+            state.latest_distance_m[orientation] = current_cm / 100.0
+    elif message_type == "RANGEFINDER":
+        distance = float(message.distance)
+        if math.isfinite(distance) and distance > 0:
+            state.distance_samples[25] += 1
+            state.latest_distance_m[25] = distance
+    elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
+        state.optical_flow_samples += 1
+        quality = getattr(message, "quality", None)
+        if quality is not None:
+            state.latest_flow_quality = int(quality)
 
 
 def _stop_detection_worker(
@@ -489,7 +541,9 @@ def _write_preview_frame(
         raise RuntimeError(f"OpenCV did not write the {label} preview to {path}")
 
 
-def _cleanup_mavlink_connection(connection: Any, state: CaptureState) -> None:
+def _cleanup_mavlink_connection(connection: Any | None, state: CaptureState) -> None:
+    if connection is None:
+        return
     try:
         logfile = getattr(connection, "logfile", None)
     except Exception as error:
@@ -515,11 +569,11 @@ def _cleanup_capture(
     telemetry_worker: TelemetryWorker | None,
     detection_worker: DetectionWorker | None,
     frames: queue.Queue[AnalysisFrame | None],
-    cv2: Any,
+    cv2: Any | None,
     paths: RecordingPaths,
     first_frame: NDArray[np.uint8] | None,
     last_frame: NDArray[np.uint8] | None,
-    connection: Any,
+    connection: Any | None,
     stop: threading.Event,
     state: CaptureState,
 ) -> None:
@@ -534,7 +588,7 @@ def _cleanup_capture(
         encoder_started=encoder_started,
     )
     _stop_capture_workers(telemetry_worker, detection_worker, frames, state)
-    if first_frame is not None:
+    if cv2 is not None and first_frame is not None:
         _cleanup_action(
             state,
             "write first preview",
@@ -545,7 +599,7 @@ def _cleanup_capture(
                 "first-frame",
             ),
         )
-    if last_frame is not None:
+    if cv2 is not None and last_frame is not None:
         _cleanup_action(
             state,
             "write last preview",
@@ -560,7 +614,7 @@ def _cleanup_capture(
 
 
 def _start_capture_epoch(
-    connection: Any,
+    connection: Any | None,
     telemetry_tlog: Path,
     window: CaptureWindow,
     stop: threading.Event,
@@ -571,7 +625,8 @@ def _start_capture_epoch(
     if stop.is_set():
         return False
     try:
-        connection.setup_logfile(str(telemetry_tlog))
+        if connection is not None:
+            connection.setup_logfile(str(telemetry_tlog))
         if stop.is_set():
             return False
         window.begin()
@@ -662,272 +717,410 @@ def _camera_metadata(metadata: dict[str, object]) -> dict[str, object]:
     return {name: metadata[name] for name in names if name in metadata}
 
 
-def run(arguments: list[str] | None = None) -> int:
+def _component_report(
+    state: CaptureState,
+    *,
+    on_pi: bool,
+    flight_controller: str,
+    camera: str,
+    detector: str,
+    details: dict[str, str],
+    duration: float,
+) -> dict[str, dict[str, object]]:
+    def dependent(samples: int, parent: str) -> str:
+        if parent != "ok":
+            return "unavailable"
+        return "ok" if samples else "no_data"
+
+    downward = state.distance_samples[25]
+    forward = state.distance_samples[0]
+    tag_status = dependent(state.tag_detections, camera)
+    if detector != "ok":
+        tag_status = "unavailable"
+    report: dict[str, dict[str, object]] = {
+        "pi": {"status": "ok" if on_pi else "unavailable"},
+        "flight_controller": {
+            "status": flight_controller,
+            "messages": sum(state.telemetry_counts.values()),
+        },
+        "camera": {"status": camera, "frames": state.camera_frames},
+        "downward_rangefinder": {
+            "status": dependent(downward, flight_controller),
+            "samples": downward,
+            "latest_m": state.latest_distance_m.get(25),
+        },
+        "forward_rangefinder": {
+            "status": dependent(forward, flight_controller),
+            "samples": forward,
+            "latest_m": state.latest_distance_m.get(0),
+        },
+        "optical_flow": {
+            "status": dependent(state.optical_flow_samples, flight_controller),
+            "samples": state.optical_flow_samples,
+            "quality": state.latest_flow_quality,
+        },
+        "apriltags": {
+            "status": tag_status,
+            "detections": state.tag_detections,
+            "ids": dict(sorted(state.tag_ids.items())),
+        },
+        "servo": {
+            "status": "not_detectable",
+            "detail": "BCM12 has no passive servo-presence feedback",
+        },
+    }
+    for name, detail in details.items():
+        report.setdefault(name, {"status": "unavailable"})["detail"] = detail
+    if duration > 0:
+        for name in ("downward_rangefinder", "forward_rangefinder", "optical_flow"):
+            samples = report[name]["samples"]
+            if isinstance(samples, int):
+                report[name]["rate_hz"] = round(samples / duration, 3)
+    return report
+
+
+def _print_live_status(state: CaptureState) -> None:
+    downward = state.latest_distance_m.get(25)
+    forward = state.latest_distance_m.get(0)
+    print(
+        "status "
+        f"camera_frames={state.camera_frames} "
+        f"telemetry={sum(state.telemetry_counts.values())} "
+        f"downward_m={downward if downward is not None else 'unavailable'} "
+        f"forward_m={forward if forward is not None else 'unavailable'} "
+        f"flow_quality={state.latest_flow_quality if state.latest_flow_quality is not None else 'unavailable'} "
+        f"tags={state.tag_detections}",
+        flush=True,
+    )
+
+
+def run(arguments: list[str] | None = None) -> int:  # noqa: C901
     parser = _parser()
     args = parser.parse_args(arguments)
     _validate_args(parser, args)
-    if not is_raspberry_pi():
-        raise SystemExit(
-            "drone-record is Pi-only. Run it through "
-            "'uv run drone-deploy --record --duration SECONDS'."
-        )
-
-    import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
-    import numpy as np
-    from picamera2 import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
-        Picamera2,
-    )
-    from picamera2.encoders import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
-        H264Encoder,
-    )
-    from picamera2.outputs import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
-        FileOutput,
-    )
-
-    class FirstFrameFileOutput(FileOutput):
-        """Signal after Picamera2 writes the first encoded keyframe."""
-
-        def __init__(
-            self,
-            file: str,
-            pts: str,
-            on_first_frame: Callable[[], bool],
-        ) -> None:
-            super().__init__(file, pts=pts)
-            self.first_frame = threading.Event()
-            self.on_first_frame = on_first_frame
-
-        def outputframe(
-            self,
-            frame: bytes,
-            keyframe: bool = True,
-            timestamp: int | None = None,
-            packet: Any = None,
-            audio: bool = False,
-        ) -> None:
-            should_signal = (
-                not self.first_frame.is_set()
-                and self.recording
-                and keyframe
-                and not audio
-            )
-            super().outputframe(frame, keyframe, timestamp, packet, audio)
-            if should_signal and not self.dead and self.on_first_frame():
-                self.first_frame.set()
-
-    device = find_serial_device(
-        args.device,
-        include_pi_uart=True,
-        missing_message="No ArduPilot serial device found.",
-    )
     paths = create_recording_paths(args.output_dir)
-    calibration = CameraCalibration.load(args.calibration) if args.calibration else None
-    detector = create_detector(
-        args.backend,
-        threads=args.threads,
-        decimate=args.decimate,
-    )
-
-    print(f"Connecting to {device} at {args.baud} baud ...", flush=True)
-    connection = mavutil.mavlink_connection(str(device), baud=args.baud)
-    camera = None
-    encoder = None
-    camera_started = False
-    encoder_started = False
-    started_monotonic = 0.0
-    ended_monotonic = 0.0
-    started_utc: datetime | None = None
-    ended_utc: datetime | None = None
-    stop = threading.Event()
     state = CaptureState()
-    capture_window = CaptureWindow(args.duration)
-    requested_messages: list[str] = []
-    initial_vehicle_state = "unknown"
-    first_frame = None
-    last_frame = None
-    telemetry_worker = None
-    detection_worker = None
+    window = CaptureWindow(args.duration)
+    stop = threading.Event()
     frames: queue.Queue[AnalysisFrame | None] = queue.Queue(maxsize=8)
+    details: dict[str, str] = {}
+    on_pi = is_raspberry_pi()
+    connection = None
+    candidate = None
+    endpoint: str | None = None
+    flight_controller_status = "unavailable"
+    initial_vehicle_state = "unavailable"
+    requested_messages: list[str] = []
 
     try:
-        heartbeat = connection.wait_heartbeat(timeout=args.timeout)
-        if heartbeat is None:
-            raise RuntimeError("No ArduPilot heartbeat received")
-        vehicle_system = connection.target_system
-        if is_armed_vehicle_heartbeat(heartbeat, system_id=vehicle_system):
-            initial_vehicle_state = "armed"
-            raise RuntimeError("Vehicle is ARMED; recording refused")
-        initial_vehicle_state = "disarmed"
-        print(
-            f"Vehicle {vehicle_system} is DISARMED. No actuator commands will be sent.",
-            flush=True,
+        endpoint = resolve_mavlink_endpoint(
+            args.device,
+            include_pi_uart=True,
+            missing_message="No ArduPilot serial device found",
         )
+        candidate = mavutil.mavlink_connection(endpoint, baud=args.baud)
+        heartbeat = candidate.wait_heartbeat(timeout=args.timeout)
+        if heartbeat is None:
+            raise TimeoutError("no ArduPilot heartbeat received")
+        if is_armed_vehicle_heartbeat(
+            heartbeat, system_id=int(candidate.target_system)
+        ):
+            connection = candidate
+            initial_vehicle_state = "armed"
+            state.armed_abort = True
+            state.record_error("vehicle is ARMED; inspection refused")
+            stop.set()
+        else:
+            connection = candidate
+            initial_vehicle_state = "disarmed"
+            flight_controller_status = "ok"
+            requested_messages = request_telemetry_messages(connection)
+    except (FileNotFoundError, OSError, RuntimeError, TimeoutError) as error:
+        details["flight_controller"] = str(error)
+        if candidate is not None:
+            with suppress(OSError):
+                candidate.close()
 
+    telemetry_worker = None
+    if connection is not None and not state.armed_abort:
         telemetry_worker = TelemetryWorker(
             connection=connection,
             output=paths.telemetry_events,
-            vehicle_system=int(vehicle_system),
+            vehicle_system=int(connection.target_system),
             vehicle_component=int(connection.target_component),
-            window=capture_window,
+            window=window,
             stop=stop,
             state=state,
             sync=IntervalSync(args.sync_interval),
         )
         telemetry_worker.start()
-        requested_messages = request_telemetry_messages(connection)
-        _raise_if_startup_stopped(stop, state, "telemetry initialization")
 
-        camera = Picamera2()
-        _raise_if_startup_stopped(stop, state, "camera initialization")
-        main_resolution = args.resolution
-        analysis_resolution = args.analysis_resolution
-        camera.configure(
-            camera.create_video_configuration(
-                main={"format": "YUV420", "size": main_resolution},
-                lores={"format": "YUV420", "size": analysis_resolution},
-                raw={"size": (2028, 1520)},
-                controls={"FrameRate": args.fps},
-                buffer_count=6,
-                queue=False,
+    camera = None
+    encoder = None
+    cv2 = None
+    camera_started = False
+    encoder_started = False
+    camera_status = "unavailable"
+    detector_status = "unavailable"
+    detector = None
+    server = None
+    push_stream_frame: Callable[[bytes], None] | None = None
+    first_frame = None
+    last_frame = None
+    detection_worker = None
+
+    if not on_pi:
+        details["camera"] = "Picamera2 inspection is available only on Raspberry Pi"
+    elif not state.armed_abort:
+        try:
+            import cv2 as cv2_module  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+            import numpy as np
+            from picamera2 import Picamera2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+            from picamera2.encoders import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+                H264Encoder,
             )
-        )
-        _raise_if_startup_stopped(stop, state, "camera configuration")
-        camera.start()
-        camera_started = True
-        _raise_if_startup_stopped(stop, state, "camera startup")
-        if args.warmup:
-            print(f"Camera warm-up: {args.warmup:.1f} s ...", flush=True)
-            if stop.wait(args.warmup):
-                _raise_if_startup_stopped(stop, state, "camera warm-up")
-        _raise_if_startup_stopped(stop, state, "camera warm-up")
-        _wait_for_fresh_disarmed_heartbeat(stop, state, args.timeout)
+            from picamera2.outputs import FileOutput  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
 
-        encoder = H264Encoder(bitrate=args.bitrate, repeat=True)
-        video_output = FirstFrameFileOutput(
-            str(paths.video),
-            str(paths.video_timestamps),
-            lambda: _start_capture_epoch(
-                connection,
-                paths.telemetry_tlog,
-                capture_window,
+            cv2 = cv2_module
+
+            class FirstFrameFileOutput(FileOutput):
+                def __init__(self, file: str, pts: str) -> None:
+                    super().__init__(file, pts=pts)
+                    self.first_frame = threading.Event()
+
+                def outputframe(
+                    self,
+                    frame: bytes,
+                    keyframe: bool = True,
+                    timestamp: int | None = None,
+                    packet: Any = None,
+                    audio: bool = False,
+                ) -> None:
+                    signal = (
+                        not self.first_frame.is_set()
+                        and self.recording
+                        and keyframe
+                        and not audio
+                    )
+                    super().outputframe(frame, keyframe, timestamp, packet, audio)
+                    if (
+                        signal
+                        and not self.dead
+                        and _start_capture_epoch(
+                            connection, paths.telemetry_tlog, window, stop, state
+                        )
+                    ):
+                        self.first_frame.set()
+
+            try:
+                calibration = (
+                    CameraCalibration.load(args.calibration)
+                    if args.calibration
+                    else None
+                )
+                detector = create_detector(
+                    args.backend,
+                    threads=args.threads,
+                    decimate=args.decimate,
+                )
+                detector_status = "ok"
+            except (OSError, RuntimeError, ValueError) as error:
+                details["apriltags"] = str(error)
+                calibration = None
+
+            camera = Picamera2()
+            camera.configure(
+                camera.create_video_configuration(
+                    main={"format": "YUV420", "size": args.resolution},
+                    lores={"format": "YUV420", "size": args.analysis_resolution},
+                    raw={"size": (2028, 1520)},
+                    controls={"FrameRate": args.fps},
+                    buffer_count=6,
+                    queue=False,
+                )
+            )
+            camera.start()
+            camera_started = True
+            if args.warmup and stop.wait(args.warmup):
+                _raise_if_startup_stopped(stop, state, "camera warm-up")
+            if connection is not None:
+                _wait_for_fresh_disarmed_heartbeat(stop, state, args.timeout)
+
+            if args.stream:
+                try:
+                    from ai_drone.vision.stream import push_frame, start_server
+
+                    server = start_server(port=args.port)
+                    push_stream_frame = push_frame
+                    print(f"Browser stream: http://0.0.0.0:{args.port}/", flush=True)
+                except (OSError, RuntimeError, ValueError) as error:
+                    details["stream"] = str(error)
+
+            encoder = H264Encoder(bitrate=args.bitrate, repeat=True)
+            video_output = FirstFrameFileOutput(
+                str(paths.video), str(paths.video_timestamps)
+            )
+            camera.start_encoder(encoder, video_output, name="main")
+            encoder_started = True
+            _wait_for_capture_epoch(
+                video_output.first_frame,
+                window,
                 stop,
                 state,
-            ),
-        )
-        camera.start_encoder(encoder, video_output, name="main")
-        encoder_started = True
-        started_monotonic, started_utc, deadline = _wait_for_capture_epoch(
-            video_output.first_frame,
-            capture_window,
-            stop,
-            state,
-            timeout=max(2.0, 10.0 / args.fps),
-        )
-        detection_worker = DetectionWorker(
-            frames=frames,
-            output=paths.camera_events,
-            detector=detector,
-            calibration=calibration,
-            tag_size=args.tag_size,
-            resolution=analysis_resolution,
-            max_reprojection_error=args.max_reprojection_error,
-            target_id=args.target_id,
-            stop=stop,
-            state=state,
-            sync=IntervalSync(args.sync_interval),
-        )
-        detection_worker.start()
-        print(
-            f"Recording all sensors for {args.duration:.3f} s to {paths.root} ...",
-            flush=True,
-        )
-
-        frame_index = 0
-        while not stop.is_set() and time.monotonic() < deadline:
-            request = camera.capture_request()
-            try:
-                yuv = request.make_array("lores")
-                metadata = _camera_metadata(request.get_metadata())
-                captured_at = time.monotonic()
-                height, width = analysis_resolution[1], analysis_resolution[0]
-                grayscale = np.ascontiguousarray(yuv[:height, :width]).copy()
-            finally:
-                request.release()
-            if captured_at > deadline:
-                break
-            state.camera_frames += 1
-            if first_frame is None:
-                first_frame = grayscale.copy()
-            last_frame = grayscale.copy()
-            if frame_index % args.detect_every == 0:
-                item = AnalysisFrame(
-                    frame_index=frame_index,
-                    elapsed_s=captured_at - started_monotonic,
-                    grayscale=grayscale,
-                    metadata=metadata,
+                timeout=max(2.0, 10.0 / args.fps),
+            )
+            camera_status = "ok"
+            if detector is not None:
+                detection_worker = DetectionWorker(
+                    frames=frames,
+                    output=paths.camera_events,
+                    detector=detector,
+                    calibration=calibration,
+                    tag_size=args.tag_size,
+                    resolution=args.analysis_resolution,
+                    max_reprojection_error=args.max_reprojection_error,
+                    target_id=args.target_id,
+                    stop=stop,
+                    state=state,
+                    sync=IntervalSync(args.sync_interval),
                 )
+                detection_worker.start()
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            details["camera"] = str(error)
+            _cleanup_camera(
+                camera,
+                encoder,
+                state,
+                camera_started=camera_started,
+                encoder_started=encoder_started,
+            )
+            camera = None
+            encoder = None
+            camera_started = False
+            encoder_started = False
+
+    if not window.started.is_set() and not state.armed_abort:
+        _start_capture_epoch(connection, paths.telemetry_tlog, window, stop, state)
+
+    started_monotonic = time.monotonic()
+    started_utc: datetime | None = None
+    ended_monotonic = started_monotonic
+    ended_utc: datetime | None = None
+    if window.started.is_set():
+        started_monotonic, started_utc, deadline = window.require_started()
+        next_status = started_monotonic
+        try:
+            frame_index = 0
+            while not stop.is_set() and time.monotonic() < deadline:
+                if camera is None:
+                    now = time.monotonic()
+                    if now >= next_status:
+                        _print_live_status(state)
+                        next_status = now + 1.0
+                    stop.wait(min(0.1, max(0.0, deadline - now)))
+                    continue
+                request = camera.capture_request()
                 try:
-                    frames.put_nowait(item)
-                except queue.Full:
-                    state.dropped_analysis_frames += 1
-            frame_index += 1
+                    yuv = request.make_array("lores")
+                    metadata = _camera_metadata(request.get_metadata())
+                    captured_at = time.monotonic()
+                    height, width = (
+                        args.analysis_resolution[1],
+                        args.analysis_resolution[0],
+                    )
+                    grayscale = np.ascontiguousarray(yuv[:height, :width]).copy()
+                finally:
+                    request.release()
+                if captured_at >= deadline:
+                    break
+                state.camera_frames += 1
+                first_frame = grayscale.copy() if first_frame is None else first_frame
+                last_frame = grayscale.copy()
+                if frame_index % args.detect_every == 0:
+                    try:
+                        frames.put_nowait(
+                            AnalysisFrame(
+                                frame_index=frame_index,
+                                elapsed_s=captured_at - started_monotonic,
+                                grayscale=grayscale,
+                                metadata=metadata,
+                            )
+                        )
+                    except queue.Full:
+                        state.dropped_analysis_frames += 1
+                    if push_stream_frame is not None and cv2 is not None:
+                        ok, jpeg = cv2.imencode(
+                            ".jpg", grayscale, [cv2.IMWRITE_JPEG_QUALITY, 80]
+                        )
+                        if ok:
+                            push_stream_frame(jpeg.tobytes())
+                frame_index += 1
+                if captured_at >= next_status:
+                    _print_live_status(state)
+                    next_status = captured_at + 1.0
+        except KeyboardInterrupt:
+            state.record_error("interrupted by user")
+        except Exception as error:
+            state.record_error(str(error))
+        finally:
+            stop.set()
+            ended_monotonic = time.monotonic()
+            ended_utc = datetime.now(UTC)
 
-        stop.set()
-        ended_monotonic = time.monotonic()
-        ended_utc = datetime.now(UTC)
-    except KeyboardInterrupt:
-        stop.set()
-        ended_monotonic = time.monotonic()
-        ended_utc = datetime.now(UTC)
-        state.record_error("interrupted by user")
-    except Exception as error:
-        stop.set()
-        ended_monotonic = time.monotonic()
-        ended_utc = datetime.now(UTC)
-        state.record_error(str(error))
-    finally:
-        _cleanup_capture(
-            camera=camera,
-            encoder=encoder,
-            camera_started=camera_started,
-            encoder_started=encoder_started,
-            telemetry_worker=telemetry_worker,
-            detection_worker=detection_worker,
-            frames=frames,
-            cv2=cv2,
-            paths=paths,
-            first_frame=first_frame,
-            last_frame=last_frame,
-            connection=connection,
-            stop=stop,
-            state=state,
-        )
-
-    if capture_window.started.is_set():
-        started_monotonic, started_utc, _deadline = capture_window.require_started()
-
-    actual_duration = (
-        max(0.0, ended_monotonic - started_monotonic) if started_monotonic else 0.0
+    if server is not None:
+        _cleanup_action(state, "stop browser stream", server.shutdown)
+        _cleanup_action(state, "close browser stream", server.server_close)
+    _cleanup_capture(
+        camera=camera,
+        encoder=encoder,
+        camera_started=camera_started,
+        encoder_started=encoder_started,
+        telemetry_worker=telemetry_worker,
+        detection_worker=detection_worker,
+        frames=frames,
+        cv2=cv2,
+        paths=paths,
+        first_frame=first_frame,
+        last_frame=last_frame,
+        connection=connection,
+        stop=stop,
+        state=state,
     )
-    video_summary = _safe_video_timestamp_summary(paths.video_timestamps, state)
+
+    actual_duration = max(0.0, ended_monotonic - started_monotonic)
+    components = _component_report(
+        state,
+        on_pi=on_pi,
+        flight_controller=flight_controller_status,
+        camera=camera_status,
+        detector=detector_status,
+        details=details,
+        duration=actual_duration,
+    )
+    if args.stream:
+        components["stream"] = {
+            "status": "ok" if server is not None else "unavailable",
+            **({"detail": details["stream"]} if "stream" in details else {}),
+        }
+    files = {
+        "video": paths.video,
+        "video_timestamps": paths.video_timestamps,
+        "camera_events": paths.camera_events,
+        "telemetry_tlog": paths.telemetry_tlog,
+        "telemetry_events": paths.telemetry_events,
+        "first_frame": paths.first_frame,
+        "last_frame": paths.last_frame,
+    }
     manifest = {
+        "schema": 1,
         "requested_duration_s": args.duration,
         "actual_duration_s": round(actual_duration, 6),
         "started_utc": started_utc.isoformat() if started_utc else None,
         "ended_utc": ended_utc.isoformat() if ended_utc else None,
-        "completed": (
-            not state.armed_abort
-            and state.worker_error is None
-            and actual_duration >= args.duration - 0.1
-        ),
+        "completed": not state.armed_abort and state.worker_error is None,
         "armed_abort": state.armed_abort,
         "error": state.worker_error,
-        "durability": {
-            # Records after the final sync are the only ones a power cut can
-            # discard; the manifest itself is replaced atomically.
-            "sync_interval_s": args.sync_interval,
-            "periodic_sync": args.sync_interval > 0,
-        },
+        "components": components,
         "safety": {
             "initial_vehicle_state": initial_vehicle_state,
             "commands_never_sent": [
@@ -943,45 +1136,25 @@ def run(arguments: list[str] | None = None) -> int:
         "camera": {
             "recording_resolution": list(args.resolution),
             "analysis_resolution": list(args.analysis_resolution),
-            "fps_requested": args.fps,
-            "bitrate": args.bitrate,
-            "backend": detector.backend_name,
-            "capture_epoch": "first successfully encoded H.264 keyframe",
-            "analysis_frames": state.camera_frames,
-            "processed_frames": state.processed_frames,
-            "dropped_analysis_frames": state.dropped_analysis_frames,
-            "tag_detections": state.tag_detections,
-            "tag_ids": dict(sorted(state.tag_ids.items())),
-            "metric_pose_enabled": calibration is not None,
-            **video_summary,
+            "backend": getattr(detector, "backend_name", None),
+            **_safe_video_timestamp_summary(paths.video_timestamps, state),
         },
         "telemetry": {
-            "device": str(device),
+            "endpoint": endpoint,
             "baud": args.baud,
             "requested_messages": requested_messages,
             "message_counts": dict(sorted(state.telemetry_counts.items())),
         },
-        "hardware_topology": HARDWARE_TOPOLOGY,
-        "files": {
-            "video": paths.video.name,
-            "video_timestamps": paths.video_timestamps.name,
-            "camera_events": paths.camera_events.name,
-            "telemetry_tlog": paths.telemetry_tlog.name,
-            "telemetry_events": paths.telemetry_events.name,
-            "first_frame": paths.first_frame.name,
-            "last_frame": paths.last_frame.name,
-        },
+        "files": {name: path.name for name, path in files.items() if path.exists()},
     }
-    atomic_write_text(
-        paths.manifest,
-        json.dumps(
-            json_safe(manifest),
-            allow_nan=False,
-            indent=2,
-            sort_keys=True,
+    try:
+        atomic_write_text(
+            paths.manifest,
+            json.dumps(json_safe(manifest), indent=2, sort_keys=True) + "\n",
         )
-        + "\n",
-    )
+    except OSError as error:
+        print(f"FAILED: could not write manifest: {error}", flush=True)
+        return 1
 
     print(
         f"Finished in {actual_duration:.3f} s: camera={state.camera_frames} frames, "
@@ -995,7 +1168,7 @@ def run(arguments: list[str] | None = None) -> int:
         return 3
     if state.worker_error is not None:
         print(f"FAILED: {state.worker_error}", flush=True)
-        return 2
+        return 1
     return 0
 
 

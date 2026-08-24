@@ -50,7 +50,7 @@ Run detection from the developer machine:
 
 ```bash
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
-  uv run drone-deploy --apriltag --backend auto --tag-size 0.160
+  uv run drone-deploy --run inspect -- --backend auto --tag-size 0.160 --stream
 ```
 
 Use `--tag-size 0.224` for the supplied A3 tags. Print at 100% and use the

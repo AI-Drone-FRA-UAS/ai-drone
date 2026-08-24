@@ -21,7 +21,7 @@ Test one motor for half a second at 7%:
 
 ```bash
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
-  uv run drone-deploy --motor-test \
+  uv run drone-deploy --run motor-test -- \
   --motor 1 \
   --duration 0.5 \
   --throttle-percent 7 \
@@ -33,7 +33,7 @@ After validating motors individually, test all configured motors sequentially:
 
 ```bash
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
-  uv run drone-deploy --motor-test \
+  uv run drone-deploy --run motor-test -- \
   --all-motors \
   --duration 0.5 \
   --throttle-percent 7 \

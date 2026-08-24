@@ -42,30 +42,6 @@ TELEMETRY_RATES_HZ: Mapping[str, float] = {
     "SYSTEM_TIME": 1.0,
 }
 
-HARDWARE_TOPOLOGY: Mapping[str, Mapping[str, str]] = {
-    "camera": {
-        "sensor": "Raspberry Pi AI Camera (Sony IMX500)",
-        "connected_to": "Raspberry Pi Zero 2 W",
-        "interface": "CSI/libcamera",
-    },
-    "downward_range_and_flow": {
-        "sensor": "MicoAir MTF-01P",
-        "connected_to": "FlywooF745 flight controller",
-        "interface": "FC UART5 / ArduPilot SERIAL5, MAVLink1 at 115200",
-        "pi_path": "Forwarded as processed MAVLink telemetry over FC UART4",
-    },
-    "flight_controller_to_pi": {
-        "sensor": "ArduPilot telemetry and fused state",
-        "connected_to": "Raspberry Pi GPIO UART",
-        "interface": "FC UART4 <-> Pi /dev/serial0 (/dev/ttyAMA0), 115200",
-    },
-    "forward_range_planned": {
-        "sensor": "MicoAir MT-15",
-        "connected_to": "Not connected yet; planned FlywooF745 UART7",
-        "interface": "FC T7/R7, 5V, GND; 3.3V UART signaling at 115200",
-    },
-}
-
 
 @dataclass(frozen=True)
 class RecordingPaths:

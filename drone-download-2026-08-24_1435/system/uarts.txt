@@ -1,0 +1,9 @@
+UARTV1
+SERIAL0 OTG1  TX = 1440382 RX =    1654 TXBD=  3037 RXBD=    33 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=1
+SERIAL1 UART1 TX =       0 RX =       0 TXBD=     0 RXBD=     0 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=0
+SERIAL2 UART2 TX*=   11818 RX =  862429 TXBD=   236 RXBD=    68 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=0
+SERIAL3 UART3 TX*=       0 RX*=       0 TXBD=     0 RXBD=     0 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=0
+SERIAL4 UART4 TX =       0 RX =       0 TXBD=     0 RXBD=     0 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=0
+SERIAL5 UART5 TX =    8523 RX =       0 TXBD=   170 RXBD=     0 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=0
+SERIAL6 UART6 TX*=    3959 RX =  337731 TXBD=    79 RXBD=  6754 RXDRP=       0 FE=234 OE=0 NE=270 FlowCtrl=0
+SERIAL7 UART7 TX =       0 RX =       0 TXBD=     0 RXBD=     0 RXDRP=       0 FE=0 OE=0 NE=0 FlowCtrl=0

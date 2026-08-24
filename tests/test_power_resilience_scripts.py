@@ -73,7 +73,7 @@ def test_resilience_script_refuses_vehicle_control_autostart() -> None:
     script = RESILIENCE_SCRIPT.read_text()
 
     assert "Refusing to finish" in script
-    assert "drone-(control|motor|servo|record|lidar|apriltag|picam|health)" in script
+    assert "drone-(control|motor|servo|inspect|picam)" in script
 
 
 def test_resilience_script_can_revert_every_change() -> None:

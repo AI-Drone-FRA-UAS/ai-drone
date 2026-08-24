@@ -1,9 +1,8 @@
 """The controller contract and the in-flight safety guards built on it.
 
 These guards are what stop the aircraft when telemetry says something is wrong.
-They are deliberately independent of any particular mission: hover, velocity
-tests, and future tag-search flights all need the same battery, ceiling, and
-staleness checks.
+They are deliberately independent of any particular mission: hover and future
+flights need the same battery, ceiling, and staleness checks.
 """
 
 from __future__ import annotations
@@ -31,9 +30,6 @@ class FlightController(Protocol):
     def emergency_stop(self) -> None: ...
     def altitude_is_fresh(self) -> bool: ...
     def heartbeat_is_fresh(self) -> bool: ...
-    def send_velocity_body(
-        self, vx: float, vy: float, vz: float, yaw_rate_deg: float = 0.0
-    ) -> None: ...
 
 
 class FlightGuardError(RuntimeError):

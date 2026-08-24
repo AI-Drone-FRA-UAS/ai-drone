@@ -1,1 +1,1 @@
-"""Shared MAVLink endpoint, safety, parameter, console, and link-health logic."""
+"""Shared MAVLink endpoint, safety, and parameter logic."""

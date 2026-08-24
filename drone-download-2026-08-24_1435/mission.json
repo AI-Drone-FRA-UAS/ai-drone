@@ -1,0 +1,25 @@
+{
+  "announced_count": 1,
+  "downloaded_count": 1,
+  "items": [
+    {
+      "autocontinue": 1,
+      "command": 16,
+      "current": 0,
+      "frame": 0,
+      "mavpackettype": "MISSION_ITEM_INT",
+      "mission_type": 0,
+      "param1": 0.0,
+      "param2": 0.0,
+      "param3": 0.0,
+      "param4": 0.0,
+      "seq": 0,
+      "target_component": 190,
+      "target_system": 250,
+      "x": 0,
+      "y": 0,
+      "z": 0.0
+    }
+  ],
+  "mission_type": 0
+}
