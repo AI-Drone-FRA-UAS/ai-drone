@@ -5,6 +5,13 @@ The delivery mechanism from goal 1.3 of the
 3D-printed bracket on command. This document covers the servo itself, the
 three ways it can be driven, and what is verified today.
 
+**What works today:** the release is triggered by the detection. When the
+downward camera has held the same allowed `tag36h11` marker over several
+consecutive frames, the Pi drives the servo over GPIO and the payload falls,
+with the release latched so it cannot repeat. That is verified on the ground
+and hand-held, not in autonomous flight — see
+[AprilTag-Erkennung und Abwurf](https://ai-drone-fra-uas.github.io/ai-drone/apriltag.html).
+
 ---
 
 ## 1. Servo specification
@@ -41,7 +48,7 @@ stage.
 | Path | Purpose | Status |
 |------|---------|--------|
 | Arduino bench | Characterise the servo away from the drone | Verified — see [servo_instruction.md](../servo_instruction.md) |
-| Raspberry Pi GPIO | Drive the mechanism from the companion computer | Verified with `test_servo.py` |
+| Raspberry Pi GPIO | Drive the mechanism from the companion computer | Verified with `test_servo.py`, and the path the AprilTag drop uses |
 | ArduPilot servo output | Trigger the drop from the RC transmitter or a mission | **Not yet configured** — see section 5 |
 
 ### 2.1 Arduino bench test

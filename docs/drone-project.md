@@ -57,8 +57,10 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 
 - The RPi cable is already soldered to the flight controller. The RPi end must be connected.
 - Mount the **Raspberry Pi AI Camera Module** on the drone (frame extension from 1.4).
-- Run AI inference (e.g. object detection with **TensorFlow Lite** or **YOLO**) on the RPi to
-  support autonomous delivery targeting.
+- Run detection on the RPi to support autonomous delivery targeting. This began as neural
+  object detection (**TensorFlow Lite** / **YOLO**) and became **AprilTag** (`tag36h11`)
+  detection: for a targeted drop, a geometric fiducial gives a unique ID and sub-pixel
+  corners, which a neural bounding box does not.
 - The **USB A/V Grabber (MacroSilicon MS210x)** can be used to capture the analog FPV camera
   feed on the RPi as an additional video source.
 
@@ -211,3 +213,14 @@ Connect and configure the **Raspberry Pi Zero 2 WH** as a companion computer.
 |-----------|--------|
 | MicroAir MTF-01P (LiDAR / Optical Flow) | Connected on UART5; permanent mounting/power reliability still to verify |
 | Raspberry Pi Zero 2 WH | Connected on UART4; Pi `/dev/serial0` MAVLink verified |
+
+### Goal Status
+
+| Goal | Status |
+|------|--------|
+| 1.1 Autopilot integration | ArduPilot Copter 4.6.3 flashed and configured, parameter set backed up |
+| 1.2 Position and altitude hold without GPS | MTF-01P in the EKF3 fusion, telemetry verified; not proven in stable flight |
+| 1.3 Payload drop | Works, triggered by an AprilTag detection — verified on the ground and hand-held |
+| 1.4 Frame extension | Pi enclosure and soft frame parts printed; the carrier plate is still missing |
+| 1.5 Companion computer / detection | AprilTag detection runs on the Pi, throughput measured |
+| Autonomous flight | **Not reached.** The aircraft was destroyed on 2026-08-21; see the project site |

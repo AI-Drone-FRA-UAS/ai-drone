@@ -4,6 +4,15 @@ Every document in this repository, grouped by what you are trying to do.
 The rendered version of this documentation is published as a project site —
 see [Project Site](#project-site) at the bottom.
 
+## Where the project stands
+
+| | |
+|---|---|
+| **Works** | AprilTag (`tag36h11`) detection on the Pi, and a payload drop the detection triggers — verified on the ground and hand-held |
+| **Does not work** | Fully autonomous flight. On 2026-08-21 a takeoff attempt destroyed the aircraft; nobody was hurt |
+| **Read first** | [Flugversuche und Absturz](https://ai-drone-fra-uas.github.io/ai-drone/flugversuche.html) — the attempts, the three measured causes, and what changed because of them |
+| **Where the code is** | The reworked flight code and the dated flight records are on `preflight-and-nogps-takeoff`; the AprilTag drop mission is on the `experimental-*` branches. This branch still carries the earlier person-following stack, and the documents below describe it |
+
 ## Start here
 
 | Document | Contents |
@@ -25,7 +34,7 @@ see [Project Site](#project-site) at the bottom.
 
 | Document | Contents |
 |----------|----------|
-| [Pi MAVLink Control](PI_MAVLINK_CONTROL.md) | `DroneController`, body-frame velocity control, autonomous person following, and the safety rules |
+| [Pi MAVLink Control](PI_MAVLINK_CONTROL.md) | `DroneController`, body-frame velocity control, autonomous person following, and the safety rules — with the abort rules corrected after the 2026-08-21 accident |
 | [Developer Machine Drone Connection](DEVELOPER_MACHINE_DRONE_CONNECTION.md) | The complete USB connection sequence, MAVProxy commands, and shutdown procedure |
 
 ## Raspberry Pi and networking
@@ -42,7 +51,7 @@ see [Project Site](#project-site) at the bottom.
 |----------|----------|
 | [Development Session, 19 June 2026](../19-06-session.md) | The MAVLink, UART, and MTF-01P bring-up: every command, failure, and fix |
 | [Arduino Servo Bench Test](../servo_instruction.md) | The `arduino-cli` sketch used to characterise the servo away from the drone |
-| [Project Poster](poster/README.md) | The A1 poster: source, print PDF, and what is still to be filled in |
+| [Project Poster](poster/README.md) | The poster: HTML source and print PDFs in A0, A1, A2 and A3 |
 
 ## Project site
 

@@ -2,9 +2,20 @@
 
 A 3.5" CineWhoop FPV drone converted into a semi-autonomous indoor platform:
 ArduPilot Copter on a Flywoo GN745, a Raspberry Pi Zero 2 WH as companion
-computer, on-sensor AI on an IMX500 camera, and a servo-driven payload drop.
-Project work at Frankfurt University of Applied Sciences, supervised by
-Prof. Dr. Baun.
+computer, an IMX500 camera that detects AprilTags, and a servo-driven payload
+drop the detection triggers. Project work at Frankfurt University of Applied
+Sciences, supervised by Prof. Dr. Baun.
+
+**Where the project stands.** Detecting a `tag36h11` marker and dropping the
+payload on it works, verified on the ground and hand-held. Fully autonomous
+flight does not: on 2026-08-21 the aircraft was destroyed during a takeoff
+attempt. Nobody was hurt. The attempts, the three measured causes and what
+changed because of them are written up on the project site under
+[Flugversuche und Absturz](https://ai-drone-fra-uas.github.io/ai-drone/flugversuche.html).
+The reworked flight code and the dated records of those flights live on the
+`preflight-and-nogps-takeoff` branch; the AprilTag drop mission is on the
+`experimental-*` branches. This branch still carries the earlier
+person-following code.
 
 **[Documentation index](docs/README.md)** — every document in this repository,
 grouped by task. The rendered version is published as a
@@ -110,6 +121,11 @@ It does not arm the drone, start motors, change flight mode, or write
 parameters. It cannot power the sensor; the flight battery must do that.
 
 ## IMX500 AI stream
+
+This is the earlier person-detection path. The current approach detects
+AprilTags instead — a geometric marker gives a unique ID and sub-pixel corners,
+which a neural bounding box cannot; see
+[AprilTag-Erkennung und Abwurf](https://ai-drone-fra-uas.github.io/ai-drone/apriltag.html).
 
 The camera test runs NanoDet on the IMX500 and serves annotated MJPEG from the
 Pi. From the laptop, deploy and start it remotely:

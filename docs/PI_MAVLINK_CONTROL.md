@@ -4,6 +4,15 @@ This documentation describes the architecture, control interfaces, and safety gu
 
 The primary objective is to link the FlywooF745 flight controller (running ArduPilot Copter 4.6.3) with the IMX500 AI Camera on the Raspberry Pi to enable visually guided, autonomous flight maneuvers—such as person tracking, collision avoidance, and dynamic obstacle navigation—in both indoor and outdoor environments.
 
+> **Status, 2026-08-24.** This document describes the person-following control
+> stack, which is the code on this branch. The project has since moved to
+> AprilTag detection with a payload drop triggered by the detection, and a
+> takeoff attempt on 2026-08-21 destroyed the aircraft. Several statements
+> below about how to abort a flight were disproven by that accident and are
+> corrected in section 5. Read
+> [Flugversuche und Absturz](https://ai-drone-fra-uas.github.io/ai-drone/flugversuche.html)
+> before flying anything.
+
 ---
 
 ## 1. System Overview & Hardware Configuration
@@ -113,12 +122,29 @@ python follow_person.py --device /dev/serial0 --takeoff-alt 0.5 --target-dist 2.
 
 ## 5. Safety Guidelines (Safety First!)
 
-Because current ArduPilot parameters on the drone have `ARMING_CHECK=0` and `FENCE_ENABLE=0` configured for testing purposes, operational safety relies entirely on software safeguards and pilot vigilance. The following rules must be strictly observed before any physical flight:
+> **Corrected after the accident of 2026-08-21.** The original text of this
+> section said that `ARMING_CHECK=0` and `FENCE_ENABLE=0` were set "for testing
+> purposes" and that safety therefore rested on software safeguards and pilot
+> vigilance. Both halves of that were wrong, and the corrections below are not
+> optional.
+>
+> * **`ARMING_CHECK=0` is never acceptable.** In that state the vehicle reports
+>   no `PreArm:` failure at all and cannot say what is wrong with it. Exactly
+>   two values are permitted: `1` (every check) and `1043958` (every check
+>   except the two GPS ones, because this airframe carries no GPS receiver).
+> * **Every limit living in our software, on the companion computer, over
+>   Wi-Fi, is the problem, not the mitigation.** A vehicle-side geofence
+>   (`FENCE_ENABLE=1`, `FENCE_TYPE=1`, low `FENCE_ALT_MAX`) acts in the same
+>   second, without waiting for a companion computer to notice. It is the only
+>   limit that survives our software being wrong.
+
+The following rules must be strictly observed before any physical flight:
 
 1. **Flight Safety Net / Enclosure**: All initial flight tests with autonomous control loops must be conducted inside a protective flight safety net or an indoor arena free of obstacles and personnel.
-2. **Hardware RC Kill-Switch**: A safety pilot must hold a physical RC transmitter linked to the drone at all times. If any unexpected flight behavior or oscillation occurs, the pilot must immediately flip the RC kill-switch or override the flight mode to `LOITER` / `LAND`.
+2. **Hardware RC Kill-Switch**: A safety pilot must hold a physical RC transmitter linked to the drone at all times. If any unexpected flight behavior or oscillation occurs, the pilot must immediately flip the RC kill-switch or take over manually. Do not reach for `LOITER` or `LAND` as the reflex: both are altitude- or position-controlled and inherit whatever the state estimate currently believes.
 3. **Automated Software Traps**:
-   * **Context Manager Protection**: All flight operations should be wrapped inside `with DroneController(...) as drone:`. If an unhandled exception, syntax error, or `Ctrl+C` keyboard interrupt occurs, the `__exit__` block automatically triggers `emergency_stop()` (`LAND` or `DISARM`).
+   * **Context Manager Protection**: All flight operations should be wrapped inside `with DroneController(...) as drone:`. If an unhandled exception, syntax error, or `Ctrl+C` keyboard interrupt occurs, the `__exit__` block automatically triggers `emergency_stop()`.
+   * **`LAND` is not a general-purpose abort**, and this is what destroyed the aircraft. `LAND` is an altitude-controlled mode: it is only as good as the vertical estimate. On 2026-08-21 that estimate read −10 000 m and −38 m/s while the aircraft stood on the floor, and the requested landing answered it with full throttle. **When the aircraft is still on the ground, disarm instead** — and never release the link to an aircraft this software put in the air: re-request the landing and wait for the vehicle's own heartbeat to report disarmed.
    * **Altitude Guard**: If vibrations or optical flow drift cause the drone to exceed `max_altitude`, the controller immediately overrides velocity commands and lands.
    * **Battery Guard**: Never take off with a low LiPo battery. The automated follower aborts missions immediately if battery voltage drops below `14.4 V` (for a 4S battery).
 4. **Pre-Flight Check**: Always run `python control_drone.py status` before arming to verify that LiDAR altitude reads ~0.00 m on the ground and LiPo battery voltage is above `15.0 V`.

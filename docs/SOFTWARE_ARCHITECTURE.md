@@ -4,6 +4,14 @@ How the code in this repository is laid out, which part runs on which machine,
 and what every entry point does. For the flight-control theory and the safety
 rules behind `DroneController`, see [Pi MAVLink Control](PI_MAVLINK_CONTROL.md).
 
+> **Status, 2026-08-24.** This describes the layout of this branch, which still
+> carries the person-following stack. The reworked flight code — guards,
+> throttle model, teardown, and the simulated vehicle they are rehearsed
+> against — lives on `preflight-and-nogps-takeoff`, and the AprilTag drop
+> mission on the `experimental-*` branches. What the project achieved and what
+> it did not is summarised on the
+> [project site](https://ai-drone-fra-uas.github.io/ai-drone/).
+
 ---
 
 ## 1. Where the code runs
