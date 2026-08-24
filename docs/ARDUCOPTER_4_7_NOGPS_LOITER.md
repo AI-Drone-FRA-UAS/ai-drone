@@ -334,9 +334,47 @@ aircraft.
 
 ## Deployment and disarmed verification gate
 
-Do not install the changes or write flight-controller parameters until the
-current project-aircraft state is backed up and the repository backup decision
-is complete. Deployment remains disarmed and propellers-off:
+The targeted deployment and controller write were completed disarmed and
+propellers-off on 2026-08-24. The raw captures and live audit bundles are kept
+outside the repository under `/home/abaris/drone-logs/`; neither aircraft's raw
+capture is part of this branch.
+
+The verified live state is:
+
+- Pi runtime files from commit `cf6642b` match the developer-host SHA-256
+  values and import successfully. No flight task was started.
+- A fresh pre-write bundle downloaded all 1,172 parameters and matched the
+  private project-FC hardware identity recorded in the local backup, official
+  ArduCopter `4.7.0`, and custom version `1511f271`.
+- The guarded writer changed exactly the five reviewed values. A complete
+  before/after comparison found only those changes and the normal
+  `STAT_RUNTIME` increment.
+- Two accepted controller-only reboots incremented `STAT_BOOTCNT` once each.
+  The FC identity, all five values, and the complete reviewed invariant set
+  survived both reboots.
+- Disarmed pre-arm checks passed, the mode remained STABILIZE, and the bench
+  observer sent no arm, mode, motor, throttle, RC-override, mission, or servo
+  command. Downward range reported 2 cm with a 100 cm maximum, optical-flow
+  quality was 48 through 70, and every RC report had zero channels.
+- At only 2 cm above the floor the EKF still reported flags 167, including
+  constant-position mode and no relative horizontal position. The props-off
+  hand-lift check in step 7 therefore remains required; the production path
+  will not request Loiter until the relative-position state is continuously
+  healthy.
+- The observed battery voltage was only 11.884 through 11.908 V. The 14.4 V
+  application guard correctly marks live flight unsafe. Disconnect, safely
+  charge and balance-check the pack, independently measure it, and validate the
+  battery monitor before any propeller-on test.
+
+The final snapshot differs from the pre-reboot snapshot in the expected boot
+and runtime counters and boot-time barometer/gyro calibration values.
+`SCHED_OPTIONS` also returned from 1 to its persisted value 0: reading
+`@SYS/tasks.txt` during the raw capture calls ArduPilot's `task_info()`, which
+temporarily enables its task-information bit with `_options.set()` but does not
+save it. The reviewed writer did not touch this parameter; the complete
+pre-reboot comparison proves it changed only during reboot.
+
+The gate used for that deployment, with the remaining steps retained, is:
 
 1. Capture a new full parameter file, firmware identity, mission/fence/rally
    state, and hashes. Confirm it is the project aircraft, not the reference.
@@ -369,9 +407,10 @@ is complete. Deployment remains disarmed and propellers-off:
 The following cannot be proven by SITL or a remote disarmed inspection:
 
 1. Charge and independently measure the flight battery. The last observed
-   approximately 14.09 V is below the production command's 14.4 V default
-   guard. Confirm pack chemistry/cell count and calibrate the battery monitor
-   before selecting battery failsafe actions; do not guess those values.
+   11.884 through 11.908 V is well below the production command's 14.4 V
+   default guard. Confirm pack chemistry/cell count and calibrate the battery
+   monitor before selecting battery failsafe actions; do not guess those
+   values.
 2. Verify frame integrity, propeller type and orientation, motor order and
    direction, center of gravity, sensor mounting, and vibration isolation with
    props removed first.
