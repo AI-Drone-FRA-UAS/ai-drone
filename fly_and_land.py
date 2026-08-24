@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import select
 import shutil
 import sys
@@ -44,19 +45,19 @@ DEFAULT_HOVER_DURATION = 3.0  # Schwebeflugdauer in Sekunden
 
 # Empfohlene ArduPilot-Geschwindigkeits- und Regelungsparameter für Indoor:
 INDOOR_PARAMS: dict[str, float] = {
-    "WPNAV_SPEED_UP": 60.0,  # 60 cm/s Steigrate bei autonomem Takeoff
-    "WPNAV_SPEED_DN": 40.0,  # 40 cm/s Sinkrate
-    "WPNAV_ACCEL_Z": 100.0,  # 100 cm/s² sanfte Vertikal-Beschleunigung
-    "WPNAV_ACCEL": 100.0,  # 100 cm/s² sanfte Horizontal-Beschleunigung (für Wegpunkte)
-    "LAND_SPEED": 25.0,  # 25 cm/s Landegeschwindigkeit
-    "PILOT_SPEED_UP": 80.0,  # 80 cm/s Maximal-Steigrate in ALT_HOLD
-    "PILOT_SPEED_DN": 40.0,  # 40 cm/s Maximal-Sinkrate in ALT_HOLD
-    "PILOT_ACCEL_Z": 100.0,  # 100 cm/s² feinfühlige Vertikal-Beschleunigung in ALT_HOLD
+    "WPNAV_SPEED_UP": 25.0,  # 25 cm/s Steigrate bei autonomem Takeoff
+    "WPNAV_SPEED_DN": 20.0,  # 20 cm/s Sinkrate
+    "WPNAV_ACCEL_Z": 80.0,   # 80 cm/s² sanfte Vertikal-Beschleunigung (verhindert I-Term Windup)
+    "WPNAV_ACCEL": 80.0,     # 80 cm/s² sanfte Horizontal-Beschleunigung
+    "LAND_SPEED": 15.0,      # 15 cm/s sanfte Touchdown-Geschwindigkeit
+    "PILOT_SPEED_UP": 25.0,  # 25 cm/s Maximal-Steigrate in ALT_HOLD
+    "PILOT_SPEED_DN": 20.0,  # 20 cm/s Maximal-Sinkrate in ALT_HOLD
+    "PILOT_ACCEL_Z": 80.0,   # 80 cm/s² feinfühlige Vertikal-Beschleunigung in ALT_HOLD
+    "THR_DZ": 40.0,          # 40 PWM Totzone (1460 - 1540 PWM) für feinfühliges Sigmoid-Steuern
 }
 
-# Throttle-Werte für ALT_HOLD (unter Berücksichtigung von THR_DZ=100 -> Totzone 1400-1600):
+# Throttle-Werte für ALT_HOLD:
 PWM_THROTTLE_DISARM = 1000
-PWM_THROTTLE_CLIMB = 1680  # Hebt ab mit durch PILOT_SPEED_UP limitierter Steigrate
 PWM_THROTTLE_HOVER = 1500  # Neutral / Schwebegas (Soll-Steigrate 0.0 m/s)
 PWM_NEUTRAL = 1500
 # --------------------------------------------------------
@@ -64,6 +65,108 @@ PWM_NEUTRAL = 1500
 master: Any | None = None
 stop_event = threading.Event()
 logger: FlightLogger | None = None
+
+
+class SigmoidAltitudeController:
+    """Progressiver Regler für ruckfreien Start und stufenloses Rantasten an die Zielhöhe.
+
+    - Phase 1A (Boden): Erhöht das Gas stufenlos von 1450 auf max 1565 PWM über 3.0s (kein Ruckstart).
+    - Phase 1B (Luft): Sobald das LiDAR 4.5 cm erkennt, schaltet der Regler auf stufenlose Sigmoid-Bremskurve.
+    - Closed-Loop Dämpfung: Dämpft jede Vertikalbeschleunigung sofort ab, sodass kein Überschwinger entsteht.
+    """
+
+    def __init__(
+        self,
+        target_alt: float = DEFAULT_TARGET_ALT,
+        ground_alt: float = 0.02,
+        max_climb_speed: float = 0.15,  # 15 cm/s maximale sanfte Steigrate
+        pwm_hover: int = PWM_THROTTLE_HOVER,  # 1500
+        pwm_lift_start: int = 1450,          # Start-PWM am Boden (sanfter Leerlauf)
+        pwm_lift_max: int = 1565,            # Maximales Abhebegas
+        pwm_min_brake: int = 1460,           # Maximales Gegenbremsgas
+    ) -> None:
+        self.target_alt = target_alt
+        self.ground_alt = ground_alt
+        self.max_climb_speed = max_climb_speed
+        self.pwm_hover = pwm_hover
+        self.pwm_lift_start = pwm_lift_start
+        self.pwm_lift_max = pwm_lift_max
+        self.pwm_min_brake = pwm_min_brake
+        self.has_lifted_off = False
+
+    @staticmethod
+    def _sigmoid(x: float) -> float:
+        """Numerisch stabile Sigmoid-Funktion (1 / (1 + e^-x))."""
+        if x < -20.0:
+            return 0.0
+        if x > 20.0:
+            return 1.0
+        return 1.0 / (1.0 + math.exp(-x))
+
+    def compute_climb(
+        self,
+        elapsed_s: float,
+        current_alt: float | None,
+        current_vz: float,
+    ) -> tuple[int, float, float]:
+        """Berechnet den progressiven Gaswert (PWM) und die Sollgeschwindigkeit.
+
+        Rückgabe: (pwm_cmd, v_target_mps, progress_factor)
+        """
+        # Fallback bei fehlendem LiDAR-Wert
+        if current_alt is None:
+            return 1515, 0.04, 0.2
+
+        # 1. Abhebe-Erkennung (Drohne ist mindestens 2.5 cm über Boden)
+        if not self.has_lifted_off and current_alt > self.ground_alt + 0.025:
+            self.has_lifted_off = True
+
+        # PHASE 1A: NOCH AM BODEN -> PROGRESSIVES HOCHRAMPEN
+        if not self.has_lifted_off:
+            # Fährt das Gas stufenlos von 1450 auf 1565 PWM über 3.0 Sekunden hoch
+            ramp_progress = min(1.0, elapsed_s / 3.0)
+            s_ramp = self._sigmoid(4.0 * (ramp_progress - 0.5))
+            pwm_cmd = self.pwm_lift_start + s_ramp * (
+                self.pwm_lift_max - self.pwm_lift_start
+            )
+            v_target = self.max_climb_speed * s_ramp
+            return int(round(pwm_cmd)), round(v_target, 3), round(s_ramp, 2)
+
+        # PHASE 1B: IN DER LUFT -> SIGMOID-ANNÄHERUNG AN ZIELHÖHE
+        total_span = max(0.05, self.target_alt - (self.ground_alt + 0.025))
+        delta_to_target = self.target_alt - current_alt
+        normalized_remaining = max(0.0, delta_to_target) / total_span
+
+        # Sigmoid flacht stufenlos ab, je näher wir an der Zielhöhe sind
+        s_height = self._sigmoid(7.0 * (normalized_remaining - 0.30))
+
+        if delta_to_target <= 0.0:
+            v_target = 0.0
+        else:
+            v_target = self.max_climb_speed * s_height
+
+        # Closed-Loop Dämpfung & Regelung
+        if v_target > 0.005:
+            climb_ratio = v_target / self.max_climb_speed
+            pwm_base = 1505.0 + climb_ratio * 35.0
+            # Dämpfung: Wenn vz schneller als v_target -> Gas sofort absenken
+            vel_error = v_target - current_vz
+            damping_pwm = vel_error * 140.0
+            pwm_cmd = pwm_base + damping_pwm
+        else:
+            # Zielhöhe erreicht:
+            if current_vz > 0.02:
+                # Sanftes aktives Gegenbremsen gegen Aufwärtsdrall
+                pwm_cmd = self.pwm_hover - min(35.0, current_vz * 120.0)
+            elif current_alt > self.target_alt + 0.02:
+                pwm_cmd = self.pwm_hover - 15.0
+            else:
+                pwm_cmd = float(self.pwm_hover)
+
+        pwm_clamped = int(
+            round(max(self.pwm_min_brake, min(self.pwm_lift_max, pwm_cmd)))
+        )
+        return pwm_clamped, round(v_target, 3), round(s_height, 2)
 
 
 class FlightLogger:
@@ -294,6 +397,44 @@ def clear_rc_overrides(m: Any) -> None:
     )
 
 
+def send_guided_target(
+    m: Any,
+    z_target_m: float,
+    vz_cmd_mps: float,
+    vx: float = 0.0,
+    vy: float = 0.0,
+) -> None:
+    """Sendet MAVLink SET_POSITION_TARGET_LOCAL_NED an ArduPilot im GUIDED-Modus.
+
+    NED-Koordinaten:
+    - z_target_m: Höhe (wird als negative Z-Koordinate nach oben gesendet, z.B. -0.30m)
+    - vz_cmd_mps: Vertikalgeschwindigkeit (negativ nach oben, z.B. -0.15 m/s)
+    - vx, vy = 0.0 m/s: Aktiver Positionshalt gegen horizontalen Drift
+    """
+    if m is None:
+        return
+    # Typmask: Ignore PosX(1) + PosY(2) + Accel(64+128+256) + Yaw(1024) + YawRate(2048) = 0x0DC3
+    type_mask = 0x0DC3
+    m.mav.set_position_target_local_ned_send(
+        0,  # time_boot_ms
+        m.target_system,
+        m.target_component,
+        mavlink.MAV_FRAME_LOCAL_NED,
+        type_mask,
+        0.0,  # x (ignoriert)
+        0.0,  # y (ignoriert)
+        -abs(float(z_target_m)),  # z Zielhöhe (negativ nach oben)
+        float(vx),  # vx (0.0 m/s)
+        float(vy),  # vy (0.0 m/s)
+        float(vz_cmd_mps),  # vz Soll-Steigrate (negativ nach oben)
+        0.0,
+        0.0,
+        0.0,  # afx, afy, afz
+        0.0,
+        0.0,  # yaw, yaw_rate
+    )
+
+
 def emergency_kill() -> None:
     """Sofortiger Not-Aus (Kill Switch): Schneidet den Motorstrom unverzüglich ab."""
     log_msg("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
@@ -362,12 +503,16 @@ def set_mode(m: Any, mode_name: str, timeout: float = 5.0) -> str:
     started = time.monotonic()
     while time.monotonic() - started < timeout:
         msg = m.recv_match(type="HEARTBEAT", blocking=False)
-        if msg and hasattr(m, "flightmode") and m.flightmode == target_mode:
-            log_msg(f"Modus erfolgreich auf {target_mode} gewechselt.")
-            return target_mode
+        if msg and hasattr(m, "flightmode"):
+            if m.flightmode == target_mode:
+                log_msg(f"Modus erfolgreich auf {target_mode} gewechselt.")
+                return target_mode
         time.sleep(0.1)
 
-    log_msg(f"Moduswechsel auf {target_mode} gesendet.")
+    actual_mode = getattr(m, "flightmode", target_mode)
+    if actual_mode != target_mode:
+        log_msg(f"⚠️ FC verbleibt im Modus {actual_mode} (Wechsel auf {target_mode} abgewiesen).")
+        return actual_mode
     return target_mode
 
 
@@ -534,7 +679,7 @@ def main() -> None:
         type=str,
         default="ALT_HOLD",
         choices=["ALT_HOLD", "FLOWHOLD", "GUIDED"],
-        help="Flugmodus: ALT_HOLD (empfohlen für Takeoff), FLOWHOLD oder GUIDED",
+        help="Flugmodus: ALT_HOLD (empfohlen für Non-GPS Takeoff), FLOWHOLD oder GUIDED",
     )
     parser.add_argument(
         "--alt",
@@ -631,16 +776,16 @@ def main() -> None:
             configure_indoor_params(master)
             time.sleep(0.2)
 
-        # 5. Flugmodus setzen
-        active_mode = set_mode(master, target_mode)
+        # 5. Flugmodus für den Start: STABILIZE für 100% lineares, ruckfreies Anlaufen
+        active_mode = set_mode(master, "STABILIZE")
 
         # Falls Dry-Run angefordert: Nur Sensortest ausführen und beenden
         if is_dry_run:
             run_dry_run(master, telemetry, duration=10.0)
             return
 
-        # 6. ARMING
-        log_msg(f"Schärfe Motoren (Arming) im Modus {active_mode}...")
+        # 6. ARMING in STABILIZE bei Standgas (1000 PWM)
+        log_msg(f"Schärfe Motoren (Arming) im Modus {active_mode} bei Standgas...")
         send_rc_raw(master, throttle=PWM_THROTTLE_DISARM)
         master.arducopter_arm()
 
@@ -660,50 +805,38 @@ def main() -> None:
             log_msg(f"Arming fehlgeschlagen{reason}! Breche ab.")
             return
 
-        log_msg(">>> Drohne ist geschärft (ARMED).")
-        time.sleep(0.3)
+        log_msg(f">>> Drohne ist geschärft (ARMED) im Modus {active_mode}.")
+        time.sleep(0.4)
+
+        # Initialer Bodenwert vom LiDAR
+        initial_ground_alt = telemetry.current_alt or 0.02
+        liftoff_threshold = initial_ground_alt + 0.025  # ~4.5 cm
 
         # ------------------------------------------------------------------
-        # PHASE 1: GEREGELTER STEIGFLUG (Takeoff)
+        # PHASE 1A: PROGRESSIVER LINEARER START IN STABILIZE (Kein Ruck)
         # ------------------------------------------------------------------
-        if active_mode == "GUIDED":
-            log_msg(
-                f"\n>>> 1. STARTE AUTONOMEN TAKEOFF auf {target_alt * 100:.0f} cm (MAV_CMD_NAV_TAKEOFF)..."
-            )
-            master.mav.command_long_send(
-                master.target_system,
-                master.target_component,
-                mavlink.MAV_CMD_NAV_TAKEOFF,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                target_alt,
-            )
-        else:
-            log_msg(
-                f"\n>>> 1. STARTE STEIGFLUG auf {target_alt * 100:.0f} cm (Geregelt via PILOT_SPEED_UP=80 cm/s)..."
-            )
-            send_rc_raw(master, throttle=PWM_THROTTLE_CLIMB)
-
-        climb_start = time.monotonic()
+        log_msg(
+            f"\n>>> 1A. PROGRESSIVES ANLAUFEN AM BODEN (STABILIZE: 1040 -> 1250 PWM stufenlos)..."
+        )
+        spool_start = time.monotonic()
         last_print = 0.0
-        target_reached = False
+        has_lifted_off = False
 
-        while (time.monotonic() - climb_start < 8.0) and not stop_event.is_set():
+        while (time.monotonic() - spool_start < 4.0) and not stop_event.is_set():
             alt = telemetry.update()
             now = time.monotonic()
+            elapsed = now - spool_start
 
-            if active_mode != "GUIDED":
-                send_rc_raw(master, throttle=PWM_THROTTLE_CLIMB)
+            # Fährt das Gas feinfühlig mit +65 PWM pro Sekunde hoch (ca. 0.65% alle 100ms)
+            direct_pwm = min(1260, 1040 + int(elapsed * 65.0))
+            direct_pct = (direct_pwm - 1000) / 10.0
+
+            send_rc_raw(master, throttle=direct_pwm)
 
             logger.log_telemetry(
-                phase="CLIMB",
-                mode=active_mode,
-                throttle_pwm=PWM_THROTTLE_CLIMB if active_mode != "GUIDED" else 1500,
+                phase="SPOOLUP_STABILIZE",
+                mode="STABILIZE",
+                throttle_pwm=direct_pwm,
                 target_alt=target_alt,
                 current_alt=alt,
                 vz=telemetry.filtered_vz,
@@ -719,7 +852,75 @@ def main() -> None:
                     else "Q:--"
                 )
                 log_msg(
-                    f"[STEIGEN]  Ist: {alt_str} / Soll: {target_alt * 100:.0f} cm | vz: {telemetry.filtered_vz:+.2f} m/s | Flow: {q_str}"
+                    f"[ANLAUFEN] Gas: {direct_pct:4.1f}% ({direct_pwm} PWM) | Ist: {alt_str} | vz: {telemetry.filtered_vz:+.2f} m/s | Flow: {q_str}"
+                )
+                last_print = now
+
+            # Abheben erkannt! Sobald LiDAR mindestens 4.5 cm misst
+            if alt is not None and alt >= liftoff_threshold:
+                has_lifted_off = True
+                log_msg(
+                    f"\n>>> 🛫 SANFTES ABHEBEN ERKANNT (Höhe: {alt * 100:.1f} cm >= {liftoff_threshold * 100:.1f} cm)!"
+                )
+                break
+
+            time.sleep(0.04)
+
+        # ------------------------------------------------------------------
+        # PHASE 1B: NAHTLOSER WECHSEL IN ALT_HOLD & SIGMOID-STEIGEN AUF 30 CM
+        # ------------------------------------------------------------------
+        log_msg(">>> 1B. WECHSLE IN ALT_HOLD & SCHALTE AUF SIGMOID-HÖHENREGELUNG...")
+        active_mode = set_mode(master, "ALT_HOLD", timeout=1.0)
+        send_rc_raw(master, throttle=PWM_THROTTLE_HOVER)
+
+        sigmoid_ctrl = SigmoidAltitudeController(
+            target_alt=target_alt,
+            ground_alt=initial_ground_alt,
+            max_climb_speed=0.15,  # 15 cm/s sanfte Steigrate
+            pwm_hover=PWM_THROTTLE_HOVER,
+            pwm_lift_start=1500,
+            pwm_lift_max=1560,
+            pwm_min_brake=1465,
+        )
+        sigmoid_ctrl.has_lifted_off = True
+
+        climb_start = time.monotonic()
+        last_print = 0.0
+        target_reached = False
+
+        while (time.monotonic() - climb_start < 8.0) and not stop_event.is_set():
+            alt = telemetry.update()
+            now = time.monotonic()
+            elapsed = now - climb_start
+
+            active_pwm, v_target, s_progress = sigmoid_ctrl.compute_climb(
+                elapsed_s=elapsed,
+                current_alt=alt,
+                current_vz=telemetry.filtered_vz,
+            )
+
+            send_rc_raw(master, throttle=active_pwm)
+
+            logger.log_telemetry(
+                phase="CLIMB_ALTHOLD",
+                mode=active_mode,
+                throttle_pwm=active_pwm,
+                target_alt=target_alt,
+                current_alt=alt,
+                vz=telemetry.filtered_vz,
+                flow_quality=telemetry.flow_quality,
+                voltage=telemetry.battery_voltage,
+            )
+
+            if now - last_print >= 0.15:
+                alt_str = f"{alt * 100:5.1f} cm" if alt is not None else "---"
+                q_str = (
+                    f"Q:{telemetry.flow_quality}"
+                    if telemetry.flow_quality is not None
+                    else "Q:--"
+                )
+                log_msg(
+                    f"[STEIGEN]  Gas: {active_pwm} PWM | Ist: {alt_str} / Soll: {target_alt * 100:.0f} cm | v_soll: {v_target:+.2f} m/s | vz: {telemetry.filtered_vz:+.2f} m/s | Flow: {q_str}"
                 )
                 last_print = now
 
@@ -730,11 +931,15 @@ def main() -> None:
                 )
                 break
 
-            # Zielhöhe erreicht (>= 85% von target_alt)
-            if alt is not None and alt >= target_alt * 0.85:
+            # Zielhöhe erreicht: Wenn Höhe >= 90% von target_alt und Steigrate sanft abgeflacht
+            if (
+                alt is not None
+                and alt >= target_alt * 0.90
+                and abs(telemetry.filtered_vz) <= 0.06
+            ):
                 target_reached = True
                 log_msg(
-                    f"\n>>> 🎯 ZIELHÖHE ERREICHT! Ist-Höhe: {alt * 100:.1f} cm. Schalte auf Schwebegas (1500 PWM)..."
+                    f"\n>>> 🎯 ZIELHÖHE SANFT ERREICHT! Ist-Höhe: {alt * 100:.1f} cm. Schalte auf Schwebegas (1500 PWM)..."
                 )
                 send_rc_raw(master, throttle=PWM_THROTTLE_HOVER)
                 break
@@ -759,13 +964,23 @@ def main() -> None:
             ) and not stop_event.is_set():
                 alt = telemetry.update()
 
-                if active_mode != "GUIDED":
-                    send_rc_raw(master, throttle=PWM_THROTTLE_HOVER)
+                if active_mode == "GUIDED":
+                    send_guided_target(
+                        master, z_target_m=target_alt, vz_cmd_mps=0.0, vx=0.0, vy=0.0
+                    )
+                else:
+                    hover_pwm = PWM_THROTTLE_HOVER
+                    if alt is not None:
+                        if alt > target_alt + 0.04:
+                            hover_pwm = 1480  # sanftes Absenken
+                        elif alt < target_alt - 0.04:
+                            hover_pwm = 1530  # sanftes Anheben
+                    send_rc_raw(master, throttle=hover_pwm)
 
                 logger.log_telemetry(
                     phase="HOVER",
                     mode=active_mode,
-                    throttle_pwm=PWM_THROTTLE_HOVER,
+                    throttle_pwm=1500,
                     target_alt=target_alt,
                     current_alt=alt,
                     vz=telemetry.filtered_vz,
