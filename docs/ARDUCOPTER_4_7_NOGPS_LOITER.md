@@ -17,7 +17,7 @@ control path. It does not by itself authorize a propeller-on flight or validate
 the real airframe, motor installation, flow alignment, lighting, floor texture,
 rangefinder geometry, or battery.
 
-## Why Loiter failed on the project aircraft
+## Why Loiter failed in the captured pre-flash state
 
 Two independent blockers were present: an inconsistent EKF source selection
 and, decisively, features compiled out of the installed firmware. The captured
@@ -37,7 +37,7 @@ position that cannot exist. AltHold can still work because it needs a vertical
 estimate rather than horizontal position.
 
 The project's captured `@ROMFS/hwdef.dat` then exposed the stronger
-compile-time blocker in the installed image:
+compile-time blocker in the image installed at capture time:
 
 | Build feature | Installed value | Consequence |
 | --- | ---: | --- |
@@ -77,19 +77,27 @@ The project capture supports that diagnosis:
 In the pinned source, Loiter declares `requires_position()`, its entry check
 calls `position_ok()`, and no-GPS entry succeeds only after EKF3 reports a
 relative horizontal position and leaves constant-position mode. That state is
-unreachable in the installed feature build regardless of parameter tuning.
+unreachable in that feature build regardless of parameter tuning.
 See the pinned
 [`mode.cpp`](https://github.com/ArduPilot/ardupilot/blob/1511f27194f1dcc3728270883047bdf022b3fd53/ArduCopter/mode.cpp),
 [`system.cpp`](https://github.com/ArduPilot/ardupilot/blob/1511f27194f1dcc3728270883047bdf022b3fd53/ArduCopter/system.cpp),
 and
 [`AP_NavEKF_Source.cpp`](https://github.com/ArduPilot/ardupilot/blob/1511f27194f1dcc3728270883047bdf022b3fd53/libraries/AP_NavEKF/AP_NavEKF_Source.cpp).
 
+This section is a historical diagnosis, not the current live state. On
+2026-08-25 the reviewed replacement image was flashed and both missing
+features were verified enabled. The post-flash props-off hand lift sustained
+EKF flags `367`, including relative and predicted-relative horizontal
+position with constant-position mode clear. The remaining live blocker is the
+compass pre-arm check documented below, not optical-flow fusion or Loiter mode
+availability.
+
 ## What the Syeed reference aircraft does and does not prove
 
 The `syeed-drone-2026-08-24/` reference aircraft's parameters do not prove
 that it flew flow-only Loiter:
 
-| Setting | Project | Reference | Consequence |
+| Setting | Captured project | Reference | Consequence |
 | --- | ---: | ---: | --- |
 | active source-1 `POSXY` | `3` | `3` | both primary sets request GPS |
 | active source-1 `VELXY` | `5` | `3` | project mixes flow velocity with GPS position |
@@ -496,6 +504,13 @@ The final repeat after adding the pre-arm battery and mode-retention guards was
 `2 passed in 108.91s`. The final explicit two-feature SITL build passed the
 same pair again in `108.90s`.
 
+The post-flash 2026-08-25 rerun passed the same pair in `108.50s`. The clean
+flight observed `STABILIZE -> GUIDED_NOGPS -> LOITER -> LAND`, a 0.520 m
+Loiter minimum and maximum, 0.028 m maximum horizontal drift, zero RC
+channels, 962 externally injected MAVLink 2 flow/range samples, and final
+disarm. The forced companion-loss flight observed the GCS failsafe, selected
+LAND, touched down at 0.148 m/s, and disarmed.
+
 Run the full acceptance gate with:
 
 ```bash
@@ -510,116 +525,108 @@ inertia, and motor/propeller thrust. Until those are supplied, SITL altitude
 and drift bounds validate software behavior rather than predict the physical
 aircraft.
 
-## Deployment and disarmed verification gate
+## Deployment and disarmed verification result
 
-The targeted Pi deployment and five-parameter controller write were completed
-disarmed and propellers-off following the 2026-08-24 capture. The replacement
-firmware described above has been built but was not flashed as part of that
-deployment. The raw captures and live audit bundles are kept outside the
-repository under `/home/abaris/drone-logs/`; neither aircraft's raw capture is
-part of this branch.
+The targeted Pi deployment, five-parameter controller write, and replacement
+firmware installation were completed disarmed and propellers-off. Raw captures
+and audit bundles remain private under `/home/abaris/drone-logs/`; data from
+Lars's and Syeed's aircraft was not uploaded to the project controller. The
+current full project-controller snapshot is
+[`params/flywoo-f745-live-2026-08-25.param`](../params/flywoo-f745-live-2026-08-25.param),
+with dated metadata in
+[`state/2026-08-25/drone-config.json`](../state/2026-08-25/drone-config.json) and
+a sanitized
+[`state/2026-08-25` review](../state/2026-08-25/README.md).
 
-The verified live state is:
+The verified live state on 2026-08-25 is:
 
 - Pi runtime files from commit `cf6642b` match the developer-host SHA-256
-  values and import successfully. No flight task was started.
-- A fresh pre-write bundle downloaded all 1,172 parameters and matched the
-  private project-FC hardware identity recorded in the local backup, official
-  ArduCopter `4.7.0`, and custom version `1511f271`.
-- The guarded writer changed exactly the five reviewed values. A complete
-  before/after comparison found only those changes and the normal
-  `STAT_RUNTIME` increment.
-- Two accepted controller-only reboots incremented `STAT_BOOTCNT` once each.
-  The FC identity, all five values, and the complete reviewed invariant set
-  survived both reboots.
-- Disarmed pre-arm checks passed, the mode remained STABILIZE, and the bench
-  observer sent no arm, mode, motor, throttle, RC-override, mission, or servo
-  command. Downward range reported 2 cm with a 100 cm maximum, optical-flow
-  quality was 48 through 70, and every RC report had zero channels.
-- A subsequent props-off lift held the aircraft at 0.52 through 0.66 m and
-  captured 500 fresh flow samples at about 10 Hz. Quality was 74 through 116,
-  flow was nonzero during translation, range was plausible, and every RC
-  report still showed zero channels. Nevertheless, every EKF report remained
-  at flags `167`: constant-position mode with no relative horizontal position.
-  This is the expected result from the installed image's compiled-out flow
-  fusion and is not grounds for more parameter tuning.
-- The fresh-battery hand lift reported 16.246 through 16.254 V, above the
-  application's 14.4 V minimum. Pack chemistry, independent voltage, and
-  battery-monitor calibration still require operator verification before any
-  propeller-on test.
+  values and import successfully. No flight task was started during deployment
+  or inspection.
+- The guarded writer changed exactly the five reviewed values. Complete
+  before/after comparisons found only those changes plus expected boot/runtime
+  values; all five values and the reviewed invariant set survived reboot.
+- The installed target is the reviewed feature image built from official
+  ArduCopter 4.7.0 commit `1511f271`, board ID 1027. Two independent ROMFS
+  reads across an accepted reboot were
+  byte-identical and matched the reviewed image. The resolved build reports
+  `EK3_FEATURE_OPTFLOW_FUSION=1`, `MODE_GUIDED_NOGPS_ENABLED=1`, and
+  `EK3_FEATURE_OPTFLOW_SRTM=0`; `AVAILABLE_MODES` advertises mode 20
+  (`GUIDED_NOGPS`). The mode remained STABILIZE during every read-only check.
+- Complete pre-flash, post-flash, and post-reboot downloads each contained all
+  1,172 advertised parameters. Board, serial, calibration, motor-output,
+  battery, RC, compass, and origin values were preserved. The latest disarmed
+  repository snapshot has parameter SHA-256
+  `77439ffde8ef3191ba26e263d21eeae15c5f86a603ac47f2efc5c4b0cb56e046`.
+- The synchronized 40.010 s props-off hand lift remained disarmed in STABILIZE
+  for all 40 heartbeats. All 200 RC reports had zero channels, all 200 throttle
+  reports were zero, and motor outputs 1 through 4 remained at 1000. Battery
+  telemetry was 15.807 through 15.826 V.
+- Downward range rose from 0.02 m to at most 0.78 m. Optical flow delivered 798
+  samples at 19.97 Hz without a quality-zero dropout. At or above 0.5 m its
+  quality was 90 through 116 with median 99. No forward range stream appeared,
+  as expected for this aircraft.
+- Every one of 200 EKF reports had flags `367`: horizontal velocity, relative
+  and predicted-relative horizontal position, vertical velocity, absolute and
+  above-ground vertical position, and attitude. Absolute horizontal position
+  and constant-position mode were absent. Local position was finite,
+  monotonic, and reset-free during the hand translation. This passes the
+  post-flash relative-aiding gate that the captured image failed.
+- The hand lift is not an altitude-control calibration. During the rapid lift,
+  barometer-backed local altitude lagged range change by as much as 0.405 m,
+  and isolated compensated-flow transients reached 1.94 m/s. Flow axes and
+  scale still require controlled external-reference validation.
+- The recorder does not emit the production controller's GCS heartbeat, so its
+  two requested pre-arm reports also contained `GCS failsafe on`. A subsequent
+  30 s audit using the production heartbeat cleared that message, proving the
+  live GCS-heartbeat path works. That audit remained disarmed in STABILIZE with
+  EKF flags `367`, zero RC channels, 2 cm range, positive flow quality, and
+  15.799 through 15.807 V.
 
-The final snapshot differs from the pre-reboot snapshot in the expected boot
-and runtime counters and boot-time barometer/gyro calibration values.
-`SCHED_OPTIONS` also returned from 1 to its persisted value 0: reading
-`@SYS/tasks.txt` during the raw capture calls ArduPilot's `task_info()`, which
-temporarily enables its task-information bit with `_options.set()` but does not
-save it. The reviewed writer did not touch this parameter; the complete
-pre-reboot comparison proves it changed only during reboot.
+The post-flash gate is therefore complete except for one blocking result: the
+final pre-arm audit repeatedly reported only `PreArm: Check mag field`, with
+horizontal error 376 through 385 mG against the unchanged 100 mG limit. During
+the lifted recording it also failed at 274 mG and later 185 mG. Historical
+project DataFlash logs contain the same class of failure, so this was not
+introduced by the replacement firmware.
 
-The gate used for that deployment, with the remaining steps retained, is:
+Do not lower `ARMING_MAGTHRESH`, change `ARMING_SKIPCHK=0`, disable compass use,
+or copy another aircraft's calibration to bypass this result. First relocate
+the complete aircraft away from computers, steel furniture, reinforced floors,
+power wiring, and other magnetic sources and repeat the resting pre-arm audit.
+If it still fails, inspect the external compass/module mounting, orientation,
+cabling, battery-current wiring separation, and physical damage, then perform
+an onboard compass calibration in a magnetically clean location, reboot, and
+repeat the audit. ArduPilot's
+[pre-arm guidance](https://ardupilot.org/copter/docs/common-prearm-safety-checks.html),
+[magnetic-interference guidance](https://ardupilot.org/copter/docs/common-magnetic-interference.html),
+and
+[onboard calibration procedure](https://ardupilot.org/copter/docs/common-compass-calibration-in-mission-planner.html)
+all require correcting the environment or calibration rather than suppressing
+the check.
 
-1. Capture a new full parameter file, firmware identity, mission/fence/rally
-   state, and hashes. Confirm it is the project aircraft, not the reference.
-2. Dry-run the Pi deployment and review every changed path. Deploy only the
-   targeted runtime source; preserve the Pi's environment, virtual
-   environment, recordings, and artifacts. Do not start a flight command.
-3. Confirm the deployed files and Python environment import cleanly, and that
-   the guarded CLI help works without connecting to actuators.
-4. With a fresh disarmed heartbeat, write the five reviewed FC values one at a
-   time and read back each value immediately. Write no other captured or
-   reference parameters.
-5. Reboot the flight controller, reconnect, verify official 4.7.0 commit
-   `1511f271`, and read back the complete reviewed invariant set. Reboot and
-   read back a second time to prove persistence.
-6. Run ArduPilot's pre-arm checks without arming. Resolve every status message;
-   do not change `ARMING_SKIPCHK=0` to suppress one.
-7. The pre-flash props-off lift described above established healthy range and
-   flow-front-end data but failed the relative-position gate exactly as the
-   installed feature matrix predicts. Do not repeat it as a tuning exercise.
-   Repeat it only after the reviewed firmware passes the post-flash identity
-   and feature checks below.
-8. Verify signal handling and the GCS heartbeat/failsafe state while disarmed.
-   No bench check may send arm, throttle, RC override, mode-change, mission,
-   motor, or servo commands.
-
-The firmware-specific post-flash gate is read-only and propellers-off:
-
-1. Read ROMFS `hwdef.dat` twice using independent connections with an accepted
-   reboot between them. Require matching reads and the reviewed complete
-   feature matrix, including `EK3_FEATURE_OPTFLOW_FUSION=1` and
-   `MODE_GUIDED_NOGPS_ENABLED=1`.
-2. Request `AVAILABLE_MODES` and require custom mode 20 (`GUIDED_NOGPS`) to be
-   advertised. Do not select it, and confirm the current mode did not change.
-3. Compare the complete parameter set with the pre-flash backup and again
-   after reboot. Persistent configuration must be unchanged, including the
-   five reviewed values and all board, calibration, output, serial, and battery
-   settings. Investigate every unexplained difference.
-4. Run pre-arm checks without arming. Then repeat the above-0.5 m hand lift
-   over a lit, textured floor. Require explicit optical-flow-fusion and
-   started-relative-aiding evidence, EKF `AID_RELATIVE`,
-   `EKF_POS_HORIZ_REL` set, `EKF_CONST_POS_MODE` clear, and fresh plausible
-   local horizontal position, alongside healthy flow/range and zero RC
-   channels.
-5. Set the aircraft down and confirm the controller remained disarmed and no
-   actuator or mode command was sent. Preserve the complete post-flash audit.
-
-Failure of any item blocks propeller installation and all autonomous tests.
+Until that pre-arm check passes normally, propeller installation, motor tests,
+and autonomous flight remain blocked even though the firmware, no-GPS EKF
+aiding, and SITL flight path now pass.
 
 ## Additional gate before any propeller-on autonomous test
 
 The following cannot be proven by SITL or a remote disarmed inspection:
 
-1. Independently measure the flight battery. The replacement pack reported
-   16.246 through 16.254 V during the latest hand lift and passed the production
-   command's 14.4 V software guard, but telemetry alone does not establish pack
-   chemistry, cell balance, or monitor calibration. Confirm those before
-   selecting battery failsafe actions; do not guess the values.
+1. Independently measure the flight battery. The pack reported 15.807 through
+   15.826 V during the latest hand lift and passed the production command's
+   14.4 V software guard, but telemetry alone does not establish pack chemistry,
+   cell balance, or monitor calibration. Confirm those before selecting battery
+   failsafe actions; do not guess the values.
 2. Verify frame integrity, propeller type and orientation, motor order and
    direction, center of gravity, sensor mounting, and vibration isolation with
    props removed first.
 3. Calibrate flow axes and `FLOW_FXSCALER`/`FLOW_FYSCALER` over the actual
    floor, height, and lighting. Confirm the downward rangefinder remains valid
-   throughout 0 to 0.8 m. Camera/AprilTag health is useful for the later grid
+   throughout 0 to 0.8 m. The hand-lift camera was downward and unobstructed,
+   but its 0.56-to-0.77 m images were soft and unevenly illuminated. Clean and
+   focus the optical path, then test known-size AprilTags across the intended
+   height and image area. Camera/AprilTag health is useful for the later grid
    mission but is not part of Loiter stabilization.
 4. Provide an independently tested pilot takeover or emergency LAND method.
    The capture showed no active RC input and `FS_THR_ENABLE=0`; do not enable an
@@ -642,17 +649,27 @@ The following cannot be proven by SITL or a remote disarmed inspection:
 ## Prior branch finding
 
 `origin/preflight-and-nogps-takeoff` must not be merged wholesale. Its short
-apparent hover was a LAND response after STABILIZE failed to lift: the recorded
-modes were STABILIZE and LAND, never Loiter. A bad vertical estimate caused the
-LAND controller to command unexpectedly high output, and a later run reached
-the ceiling. Its custom Python vehicle was a protocol double with an
-unconditionally healthy, GPS-backed EKF rather than ArduCopter SITL, and it
-used removed 4.6 `ARMING_CHECK` semantics.
+flight artifacts must be distinguished from its separate failure runs. Two
+recovered 2026-08-20 recordings completed an AltHold path:
 
-The useful evidence from that branch is limited to the improvement from
-barometer height and the need to become airborne before flow-backed relative
-position can be handed to Loiter. It is not evidence of a successful no-GPS
-Loiter hover.
+- one remained armed for about 35 seconds, but moved through AltHold, LAND, and
+  STABILIZE while its full armed range record spanned 0.02 to 3.06 m;
+- one remained armed for about 4 seconds in AltHold with range about 0.42 to
+  0.50 m, after the aircraft was already elevated.
+
+These are limited and inconclusive AltHold evidence, not a validated hover.
+Neither recording entered Loiter, and both retained EKF flags `167`: no
+relative horizontal position and constant-position mode set. Other runs on the
+branch include a bad vertical estimate, an unexpectedly aggressive LAND
+response, ceiling breaches, timeouts, and logging failures. Its custom Python
+test vehicle was also a protocol double with an unconditionally healthy,
+GPS-backed EKF rather than exact ArduCopter SITL, and older code used removed
+4.6 `ARMING_CHECK` semantics.
+
+The useful branch evidence is limited to the improvement from barometer height,
+the fact that brief AltHold lift was possible, and the need to become airborne
+before flow-backed relative position can be handed to Loiter. It is not
+evidence of a successful no-GPS Loiter hover or of a safe autonomous sequence.
 
 Primary ArduPilot references:
 

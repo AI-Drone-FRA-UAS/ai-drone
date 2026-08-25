@@ -94,9 +94,10 @@ utility also requires ArduCopter 4.7's `ARMING_SKIPCHK=0` (no checks skipped)
 and resolved pre-arm failures. Follow
 the [bench motor procedure](docs/BENCH_MOTOR_TEST.md).
 
-No live arm, takeoff, or altitude-hold flight has been validated by
-the repository documentation. Flight work must progress through SITL,
-propeller-off checks, calibrated sensors, and restrained tests. See
+No live `GUIDED_NOGPS -> LOITER -> LAND` sequence has been validated. Historical
+AltHold attempts provide only brief or inconclusive lift evidence and do not
+prove Loiter or a safe autonomous flight. Flight work must progress through
+SITL, propeller-off checks, calibrated sensors, and restrained tests. See
 [MAVLink control](docs/PI_MAVLINK_CONTROL.md).
 
 ## Development checks

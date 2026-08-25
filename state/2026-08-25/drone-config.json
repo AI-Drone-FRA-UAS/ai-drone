@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-08-25T08:18:18.544754+00:00",
+  "parameter_count": 1172,
+  "parameter_file": "params/flywoo-f745-live-2026-08-25.param",
+  "parameter_sha256": "77439ffde8ef3191ba26e263d21eeae15c5f86a603ac47f2efc5c4b0cb56e046",
+  "schema_version": 1,
+  "source": {
+    "baud": 115200,
+    "endpoint": "/dev/serial0",
+    "target_component": 1,
+    "target_system": 1
+  },
+  "vehicle": {
+    "armed": false,
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "system_status": 5,
+    "type": 2
+  }
+}
