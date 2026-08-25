@@ -100,6 +100,17 @@ topology is in `docs/DRONE_CONFIGURATION.md`, networking in
 Preserve `SSH_CONFIG` propagation so a broken host SSH config cannot block the
 connection and health tools.
 
+## Drone data provenance
+
+`syeed-drone-2026-08-24/` contains data from a different drone and exists only
+as reference material. It does not describe this project's drone. Do not use it
+to draw conclusions about the project drone, and never upload or merge its
+parameters, missions, fences, calibration data, firmware defaults, or other
+configuration into the project drone without an explicit, individually
+reviewed request. The project's own drone captures are under `params/` and
+dated `state/` directories; the documented project hardware and topology are
+in `docs/drone-project.md` and `docs/DRONE_CONFIGURATION.md`.
+
 Do not put passwords, Wi-Fi/eduroam credentials, tokens, private keys, or real
 secret defaults in source, documentation, command lines, logs, deployment
 archives, or state captures.

@@ -43,45 +43,6 @@ requires exactly `ARMING_SKIPCHK=0` before an arm path, verifies state
 transitions, caps commands, and uses bounded timeouts. Cleanup lands only a
 flight started by that controller instance.
 
-## SITL
-
-Keep ArduPilot outside this repository and pin the checkout. ArduPilot's
-[native setup instructions](https://ardupilot.org/dev/docs/setting-up-sitl-on-linux.html)
-are tested on Ubuntu; do not run its Ubuntu prerequisite script directly on
-this Arch Linux host. Use the checkout's container with rootless Podman:
-
-```bash
-# Run on the Arch host. The clone command creates /home/abaris/ardupilot.
-cd /home/abaris
-git clone --branch Copter-4.7.0 --recurse-submodules \
-  https://github.com/ArduPilot/ardupilot.git /home/abaris/ardupilot
-
-# Build the reusable Ubuntu toolchain image from the ArduPilot checkout.
-cd /home/abaris/ardupilot
-podman build . -t localhost/ardupilot-sitl:4.7.0 \
-  --build-arg USER_UID="$(id -u)" --build-arg USER_GID="$(id -g)" \
-  --build-arg DO_AP_STM_ENV=0 --build-arg SKIP_AP_EXT_ENV=1
-
-# Compile ArduCopter SITL into /home/abaris/ardupilot/build/sitl.
-podman run --rm --userns=keep-id \
-  -v /home/abaris/ardupilot:/ardupilot \
-  localhost/ardupilot-sitl:4.7.0 \
-  bash -lc './waf configure --board sitl && ./waf copter'
-
-# Run this repository's complete inspect-hover-land simulation.
-cd /home/abaris/ai-drone
-ARDUPILOT_ROOT=/home/abaris/ardupilot \
-  uv run --group dev pytest -m sitl -q -s
-```
-
-Docker can run the same image recipe if Podman is unavailable. The container
-build is an explicit, one-time prerequisite. The opt-in test
-never compiles ArduPilot: it runs the prepared binary directly, inspects
-simulated downward range and optical flow, flies a 0.4 m hover below a 0.6 m
-ceiling, lands, and verifies disarm. Ordinary test runs skip it when
-`ARDUPILOT_ROOT` is unset. Windows users should follow ArduPilot's
-[WSL instructions](https://ardupilot.org/dev/docs/sitl-on-windows-wsl.html).
-
 ## Required validation sequence
 
 1. Run the repository checks and every control mode in ArduPilot Copter SITL,

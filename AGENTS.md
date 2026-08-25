@@ -31,3 +31,17 @@
   explicitly requests an armed or actuator test.
 - Sensor recording and camera tests must not send arm, mode-change, motor,
   throttle, RC override, mission-start, or servo commands.
+
+## Drone data provenance
+
+- `syeed-drone-2026-08-24/` is a capture from a different drone, retained only
+  as reference material. It is not this project's drone and must not be used to
+  infer the project's hardware, firmware, configuration, health, or safety
+  state.
+- Never upload, merge, or copy parameters, missions, fences, calibration data,
+  firmware defaults, or other configuration from `syeed-drone-2026-08-24/` to
+  the project drone unless the user explicitly requests a reviewed individual
+  value.
+- The project's own recorded drone data is in `params/` and dated `state/`
+  captures; use `docs/drone-project.md` and `docs/DRONE_CONFIGURATION.md` for
+  the documented project hardware and topology.
