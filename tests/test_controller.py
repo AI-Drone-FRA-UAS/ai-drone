@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import math
 import time
 from contextlib import contextmanager
@@ -710,7 +711,7 @@ def test_cli_forwards_battery_threshold_into_controller(monkeypatch) -> None:
         return object()
 
     monkeypatch.setattr(control, "DroneController", fake_controller)
-    args = SimpleNamespace(
+    args = argparse.Namespace(
         device="tcp:127.0.0.1:5760",
         baud=115200,
         max_alt=0.8,
