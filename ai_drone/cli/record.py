@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import queue
 import threading
 import time
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _TAG36H11_MAX_ID = 586
+MANUAL_FLIGHT_RECORDING_CONFIRMATION = "PASSIVE_MANUAL_FLIGHT_RECORDING"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -65,6 +67,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--duration", type=float, default=10.0, metavar="SECONDS")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--confirm-manual-flight-recording",
+        metavar="ACKNOWLEDGEMENT",
+        help=(
+            "permit the pilot to arm only after the synchronized recorder prints "
+            f"READY; must be exactly {MANUAL_FLIGHT_RECORDING_CONFIRMATION}"
+        ),
+    )
     parser.add_argument("--device", help="serial path or pymavlink network endpoint")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -122,6 +132,14 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--warmup must be finite and not negative")
     if not math.isfinite(args.decimate) or args.decimate < 1.0:
         parser.error("--decimate must be finite and at least 1.0")
+    if args.confirm_manual_flight_recording not in (
+        None,
+        MANUAL_FLIGHT_RECORDING_CONFIRMATION,
+    ):
+        parser.error(
+            "--confirm-manual-flight-recording must be exactly "
+            f"{MANUAL_FLIGHT_RECORDING_CONFIRMATION}"
+        )
     if args.target_id is not None and not 0 <= args.target_id <= _TAG36H11_MAX_ID:
         parser.error(
             f"--target-id must be between 0 and {_TAG36H11_MAX_ID} for tag36h11"
@@ -150,6 +168,9 @@ class CaptureState:
     latest_distance_m: dict[int, float] = field(default_factory=dict)
     optical_flow_samples: int = 0
     latest_flow_quality: int | None = None
+    saw_armed: bool = False
+    saw_disarmed_after_arm: bool = False
+    last_vehicle_state: str | None = None
     armed_abort: bool = False
     worker_error: str | None = None
     _error_lock: threading.Lock = field(
@@ -168,6 +189,17 @@ class CaptureState:
             if self.worker_error is None:
                 self.worker_error = message
 
+    def observe_vehicle_state(self, *, armed: bool) -> None:
+        """Track selected-vehicle arm transitions from the telemetry worker."""
+
+        if armed:
+            self.saw_armed = True
+            self.last_vehicle_state = "armed"
+            return
+        if self.saw_armed:
+            self.saw_disarmed_after_arm = True
+        self.last_vehicle_state = "disarmed"
+
 
 class CaptureWindow:
     """One synchronized video, telemetry, and analysis capture epoch."""
@@ -175,6 +207,7 @@ class CaptureWindow:
     def __init__(self, duration: float) -> None:
         self.duration = duration
         self.started = threading.Event()
+        self.ready = threading.Event()
         self.started_monotonic: float | None = None
         self.started_utc: datetime | None = None
         self.deadline: float | None = None
@@ -228,6 +261,7 @@ class TelemetryWorker(threading.Thread):
         stop: threading.Event,
         state: CaptureState,
         sync: IntervalSync,
+        allow_armed_after_ready: bool = False,
     ) -> None:
         super().__init__(name="telemetry-recorder", daemon=True)
         self.connection = connection
@@ -238,6 +272,7 @@ class TelemetryWorker(threading.Thread):
         self.stop = stop
         self.state = state
         self.sync = sync
+        self.allow_armed_after_ready = allow_armed_after_ready
 
     def run(self) -> None:
         try:
@@ -266,15 +301,24 @@ class TelemetryWorker(threading.Thread):
                             component_id=self.vehicle_component,
                         )
                     )
-                    if is_vehicle_heartbeat and heartbeat_is_armed(message):
-                        self.state.armed_abort = True
-                        self.state.record_error(
-                            "vehicle became ARMED during camera startup or capture"
-                        )
-                        self.stop.set()
-                        return
                     if is_vehicle_heartbeat:
-                        self.state.disarmed_heartbeat.set()
+                        armed = heartbeat_is_armed(message)
+                        self.state.observe_vehicle_state(armed=armed)
+                        if armed and (
+                            not self.allow_armed_after_ready
+                            or not self.window.ready.is_set()
+                        ):
+                            self.state.armed_abort = True
+                            self.state.record_error(
+                                "vehicle became ARMED during camera startup or capture"
+                                if not self.allow_armed_after_ready
+                                else "vehicle became ARMED before the manual-flight "
+                                "recorder was READY"
+                            )
+                            self.stop.set()
+                            return
+                        if not armed:
+                            self.state.disarmed_heartbeat.set()
                     started = self.window.started_monotonic
                     deadline = self.window.deadline
                     if started is None or received_at < started:
@@ -551,6 +595,11 @@ def _cleanup_mavlink_connection(connection: Any | None, state: CaptureState) -> 
         logfile = None
     if logfile is not None:
         _cleanup_action(state, "flush MAVLink logfile", lambda: logfile.flush())
+        _cleanup_action(
+            state,
+            "sync MAVLink logfile",
+            lambda: os.fsync(logfile.fileno()),
+        )
         _cleanup_action(state, "close MAVLink logfile", lambda: logfile.close())
         _cleanup_action(
             state,
@@ -558,6 +607,15 @@ def _cleanup_mavlink_connection(connection: Any | None, state: CaptureState) -> 
             lambda: setattr(connection, "logfile", None),
         )
     _cleanup_action(state, "close MAVLink connection", lambda: connection.close())
+
+
+def _sync_existing_file(path: Path) -> None:
+    """Persist a completed camera artifact before publishing its manifest."""
+
+    if not path.exists():
+        return
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
 
 
 def _cleanup_capture(
@@ -609,6 +667,13 @@ def _cleanup_capture(
                 last_frame,
                 "last-frame",
             ),
+        )
+    for label, path in (
+        ("H.264 video", paths.video),
+        ("H.264 timestamps", paths.video_timestamps),
+    ):
+        _cleanup_action(
+            state, f"sync {label}", lambda path=path: _sync_existing_file(path)
         )
     _cleanup_mavlink_connection(connection, state)
 
@@ -798,6 +863,9 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
     parser = _parser()
     args = parser.parse_args(arguments)
     _validate_args(parser, args)
+    manual_flight_recording = (
+        args.confirm_manual_flight_recording == MANUAL_FLIGHT_RECORDING_CONFIRMATION
+    )
     paths = create_recording_paths(args.output_dir)
     state = CaptureState()
     window = CaptureWindow(args.duration)
@@ -827,12 +895,14 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         ):
             connection = candidate
             initial_vehicle_state = "armed"
+            state.observe_vehicle_state(armed=True)
             state.armed_abort = True
             state.record_error("vehicle is ARMED; inspection refused")
             stop.set()
         else:
             connection = candidate
             initial_vehicle_state = "disarmed"
+            state.observe_vehicle_state(armed=False)
             flight_controller_status = "ok"
             requested_messages = request_telemetry_messages(connection)
     except (FileNotFoundError, OSError, RuntimeError, TimeoutError) as error:
@@ -852,6 +922,7 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             stop=stop,
             state=state,
             sync=IntervalSync(args.sync_interval),
+            allow_armed_after_ready=manual_flight_recording,
         )
         telemetry_worker.start()
 
@@ -873,13 +944,17 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         details["camera"] = "Picamera2 inspection is available only on Raspberry Pi"
     elif not state.armed_abort:
         try:
-            import cv2 as cv2_module  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+            import cv2 as cv2_module  # type: ignore[import-untyped]
             import numpy as np
-            from picamera2 import Picamera2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+            from picamera2 import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+                Picamera2,
+            )
             from picamera2.encoders import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
                 H264Encoder,
             )
-            from picamera2.outputs import FileOutput  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+            from picamera2.outputs import (  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+                FileOutput,
+            )
 
             cv2 = cv2_module
 
@@ -999,8 +1074,33 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             camera_started = False
             encoder_started = False
 
+    if (
+        manual_flight_recording
+        and not state.armed_abort
+        and (connection is None or camera_status != "ok")
+    ):
+        state.record_error(
+            "manual-flight recording requires monitored flight-controller telemetry "
+            "and camera video"
+        )
+        stop.set()
+
     if not window.started.is_set() and not state.armed_abort:
         _start_capture_epoch(connection, paths.telemetry_tlog, window, stop, state)
+
+    if manual_flight_recording and window.started.is_set() and not stop.is_set():
+        try:
+            _wait_for_fresh_disarmed_heartbeat(stop, state, args.timeout)
+        except (RuntimeError, TimeoutError) as error:
+            state.record_error(f"final manual-flight readiness check: {error}")
+            stop.set()
+        else:
+            window.ready.set()
+            print(
+                "READY: passive manual-flight recording is synchronized; the pilot "
+                "may arm now. This recorder sends no flight-control commands.",
+                flush=True,
+            )
 
     started_monotonic = time.monotonic()
     started_utc: datetime | None = None
@@ -1123,6 +1223,10 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         "components": components,
         "safety": {
             "initial_vehicle_state": initial_vehicle_state,
+            "manual_flight_recording": manual_flight_recording,
+            "saw_armed": state.saw_armed,
+            "saw_disarmed_after_arm": state.saw_disarmed_after_arm,
+            "last_vehicle_state": state.last_vehicle_state or "unavailable",
             "commands_never_sent": [
                 "arm",
                 "disarm",

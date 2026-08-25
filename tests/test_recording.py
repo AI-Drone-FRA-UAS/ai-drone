@@ -15,6 +15,7 @@ from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 import ai_drone.cli.record as inspect_cli
 from ai_drone.cli.record import (
+    MANUAL_FLIGHT_RECORDING_CONFIRMATION,
     AnalysisFrame,
     CaptureState,
     CaptureWindow,
@@ -114,9 +115,11 @@ def test_request_telemetry_never_sends_an_arm_command() -> None:
     requested = request_telemetry_messages(connection)
 
     assert set(requested).issubset(TELEMETRY_RATES_HZ)
-    assert sent
+    assert len(sent) == len(requested) == 23
     assert all(values[2] == mavlink.MAV_CMD_SET_MESSAGE_INTERVAL for values in sent)
     assert all(values[2] != mavlink.MAV_CMD_COMPONENT_ARM_DISARM for values in sent)
+    assert all(values[3] == 0 for values in sent)
+    assert all(values[6:] == (0, 0, 0, 0, 0) for values in sent)
 
 
 @pytest.mark.parametrize("rate", [0.0, -1.0, float("nan"), float("inf")])
@@ -168,6 +171,25 @@ def test_record_parser_accepts_configurable_seconds() -> None:
     assert args.duration == 12.5
     assert args.resolution == (1280, 960)
     assert parse_even_resolution("640x480") == (640, 480)
+
+
+def test_manual_flight_recording_requires_exact_acknowledgement() -> None:
+    parser = _parser()
+    accepted = parser.parse_args(
+        [
+            "--confirm-manual-flight-recording",
+            MANUAL_FLIGHT_RECORDING_CONFIRMATION,
+        ]
+    )
+    _validate_args(parser, accepted)
+
+    assert MANUAL_FLIGHT_RECORDING_CONFIRMATION == "PASSIVE_MANUAL_FLIGHT_RECORDING"
+
+    rejected = parser.parse_args(
+        ["--confirm-manual-flight-recording", "passive_manual_flight_recording"]
+    )
+    with pytest.raises(SystemExit):
+        _validate_args(parser, rejected)
 
 
 @pytest.mark.parametrize(
@@ -311,10 +333,14 @@ class _TelemetryMessage:
         *,
         armed: bool = False,
         observed: threading.Event | None = None,
+        system: int = 1,
+        component: int = 1,
     ) -> None:
         self.message_type = message_type
         self.base_mode = mavlink.MAV_MODE_FLAG_SAFETY_ARMED if armed else 0
         self.observed = observed
+        self.system = system
+        self.component = component
 
     def get_type(self) -> str:
         if self.observed is not None:
@@ -322,10 +348,10 @@ class _TelemetryMessage:
         return self.message_type
 
     def get_srcSystem(self) -> int:
-        return 1
+        return self.system
 
     def get_srcComponent(self) -> int:
-        return 1
+        return self.component
 
     def to_dict(self) -> dict[str, object]:
         return {"mavpackettype": self.message_type}
@@ -369,6 +395,121 @@ def test_telemetry_worker_detects_arming_before_capture_epoch(tmp_path) -> None:
     assert state.worker_error == "vehicle became ARMED during camera startup or capture"
     assert not window.started.is_set()
     assert (tmp_path / "telemetry.jsonl").read_text() == ""
+
+
+def test_manual_flight_worker_rejects_arming_before_ready(tmp_path) -> None:
+    connection = _QueuedConnection()
+    stop = threading.Event()
+    state = CaptureState()
+    window = CaptureWindow(duration=1.0)
+    window.begin()
+    worker = TelemetryWorker(
+        connection=connection,
+        output=tmp_path / "telemetry.jsonl",
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0.0),
+        allow_armed_after_ready=True,
+    )
+    worker.start()
+
+    connection.messages.put(_TelemetryMessage("HEARTBEAT", armed=True))
+    assert stop.wait(timeout=1.0)
+    worker.join(timeout=1.0)
+
+    assert state.armed_abort
+    assert state.saw_armed
+    assert state.last_vehicle_state == "armed"
+    assert state.worker_error == (
+        "vehicle became ARMED before the manual-flight recorder was READY"
+    )
+    assert not state.disarmed_heartbeat.is_set()
+    assert (tmp_path / "telemetry.jsonl").read_text() == ""
+
+
+def test_manual_flight_worker_records_arm_and_disarm_after_ready(tmp_path) -> None:
+    connection = _QueuedConnection()
+    stop = threading.Event()
+    state = CaptureState(last_vehicle_state="disarmed")
+    window = CaptureWindow(duration=5.0)
+    window.begin()
+    window.ready.set()
+    worker = TelemetryWorker(
+        connection=connection,
+        output=tmp_path / "telemetry.jsonl",
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0.0),
+        allow_armed_after_ready=True,
+    )
+    worker.start()
+
+    connection.messages.put(_TelemetryMessage("HEARTBEAT", armed=True))
+    deadline = time.monotonic() + 1.0
+    while state.telemetry_counts["HEARTBEAT"] < 1 and time.monotonic() < deadline:
+        time.sleep(0.001)
+
+    assert state.telemetry_counts["HEARTBEAT"] == 1
+    assert not stop.is_set()
+    assert state.saw_armed
+    assert not state.saw_disarmed_after_arm
+    assert state.last_vehicle_state == "armed"
+    assert not state.disarmed_heartbeat.is_set()
+
+    connection.messages.put(_TelemetryMessage("HEARTBEAT", armed=False))
+    deadline = time.monotonic() + 1.0
+    while state.telemetry_counts["HEARTBEAT"] < 2 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    stop.set()
+    worker.join(timeout=1.0)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "telemetry.jsonl").read_text().splitlines()
+    ]
+    assert [record["message"] for record in records] == ["HEARTBEAT", "HEARTBEAT"]
+    assert not state.armed_abort
+    assert state.worker_error is None
+    assert state.saw_disarmed_after_arm
+    assert state.last_vehicle_state == "disarmed"
+
+
+def test_manual_flight_worker_ignores_other_vehicle_arming(tmp_path) -> None:
+    connection = _QueuedConnection()
+    stop = threading.Event()
+    state = CaptureState(last_vehicle_state="disarmed")
+    window = CaptureWindow(duration=1.0)
+    window.begin()
+    worker = TelemetryWorker(
+        connection=connection,
+        output=tmp_path / "telemetry.jsonl",
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0.0),
+        allow_armed_after_ready=True,
+    )
+    worker.start()
+
+    observed = threading.Event()
+    connection.messages.put(
+        _TelemetryMessage("HEARTBEAT", armed=True, observed=observed, system=2)
+    )
+    assert observed.wait(timeout=1.0)
+    stop.set()
+    worker.join(timeout=1.0)
+
+    assert not state.armed_abort
+    assert not state.saw_armed
+    assert state.last_vehicle_state == "disarmed"
 
 
 def test_telemetry_worker_discards_pre_epoch_messages(tmp_path) -> None:
@@ -648,6 +789,45 @@ def test_cleanup_does_not_replace_original_capture_error(tmp_path) -> None:
     assert state.worker_error == "original capture failure"
 
 
+def test_cleanup_fsyncs_raw_telemetry_and_camera_artifacts(
+    tmp_path, monkeypatch
+) -> None:
+    paths = create_recording_paths(tmp_path / "durable")
+    paths.video.write_bytes(b"video")
+    paths.video_timestamps.write_text("0.0\n")
+    logfile = paths.telemetry_tlog.open("wb")
+    logfile.write(b"telemetry")
+    connection = SimpleNamespace(
+        logfile=logfile,
+        close=lambda: None,
+    )
+    synced: list[int] = []
+    monkeypatch.setattr(
+        inspect_cli.os, "fsync", lambda descriptor: synced.append(descriptor)
+    )
+
+    _cleanup_capture(
+        camera=None,
+        encoder=None,
+        camera_started=False,
+        encoder_started=False,
+        telemetry_worker=None,
+        detection_worker=None,
+        frames=queue.Queue(),
+        cv2=None,
+        paths=paths,
+        first_frame=None,
+        last_frame=None,
+        connection=connection,
+        stop=threading.Event(),
+        state=CaptureState(),
+    )
+
+    assert len(synced) == 3
+    assert logfile.closed
+    assert connection.logfile is None
+
+
 def test_inspector_classifies_observed_range_and_flow_streams() -> None:
     state = CaptureState()
     _observe_sensor_message(
@@ -735,8 +915,44 @@ def test_inspector_succeeds_and_writes_manifest_when_all_hardware_is_absent(
     assert manifest["components"]["camera"]["status"] == "unavailable"
 
 
+def test_manual_flight_recording_never_becomes_ready_without_hardware(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    output = tmp_path / "manual-unavailable"
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(
+        inspect_cli,
+        "resolve_mavlink_endpoint",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("none")),
+    )
+
+    assert (
+        run(
+            [
+                "--duration",
+                "0.01",
+                "--output-dir",
+                str(output),
+                "--confirm-manual-flight-recording",
+                MANUAL_FLIGHT_RECORDING_CONFIRMATION,
+            ]
+        )
+        == 1
+    )
+
+    assert "READY:" not in capsys.readouterr().out
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["completed"] is False
+    assert manifest["safety"]["manual_flight_recording"] is True
+    assert manifest["error"] == (
+        "manual-flight recording requires monitored flight-controller telemetry "
+        "and camera video"
+    )
+
+
+@pytest.mark.parametrize("manual_flight_recording", [False, True])
 def test_inspector_aborts_armed_vehicle_and_still_writes_manifest(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, manual_flight_recording: bool
 ) -> None:
     output = tmp_path / "armed"
 
@@ -763,8 +979,21 @@ def test_inspector_aborts_armed_vehicle_and_still_writes_manifest(
         lambda *_args, **_kwargs: connection,
     )
 
-    assert run(["--duration", "0.01", "--output-dir", str(output)]) == 3
+    arguments = ["--duration", "0.01", "--output-dir", str(output)]
+    if manual_flight_recording:
+        arguments.extend(
+            [
+                "--confirm-manual-flight-recording",
+                MANUAL_FLIGHT_RECORDING_CONFIRMATION,
+            ]
+        )
+
+    assert run(arguments) == 3
     assert connection.closed
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["armed_abort"] is True
     assert manifest["safety"]["initial_vehicle_state"] == "armed"
+    assert manifest["safety"]["manual_flight_recording"] is manual_flight_recording
+    assert manifest["safety"]["saw_armed"] is True
+    assert manifest["safety"]["saw_disarmed_after_arm"] is False
+    assert manifest["safety"]["last_vehicle_state"] == "armed"
