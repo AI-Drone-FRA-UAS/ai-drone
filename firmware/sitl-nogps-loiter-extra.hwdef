@@ -1,0 +1,6 @@
+# Keep the standard SITL board and simulator hardware defaults. Explicitly
+# require only the two compile-time capabilities added to the project FC.
+undef EK3_FEATURE_OPTFLOW_FUSION
+define EK3_FEATURE_OPTFLOW_FUSION 1
+undef MODE_GUIDED_NOGPS_ENABLED
+define MODE_GUIDED_NOGPS_ENABLED 1

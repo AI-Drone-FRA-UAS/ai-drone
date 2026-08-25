@@ -1,0 +1,40 @@
+{
+  "ardupilot_commit": "1511f27194f1dcc3728270883047bdf022b3fd53",
+  "board": "FlywooF745",
+  "board_id": 1027,
+  "build": {
+    "consistent_builds": true,
+    "image_max_size": 950272,
+    "image_size": 864920
+  },
+  "files": {
+    "arducopter": {
+      "sha256": "4b33321115c15a0dbfd18f1d512771f700c93a23ab3422900c89f02c51d715ce"
+    },
+    "arducopter.apj": {
+      "sha256": "f5b10c53d37a675a21ac1792cad834a2fd453212d21219ca31cdff8cebbb8041"
+    },
+    "arducopter.bin": {
+      "sha256": "f7732d89e96123431f48abe05823a4f6b3b3afc0b1901672c684e3d387515704"
+    },
+    "build/FlywooF745/hw.dat": {
+      "sha256": "d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe"
+    },
+    "firmware/FlywooF745-nogps-loiter-extra.hwdef": {
+      "sha256": "21d270a4f0f0da12c8c5cfa5d14c4b305e03d72741736c4a47aa10363529d7ae"
+    }
+  },
+  "installed_baseline": {
+    "romfs_hwdef_sha256": "67404e7f31d096a010d810db2600617e9b4b8c287f017472136e299f5781e225"
+  },
+  "intentional_feature_changes": {
+    "EK3_FEATURE_OPTFLOW_FUSION": {
+      "from": 0,
+      "to": 1
+    },
+    "MODE_GUIDED_NOGPS_ENABLED": {
+      "from": 0,
+      "to": 1
+    }
+  }
+}

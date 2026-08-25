@@ -19,7 +19,9 @@ rangefinder geometry, or battery.
 
 ## Why Loiter failed on the project aircraft
 
-The captured primary EKF source set is internally inconsistent:
+Two independent blockers were present: an inconsistent EKF source selection
+and, decisively, features compiled out of the installed firmware. The captured
+primary EKF source set was:
 
 | Setting | Captured value | Meaning |
 | --- | ---: | --- |
@@ -30,10 +32,28 @@ The captured primary EKF source set is internally inconsistent:
 | `EK3_SRC1_POSZ` | `2` | rangefinder is the primary vertical source |
 
 Optical flow is an EKF velocity source, not a `POSXY` source. With
-`POSXY=3` and both GPS instances disabled, EKF3 can receive flow velocity but
-cannot produce the relative or absolute horizontal-position state required by
-Loiter. AltHold can still work because it needs a vertical estimate rather
-than horizontal position.
+`POSXY=3` and both GPS instances disabled, the source set asks for a GPS
+position that cannot exist. AltHold can still work because it needs a vertical
+estimate rather than horizontal position.
+
+The project's captured `@ROMFS/hwdef.dat` then exposed the stronger
+compile-time blocker in the installed image:
+
+| Build feature | Installed value | Consequence |
+| --- | ---: | --- |
+| `AP_OPTICALFLOW_ENABLED` | `1` | the optical-flow front end exists |
+| `AP_OPTICALFLOW_MAV_ENABLED` | `1` | MAVLink flow can be received, logged, and reported |
+| `HAL_NAVEKF3_AVAILABLE` | `1` | EKF3 itself exists |
+| `EK3_FEATURE_OPTFLOW_FUSION` | `0` | EKF3 cannot consume optical flow or enter flow-backed relative aiding |
+| `MODE_GUIDED_NOGPS_ENABLED` | `0` | Copter mode 20 is absent, so the autonomous takeoff handoff cannot start |
+
+This explains why valid `OPTICAL_FLOW` telemetry did not create a position
+estimate. With `EK3_FEATURE_OPTFLOW_FUSION=0`, the EKF3 optical-flow write,
+selection, terrain-estimator, and fusion paths are compiled out. The flow
+front end can still make the sensor appear healthy in telemetry and logs, but
+EKF3 remains in constant-position aiding and Loiter continues to reject entry.
+Likewise, setting a parameter cannot restore mode 20 when
+`MODE_GUIDED_NOGPS_ENABLED=0`.
 
 The project capture supports that diagnosis:
 
@@ -46,12 +66,19 @@ The project capture supports that diagnosis:
   `AHRS: waiting for home` messages. Log 10 was recorded while `GPS1_TYPE=1`;
   the final disarmed capture has GPS disabled. Neither state supplied a usable
   horizontal position when Loiter was requested.
-- Optical-flow and downward-range messages are present. That proves the data
-  path exists, but cannot repair the contradictory source selection.
+- Optical-flow and downward-range messages are present. That proves only the
+  sensor/front-end data path exists; it does not prove the installed EKF can
+  fuse flow.
+- A props-off 0.52-to-0.66 m hand lift still reported EKF flags `167` for the
+  entire sample: no relative horizontal position and constant-position mode.
+  The flow stream remained fresh and nonzero with quality 74 through 116, so
+  increasing height could not bypass the compiled-out fusion path.
 
 In the pinned source, Loiter declares `requires_position()`, its entry check
 calls `position_ok()`, and no-GPS entry succeeds only after EKF3 reports a
-relative horizontal position and leaves constant-position mode. See the pinned
+relative horizontal position and leaves constant-position mode. That state is
+unreachable in the installed feature build regardless of parameter tuning.
+See the pinned
 [`mode.cpp`](https://github.com/ArduPilot/ardupilot/blob/1511f27194f1dcc3728270883047bdf022b3fd53/ArduCopter/mode.cpp),
 [`system.cpp`](https://github.com/ArduPilot/ardupilot/blob/1511f27194f1dcc3728270883047bdf022b3fd53/ArduCopter/system.cpp),
 and
@@ -81,7 +108,8 @@ are likewise not the cause.
 
 ## Reviewed five-parameter live-controller delta
 
-Only these five values are proposed for the captured project controller:
+Only these five values were reviewed and applied to the captured project
+controller:
 
 | Parameter | Captured | Reviewed | Reason |
 | --- | ---: | ---: | --- |
@@ -96,6 +124,13 @@ The machine-readable overlay is
 It intentionally contains no board, serial-port, sensor-calibration,
 motor-output, battery-monitor, RC, compass, origin, or reference-aircraft
 settings.
+
+These five corrections are necessary but not sufficient. They remove the
+configuration-level contradictions and unsafe fallback choices, but no
+parameter can enable code omitted from the firmware. The flow-fusion and
+`GUIDED_NOGPS` firmware features described below must also pass linked-artifact
+and post-flash verification before the controller can attempt this flight
+path.
 
 `EK3_SRC1_POSZ=1` is not what fixes horizontal Loiter. It follows ArduPilot's
 normal optical-flow setup: the barometer is the vertical EKF source and the
@@ -257,7 +292,120 @@ loaded wholesale into 4.7. The production controller now checks
 `ARMING_SKIPCHK`, never the removed `ARMING_CHECK`. See ArduPilot's
 [parameter-name change table](https://ardupilot.org/copter/docs/common-param-name-changes.html).
 
+## Exact FlywooF745 firmware build and verification gate
+
+A plain FlywooF745 build is not suitable for this aircraft's required flight
+path. The installed 4.7 image and the board's flash-constrained feature
+selection omitted EKF3 optical-flow fusion and `GUIDED_NOGPS`. Firmware version
+`4.7.0` and Git identity `1511f271` alone therefore do not prove that two
+artifacts have the same capabilities.
+
+[`firmware/FlywooF745-nogps-loiter-extra.hwdef`](../firmware/FlywooF745-nogps-loiter-extra.hwdef)
+contains the complete 820-directive feature matrix recovered from this
+project controller's ROMFS. It deliberately retains every captured feature
+choice and changes exactly these two values:
+
+```text
+EK3_FEATURE_OPTFLOW_FUSION  0 -> 1
+MODE_GUIDED_NOGPS_ENABLED   0 -> 1
+```
+
+It does not copy board pins or hardware defaults: those continue to come from
+ArduPilot's `FlywooF745` board definition. `EK3_FEATURE_OPTFLOW_SRTM` remains
+disabled, and the MAVLink optical-flow and rangefinder backends remain the
+only relevant external sensor paths. A comparison of the captured resolved
+ROMFS definition with the candidate's resolved `hw.dat` found only the two
+changes above.
+
+Build from the exact initialized ArduPilot checkout. The local firmware build
+image uses the official GNU Arm Embedded
+`gcc-arm-none-eabi-10-2020-q4-major` toolchain downloaded from ArduPilot's
+`Tools/STM32-tools` firmware archive; the SITL-only image has no ARM compiler:
+
+```bash
+cd /home/abaris/ardupilot
+test "$(git rev-parse HEAD)" = \
+  1511f27194f1dcc3728270883047bdf022b3fd53
+git submodule update --init --recursive
+
+podman run --rm --userns=keep-id \
+  -v /home/abaris/ardupilot:/ardupilot \
+  -v /home/abaris/ai-drone:/config:ro \
+  localhost/ardupilot-firmware:4.7.0 \
+  bash -lc './waf configure --board FlywooF745 --consistent-builds \
+    --extra-hwdef=/config/firmware/FlywooF745-nogps-loiter-extra.hwdef && \
+    ./waf copter'
+```
+
+The output is
+`/home/abaris/ardupilot/build/FlywooF745/bin/arducopter.apj`. Verify the linked
+ELF rather than trusting source defines or build output alone:
+
+```bash
+cd /home/abaris/ai-drone
+UV_CACHE_DIR=/tmp/uv-cache \
+  uv run --group dev python scripts/verify_ardupilot_firmware.py \
+    --ardupilot-root /home/abaris/ardupilot --nm nm
+
+sha256sum \
+  /home/abaris/ardupilot/build/FlywooF745/bin/arducopter \
+  /home/abaris/ardupilot/build/FlywooF745/bin/arducopter.bin \
+  /home/abaris/ardupilot/build/FlywooF745/bin/arducopter.apj \
+  /home/abaris/ardupilot/build/FlywooF745/hw.dat \
+  firmware/FlywooF745-nogps-loiter-extra.hwdef
+```
+
+The verifier requires the reviewed hashes in
+[`firmware/FlywooF745-nogps-loiter.manifest.json`](../firmware/FlywooF745-nogps-loiter.manifest.json),
+board ID 1027, APJ magic `APJFWv1`, Git identity `1511f271`, an image no larger
+than 950,272 bytes, and matching APJ metadata and flash limits. It strictly
+decodes the APJ image and requires it to be byte-identical to `arducopter.bin`.
+It also verifies EKF3, MAVLink optical-flow and rangefinder support, linked
+EKF3 optical-flow fusion, and linked `GUIDED_NOGPS`, while requiring
+`EK3_FEATURE_OPTFLOW_SRTM` to remain absent.
+The reviewed consistent-build artifact has:
+
+| Item | Reviewed value |
+| --- | --- |
+| APJ board ID | `1027` |
+| Git identity | `1511f271` |
+| APJ image size | `864920` bytes |
+| image limit / flash total | `950272` bytes |
+| free space | `85352` bytes |
+| ELF SHA-256 | `4b33321115c15a0dbfd18f1d512771f700c93a23ab3422900c89f02c51d715ce` |
+| BIN SHA-256 | `f7732d89e96123431f48abe05823a4f6b3b3afc0b1901672c684e3d387515704` |
+| APJ SHA-256 | `f5b10c53d37a675a21ac1792cad834a2fd453212d21219ca31cdff8cebbb8041` |
+| resolved `hw.dat` SHA-256 | `d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe` |
+| overlay SHA-256 | `21d270a4f0f0da12c8c5cfa5d14c4b305e03d72741736c4a47aa10363529d7ae` |
+
+Do not flash a differently sized or hashed artifact merely because it reports
+the same version. Re-run the verifier and review any intentional source,
+toolchain, or feature-matrix change first.
+
 ## Exact pinned SITL acceptance gate
+
+The SITL board includes capabilities that the captured flash-constrained
+FlywooF745 image did not. A passing SITL run therefore validates the flight
+logic, sensor injection, and failsafes only after the exact-board linked ELF
+passes the firmware gate above; it is not evidence that an arbitrary physical
+artifact contains flow fusion or mode 20.
+
+Do not apply the FlywooF745's complete board feature matrix directly to SITL:
+it contains target-specific HAL choices such as disabled on-board networking.
+[`firmware/sitl-nogps-loiter-extra.hwdef`](../firmware/sitl-nogps-loiter-extra.hwdef)
+explicitly enables only the same two corrected application capabilities and
+therefore preserves the standard SITL board and simulator hardware defaults.
+Build that simulator artifact with:
+
+```bash
+podman run --rm --userns=keep-id \
+  -v /home/abaris/ardupilot:/ardupilot \
+  -v /home/abaris/ai-drone:/config:ro \
+  localhost/ardupilot-sitl:4.7.0 \
+  bash -lc './waf configure --board sitl \
+    --extra-hwdef=/config/firmware/sitl-nogps-loiter-extra.hwdef && \
+    ./waf copter'
+```
 
 The opt-in tests in [`tests/test_sitl.py`](../tests/test_sitl.py) refuse an
 ArduPilot checkout whose `HEAD` is not
@@ -316,7 +464,8 @@ Both observed only `RC_CHANNELS.chancount=0`, used the external MAVLink 2 flow
 and range streams, and remained armed and above 0.3 m throughout Loiter. The
 full pairs completed as `2 passed in 109.08s` and `2 passed in 108.56s`.
 The final repeat after adding the pre-arm battery and mode-retention guards was
-`2 passed in 108.91s`.
+`2 passed in 108.91s`. The final explicit two-feature SITL build passed the
+same pair again in `108.90s`.
 
 Run the full acceptance gate with:
 
@@ -334,10 +483,12 @@ aircraft.
 
 ## Deployment and disarmed verification gate
 
-The targeted deployment and controller write were completed disarmed and
-propellers-off on 2026-08-24. The raw captures and live audit bundles are kept
-outside the repository under `/home/abaris/drone-logs/`; neither aircraft's raw
-capture is part of this branch.
+The targeted Pi deployment and five-parameter controller write were completed
+disarmed and propellers-off following the 2026-08-24 capture. The replacement
+firmware described above has been built but was not flashed as part of that
+deployment. The raw captures and live audit bundles are kept outside the
+repository under `/home/abaris/drone-logs/`; neither aircraft's raw capture is
+part of this branch.
 
 The verified live state is:
 
@@ -356,15 +507,17 @@ The verified live state is:
   observer sent no arm, mode, motor, throttle, RC-override, mission, or servo
   command. Downward range reported 2 cm with a 100 cm maximum, optical-flow
   quality was 48 through 70, and every RC report had zero channels.
-- At only 2 cm above the floor the EKF still reported flags 167, including
-  constant-position mode and no relative horizontal position. The props-off
-  hand-lift check in step 7 therefore remains required; the production path
-  will not request Loiter until the relative-position state is continuously
-  healthy.
-- The observed battery voltage was only 11.884 through 11.908 V. The 14.4 V
-  application guard correctly marks live flight unsafe. Disconnect, safely
-  charge and balance-check the pack, independently measure it, and validate the
-  battery monitor before any propeller-on test.
+- A subsequent props-off lift held the aircraft at 0.52 through 0.66 m and
+  captured 500 fresh flow samples at about 10 Hz. Quality was 74 through 116,
+  flow was nonzero during translation, range was plausible, and every RC
+  report still showed zero channels. Nevertheless, every EKF report remained
+  at flags `167`: constant-position mode with no relative horizontal position.
+  This is the expected result from the installed image's compiled-out flow
+  fusion and is not grounds for more parameter tuning.
+- The fresh-battery hand lift reported 16.246 through 16.254 V, above the
+  application's 14.4 V minimum. Pack chemistry, independent voltage, and
+  battery-monitor calibration still require operator verification before any
+  propeller-on test.
 
 The final snapshot differs from the pre-reboot snapshot in the expected boot
 and runtime counters and boot-time barometer/gyro calibration values.
@@ -391,26 +544,47 @@ The gate used for that deployment, with the remaining steps retained, is:
    read back a second time to prove persistence.
 6. Run ArduPilot's pre-arm checks without arming. Resolve every status message;
    do not change `ARMING_SKIPCHK=0` to suppress one.
-7. With props still removed, hold the aircraft above a well-lit, textured floor
-   within the intended range and translate it gently. Require fresh, plausible
-   downward range, nonzero-quality correctly signed flow, fresh attitude, EKF
-   horizontal velocity and `EKF_POS_HORIZ_REL`, and no
-   `EKF_CONST_POS_MODE`. Also confirm repeated `RC_CHANNELS` reports remain at
-   `chancount=0`. Do not infer a range-scaling fault from the prior log: the
-   aircraft was not actually held at 0.9 m.
+7. The pre-flash props-off lift described above established healthy range and
+   flow-front-end data but failed the relative-position gate exactly as the
+   installed feature matrix predicts. Do not repeat it as a tuning exercise.
+   Repeat it only after the reviewed firmware passes the post-flash identity
+   and feature checks below.
 8. Verify signal handling and the GCS heartbeat/failsafe state while disarmed.
    No bench check may send arm, throttle, RC override, mode-change, mission,
    motor, or servo commands.
+
+The firmware-specific post-flash gate is read-only and propellers-off:
+
+1. Read ROMFS `hwdef.dat` twice using independent connections with an accepted
+   reboot between them. Require matching reads and the reviewed complete
+   feature matrix, including `EK3_FEATURE_OPTFLOW_FUSION=1` and
+   `MODE_GUIDED_NOGPS_ENABLED=1`.
+2. Request `AVAILABLE_MODES` and require custom mode 20 (`GUIDED_NOGPS`) to be
+   advertised. Do not select it, and confirm the current mode did not change.
+3. Compare the complete parameter set with the pre-flash backup and again
+   after reboot. Persistent configuration must be unchanged, including the
+   five reviewed values and all board, calibration, output, serial, and battery
+   settings. Investigate every unexplained difference.
+4. Run pre-arm checks without arming. Then repeat the above-0.5 m hand lift
+   over a lit, textured floor. Require explicit optical-flow-fusion and
+   started-relative-aiding evidence, EKF `AID_RELATIVE`,
+   `EKF_POS_HORIZ_REL` set, `EKF_CONST_POS_MODE` clear, and fresh plausible
+   local horizontal position, alongside healthy flow/range and zero RC
+   channels.
+5. Set the aircraft down and confirm the controller remained disarmed and no
+   actuator or mode command was sent. Preserve the complete post-flash audit.
+
+Failure of any item blocks propeller installation and all autonomous tests.
 
 ## Additional gate before any propeller-on autonomous test
 
 The following cannot be proven by SITL or a remote disarmed inspection:
 
-1. Charge and independently measure the flight battery. The last observed
-   11.884 through 11.908 V is well below the production command's 14.4 V
-   default guard. Confirm pack chemistry/cell count and calibrate the battery
-   monitor before selecting battery failsafe actions; do not guess those
-   values.
+1. Independently measure the flight battery. The replacement pack reported
+   16.246 through 16.254 V during the latest hand lift and passed the production
+   command's 14.4 V software guard, but telemetry alone does not establish pack
+   chemistry, cell balance, or monitor calibration. Confirm those before
+   selecting battery failsafe actions; do not guess the values.
 2. Verify frame integrity, propeller type and orientation, motor order and
    direction, center of gravity, sensor mounting, and vibration isolation with
    props removed first.
@@ -456,6 +630,9 @@ Primary ArduPilot references:
 - [Optical-flow sensor setup](https://ardupilot.org/copter/docs/common-optical-flow-sensor-setup.html)
 - [Loiter mode](https://ardupilot.org/copter/docs/loiter-mode.html)
 - [Non-GPS navigation](https://ardupilot.org/copter/docs/common-non-gps-navigation-landing-page.html)
+- [Limited-flash firmware](https://ardupilot.org/copter/docs/common-limited-firmware.html)
+- [Custom Firmware Builder](https://ardupilot.org/copter/docs/common-custom-firmware.html)
+- [Loading custom firmware](https://ardupilot.org/planner/docs/common-loading-firmware-onto-pixhawk.html)
 - [GCS failsafe](https://ardupilot.org/copter/docs/gcs-failsafe.html)
 - [Dead-reckoning failsafe](https://ardupilot.org/copter/docs/deadreckoning-failsafe.html)
 - [Pre-arm safety checks](https://ardupilot.org/copter/docs/common-prearm-safety-checks.html)
