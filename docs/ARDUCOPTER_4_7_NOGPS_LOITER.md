@@ -84,10 +84,10 @@ See the pinned
 and
 [`AP_NavEKF_Source.cpp`](https://github.com/ArduPilot/ardupilot/blob/1511f27194f1dcc3728270883047bdf022b3fd53/libraries/AP_NavEKF/AP_NavEKF_Source.cpp).
 
-## What the other aircraft does and does not prove
+## What the Syeed reference aircraft does and does not prove
 
-The reference aircraft's parameters do not prove that it flew flow-only
-Loiter:
+The `syeed-drone-2026-08-24/` reference aircraft's parameters do not prove
+that it flew flow-only Loiter:
 
 | Setting | Project | Reference | Consequence |
 | --- | ---: | ---: | --- |
@@ -105,6 +105,29 @@ The two aircraft already have effectively the same horizontal Loiter and
 position-controller gains (`LOIT_*` and `PSC_NE_*`). Retuning them cannot make
 a missing EKF position state appear. Small rangefinder mounting differences
 are likewise not the cause.
+
+## What Lars's archived flight does prove
+
+Lars's separately archived aircraft is useful evidence for the software path,
+but not a configuration donor. Its ArduCopter 4.6.3 resolved `hwdef.dat` ends
+by enabling both `EK3_FEATURE_OPTFLOW_FUSION` and
+`MODE_GUIDED_NOGPS_ENABLED`. Its active source set also uses `POSXY=0` and
+`VELXY=5`, the same horizontal-source correction reviewed for the project
+aircraft.
+
+In Lars log 2, the aircraft remained armed in Loiter for about 21 seconds while
+every GPS sample reported status 1 and zero satellites. During that interval,
+the EKF reported relative horizontal position, terrain altitude, and predicted
+relative position, while constant-position and using-GPS flags remained clear.
+Nonzero optical-flow innovations were also recorded. This independently shows
+that no-GPS Loiter is available when the flow-fusion code is linked and the EKF
+source set does not require GPS; it is not a 4.6-only capability.
+
+The archive does not establish high-quality position or altitude hold. Its
+recovered BIN contains gaps, and its rangefinder reports only about 0.02 to
+0.26 m while controller altitude reaches about 0.96 m. No Lars calibration,
+GPS, compass, RC, rangefinder, origin, motor, battery, or other hardware value
+is copied to the project aircraft.
 
 ## Reviewed five-parameter live-controller delta
 
@@ -332,10 +355,16 @@ podman run --rm --userns=keep-id \
   -v /home/abaris/ardupilot:/ardupilot \
   -v /home/abaris/ai-drone:/config:ro \
   localhost/ardupilot-firmware:4.7.0 \
-  bash -lc './waf configure --board FlywooF745 --consistent-builds \
+  bash -lc './waf configure --board FlywooF745 \
     --extra-hwdef=/config/firmware/FlywooF745-nogps-loiter-extra.hwdef && \
     ./waf copter'
 ```
+
+Do not use `--consistent-builds` for the deployable artifact. At this pinned
+revision it intentionally replaces the runtime MAVLink custom-version value
+with `abcdef`, while leaving the APJ Git identity as `1511f271`. The companion
+firmware gate then correctly refuses to fly. The deployable build must report
+`1511f271` both in APJ metadata and in `AUTOPILOT_VERSION` after flashing.
 
 The output is
 `/home/abaris/ardupilot/build/FlywooF745/bin/arducopter.apj`. Verify the linked
@@ -363,18 +392,18 @@ decodes the APJ image and requires it to be byte-identical to `arducopter.bin`.
 It also verifies EKF3, MAVLink optical-flow and rangefinder support, linked
 EKF3 optical-flow fusion, and linked `GUIDED_NOGPS`, while requiring
 `EK3_FEATURE_OPTFLOW_SRTM` to remain absent.
-The reviewed consistent-build artifact has:
+The reviewed runtime-identity-preserving artifact has:
 
 | Item | Reviewed value |
 | --- | --- |
 | APJ board ID | `1027` |
 | Git identity | `1511f271` |
-| APJ image size | `864920` bytes |
+| APJ image size | `865792` bytes |
 | image limit / flash total | `950272` bytes |
-| free space | `85352` bytes |
-| ELF SHA-256 | `4b33321115c15a0dbfd18f1d512771f700c93a23ab3422900c89f02c51d715ce` |
-| BIN SHA-256 | `f7732d89e96123431f48abe05823a4f6b3b3afc0b1901672c684e3d387515704` |
-| APJ SHA-256 | `f5b10c53d37a675a21ac1792cad834a2fd453212d21219ca31cdff8cebbb8041` |
+| free space | `84480` bytes |
+| ELF SHA-256 | `498186052d8fa6bd78f047b3c48eff2e47c33ccf50922e91d62fc37339c21d36` |
+| BIN SHA-256 | `3a410c8142f0ce91ca8f509634f264411b027399bb5bebf0d95234b32929adee` |
+| APJ SHA-256 | `d8ab397bd41093a0669e36b0faf06af1845ad60b7280846e92a54be535400a04` |
 | resolved `hw.dat` SHA-256 | `d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe` |
 | overlay SHA-256 | `21d270a4f0f0da12c8c5cfa5d14c4b305e03d72741736c4a47aa10363529d7ae` |
 

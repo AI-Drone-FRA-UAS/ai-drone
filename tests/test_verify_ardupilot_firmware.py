@@ -12,7 +12,11 @@ import pytest
 
 from scripts import verify_ardupilot_firmware as verifier
 
-TEST_IMAGE = b"\x00\x01FlywooF745 test firmware image\xfe\xff"
+TEST_IMAGE = (
+    b"\x00\x01FlywooF745 test firmware image\0"
+    + verifier.EXPECTED_RUNTIME_VERSION_BANNER
+    + b"\0\xfe\xff"
+)
 
 
 def good_feature_report() -> str:
@@ -83,6 +87,15 @@ def make_artifacts(
     manifest_path.write_text(
         json.dumps(
             {
+                "ardupilot_commit": verifier.EXPECTED_ARDUPILOT_COMMIT,
+                "board": verifier.EXPECTED_SUMMARY,
+                "board_id": verifier.EXPECTED_BOARD_ID,
+                "build": {
+                    "consistent_builds": False,
+                    "image_max_size": verifier.MAX_IMAGE_SIZE,
+                    "image_size": len(apj_payload),
+                    "runtime_custom_version": verifier.EXPECTED_GIT_IDENTITY,
+                },
                 "files": {
                     "arducopter": {"sha256": digest(elf_path)},
                     "arducopter.bin": {
@@ -97,7 +110,15 @@ def make_artifacts(
                     "firmware/FlywooF745-nogps-loiter-extra.hwdef": {
                         "sha256": digest(overlay_path)
                     },
-                }
+                },
+                "installed_baseline": {
+                    "romfs_hwdef_sha256": (
+                        verifier.EXPECTED_BASELINE_ROMFS_HWDEF_SHA256
+                    )
+                },
+                "intentional_feature_changes": (
+                    verifier.EXPECTED_INTENTIONAL_FEATURE_CHANGES
+                ),
             }
         ),
         encoding="utf-8",
@@ -193,7 +214,131 @@ def test_rejects_malformed_reviewed_manifest_hash(tmp_path: Path) -> None:
     with pytest.raises(
         verifier.VerificationError, match="must be 64 lowercase hex digits"
     ):
-        verifier.load_manifest_hashes(manifest_path)
+        verifier.load_manifest_claims(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement", "message"),
+    [
+        (
+            ("ardupilot_commit",),
+            "deadbeef" * 5,
+            "firmware manifest ardupilot_commit is",
+        ),
+        (("board",), "OtherBoard", "firmware manifest board is"),
+        (("board_id",), True, "firmware manifest board_id must be an integer"),
+        (("board_id",), 999, "firmware manifest board_id is 999"),
+        (
+            ("build", "consistent_builds"),
+            True,
+            "build.consistent_builds must be false",
+        ),
+        (
+            ("build", "consistent_builds"),
+            0,
+            "build.consistent_builds must be a boolean",
+        ),
+        (
+            ("build", "image_max_size"),
+            verifier.MAX_IMAGE_SIZE - 1,
+            "build.image_max_size is 950271",
+        ),
+        (
+            ("build", "image_size"),
+            len(TEST_IMAGE) + 1,
+            "manifest image_size is",
+        ),
+        (
+            ("build", "runtime_custom_version"),
+            "abcdef",
+            "build.runtime_custom_version is 'abcdef'",
+        ),
+        (
+            ("installed_baseline", "romfs_hwdef_sha256"),
+            "0" * 64,
+            "installed_baseline.romfs_hwdef_sha256 is",
+        ),
+    ],
+)
+def test_rejects_mutated_reviewed_manifest_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field_path: tuple[str, ...],
+    replacement: object,
+    message: str,
+) -> None:
+    root, build_dir, manifest_path = make_artifacts(tmp_path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    parent = document
+    for field in field_path[:-1]:
+        parent = parent[field]
+    parent[field_path[-1]] = replacement
+    manifest_path.write_text(json.dumps(document), encoding="utf-8")
+    stub_extractor(monkeypatch, good_feature_report())
+
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_build(root, build_dir, manifest_path=manifest_path)
+
+    assert message in str(caught.value)
+
+
+@pytest.mark.parametrize("location", ["top-level", "build", "files"])
+def test_rejects_extra_manifest_schema_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    location: str,
+) -> None:
+    root, build_dir, manifest_path = make_artifacts(tmp_path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    target = document if location == "top-level" else document[location]
+    target["UNREVIEWED_EXTRA"] = {}
+    manifest_path.write_text(json.dumps(document), encoding="utf-8")
+    stub_extractor(monkeypatch, good_feature_report())
+
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_build(root, build_dir, manifest_path=manifest_path)
+
+    error = str(caught.value)
+    assert f"manifest {location} keys differ" in error
+    assert "UNREVIEWED_EXTRA" in error
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("extra_feature", "intentional_feature_changes keys differ"),
+        ("wrong_to", "EK3_FEATURE_OPTFLOW_FUSION.to is 0"),
+        ("boolean_from", "MODE_GUIDED_NOGPS_ENABLED.from is False"),
+        (
+            "extra_direction",
+            "intentional_feature_changes.MODE_GUIDED_NOGPS_ENABLED keys differ",
+        ),
+    ],
+)
+def test_intentional_feature_changes_must_match_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    root, build_dir, manifest_path = make_artifacts(tmp_path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    changes = document["intentional_feature_changes"]
+    if mutation == "extra_feature":
+        changes["UNREVIEWED_FEATURE"] = {"from": 0, "to": 1}
+    elif mutation == "wrong_to":
+        changes["EK3_FEATURE_OPTFLOW_FUSION"]["to"] = 0
+    elif mutation == "boolean_from":
+        changes["MODE_GUIDED_NOGPS_ENABLED"]["from"] = False
+    else:
+        changes["MODE_GUIDED_NOGPS_ENABLED"]["note"] = "unreviewed"
+    manifest_path.write_text(json.dumps(document), encoding="utf-8")
+    stub_extractor(monkeypatch, good_feature_report())
+
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_build(root, build_dir, manifest_path=manifest_path)
+
+    assert message in str(caught.value)
 
 
 @pytest.mark.parametrize("feature", sorted(verifier.REQUIRED_FEATURES))
@@ -342,6 +487,45 @@ def test_rejects_apj_payload_different_from_bin(
         match=r"decompressed image does not match arducopter\.bin",
     ):
         verifier.verify_build(root, build_dir, manifest_path=manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("payload", "messages"),
+    [
+        (
+            b"firmware without a runtime version string",
+            (
+                "arducopter.bin does not contain runtime version banner",
+                "APJ payload does not contain runtime version banner",
+            ),
+        ),
+        (
+            b"firmware\0" + verifier.FORBIDDEN_RUNTIME_VERSION_BANNER + b"\0",
+            (
+                "arducopter.bin contains forbidden 'abcdef' runtime version banner",
+                "APJ payload contains forbidden 'abcdef' runtime version banner",
+            ),
+        ),
+    ],
+)
+def test_rejects_missing_or_placeholder_runtime_version_banner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: bytes,
+    messages: tuple[str, str],
+) -> None:
+    root, build_dir, manifest_path = make_artifacts(
+        tmp_path,
+        apj_payload=payload,
+        bin_payload=payload,
+    )
+    stub_extractor(monkeypatch, good_feature_report())
+
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_build(root, build_dir, manifest_path=manifest_path)
+
+    error = str(caught.value)
+    assert all(message in error for message in messages)
 
 
 def test_rejects_missing_bin(tmp_path: Path) -> None:

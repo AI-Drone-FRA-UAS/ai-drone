@@ -15,11 +15,22 @@ import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 EXPECTED_BOARD_ID = 1027
+EXPECTED_ARDUPILOT_COMMIT = "1511f27194f1dcc3728270883047bdf022b3fd53"
 EXPECTED_GIT_IDENTITY = "1511f271"
 EXPECTED_MAGIC = "APJFWv1"
 EXPECTED_SUMMARY = "FlywooF745"
+EXPECTED_RUNTIME_VERSION_BANNER = b"ArduCopter V4.7.0 (1511f271)"
+FORBIDDEN_RUNTIME_VERSION_BANNER = b"ArduCopter V4.7.0 (abcdef)"
+EXPECTED_BASELINE_ROMFS_HWDEF_SHA256 = (
+    "67404e7f31d096a010d810db2600617e9b4b8c287f017472136e299f5781e225"
+)
+EXPECTED_INTENTIONAL_FEATURE_CHANGES = {
+    "EK3_FEATURE_OPTFLOW_FUSION": {"from": 0, "to": 1},
+    "MODE_GUIDED_NOGPS_ENABLED": {"from": 0, "to": 1},
+}
 MAX_IMAGE_SIZE = 950_272
 DEFAULT_MANIFEST_PATH = (
     Path(__file__).resolve().parents[1]
@@ -79,6 +90,14 @@ class ApjMetadata:
     flash_total: int
     summary: str
     image: bytes
+
+
+@dataclass(frozen=True)
+class ManifestClaims:
+    """Strictly validated reviewed claims and artifact hashes."""
+
+    image_size: int
+    hashes: dict[str, str]
 
 
 def parse_feature_report(output: str) -> dict[str, bool]:
@@ -215,27 +234,152 @@ def load_apj_metadata(apj_path: Path) -> ApjMetadata:
     )
 
 
-def load_manifest_hashes(manifest_path: Path) -> dict[str, str]:
-    """Load the five reviewed SHA-256 values from the firmware manifest."""
-    try:
-        document = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+def _require_exact_keys(
+    value: object,
+    expected_keys: set[str] | frozenset[str],
+    field: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise VerificationError(f"firmware manifest {field} must be a JSON object")
+    actual_keys = set(value)
+    if actual_keys != expected_keys:
+        missing = sorted(expected_keys - actual_keys)
+        extra = sorted(actual_keys - expected_keys)
         raise VerificationError(
-            f"could not read firmware manifest {manifest_path}: {exc}"
-        ) from exc
-    if not isinstance(document, dict):
-        raise VerificationError("firmware manifest must be a JSON object")
+            f"firmware manifest {field} keys differ; missing={missing}, extra={extra}"
+        )
+    return cast("dict[str, object]", value)
 
-    files = document.get("files")
-    if not isinstance(files, dict):
-        raise VerificationError("firmware manifest files must be a JSON object")
+
+def _validate_manifest_identity(document: dict[str, object]) -> None:
+    ardupilot_commit = document["ardupilot_commit"]
+    if not isinstance(ardupilot_commit, str):
+        raise VerificationError("firmware manifest ardupilot_commit must be a string")
+    if ardupilot_commit != EXPECTED_ARDUPILOT_COMMIT:
+        raise VerificationError(
+            f"firmware manifest ardupilot_commit is {ardupilot_commit!r}, "
+            f"expected {EXPECTED_ARDUPILOT_COMMIT!r}"
+        )
+
+    board = document["board"]
+    if not isinstance(board, str):
+        raise VerificationError("firmware manifest board must be a string")
+    if board != EXPECTED_SUMMARY:
+        raise VerificationError(
+            f"firmware manifest board is {board!r}, expected {EXPECTED_SUMMARY!r}"
+        )
+
+    board_id = document["board_id"]
+    if type(board_id) is not int:
+        raise VerificationError("firmware manifest board_id must be an integer")
+    if board_id != EXPECTED_BOARD_ID:
+        raise VerificationError(
+            f"firmware manifest board_id is {board_id}, expected {EXPECTED_BOARD_ID}"
+        )
+
+
+def _validate_manifest_build(value: object) -> int:
+    build = _require_exact_keys(
+        value,
+        {
+            "consistent_builds",
+            "image_max_size",
+            "image_size",
+            "runtime_custom_version",
+        },
+        "build",
+    )
+    consistent_builds = build["consistent_builds"]
+    if type(consistent_builds) is not bool:
+        raise VerificationError(
+            "firmware manifest build.consistent_builds must be a boolean"
+        )
+    if consistent_builds is not False:
+        raise VerificationError(
+            "firmware manifest build.consistent_builds must be false"
+        )
+
+    image_max_size = build["image_max_size"]
+    if type(image_max_size) is not int:
+        raise VerificationError(
+            "firmware manifest build.image_max_size must be an integer"
+        )
+    if image_max_size != MAX_IMAGE_SIZE:
+        raise VerificationError(
+            f"firmware manifest build.image_max_size is {image_max_size}, "
+            f"expected {MAX_IMAGE_SIZE}"
+        )
+
+    image_size = build["image_size"]
+    if type(image_size) is not int:
+        raise VerificationError("firmware manifest build.image_size must be an integer")
+    if image_size <= 0:
+        raise VerificationError("firmware manifest build.image_size must be positive")
+
+    runtime_custom_version = build["runtime_custom_version"]
+    if not isinstance(runtime_custom_version, str):
+        raise VerificationError(
+            "firmware manifest build.runtime_custom_version must be a string"
+        )
+    if runtime_custom_version != EXPECTED_GIT_IDENTITY:
+        raise VerificationError(
+            "firmware manifest build.runtime_custom_version is "
+            f"{runtime_custom_version!r}, expected {EXPECTED_GIT_IDENTITY!r}"
+        )
+    return image_size
+
+
+def _validate_manifest_baseline(value: object) -> None:
+    installed_baseline = _require_exact_keys(
+        value,
+        {"romfs_hwdef_sha256"},
+        "installed_baseline",
+    )
+    baseline_hash = installed_baseline["romfs_hwdef_sha256"]
+    if not isinstance(baseline_hash, str):
+        raise VerificationError(
+            "firmware manifest installed_baseline.romfs_hwdef_sha256 must be a string"
+        )
+    if baseline_hash != EXPECTED_BASELINE_ROMFS_HWDEF_SHA256:
+        raise VerificationError(
+            "firmware manifest installed_baseline.romfs_hwdef_sha256 is "
+            f"{baseline_hash!r}, expected {EXPECTED_BASELINE_ROMFS_HWDEF_SHA256!r}"
+        )
+
+
+def _validate_intentional_feature_changes(value: object) -> None:
+    changes = _require_exact_keys(
+        value,
+        set(EXPECTED_INTENTIONAL_FEATURE_CHANGES),
+        "intentional_feature_changes",
+    )
+    for feature, expected_change in EXPECTED_INTENTIONAL_FEATURE_CHANGES.items():
+        change = _require_exact_keys(
+            changes[feature],
+            {"from", "to"},
+            f"intentional_feature_changes.{feature}",
+        )
+        for direction, expected_value in expected_change.items():
+            actual_value = change[direction]
+            if type(actual_value) is not int or actual_value != expected_value:
+                raise VerificationError(
+                    "firmware manifest intentional_feature_changes."
+                    f"{feature}.{direction} is {actual_value!r}, "
+                    f"expected integer {expected_value}"
+                )
+
+
+def _load_manifest_hashes(value: object) -> dict[str, str]:
+    files = _require_exact_keys(
+        value,
+        set(MANIFEST_ARTIFACT_KEYS),
+        "files",
+    )
 
     hashes: dict[str, str] = {}
     for key in MANIFEST_ARTIFACT_KEYS:
-        entry = files.get(key)
-        if not isinstance(entry, dict):
-            raise VerificationError(f"firmware manifest has no object for {key}")
-        expected_hash = entry.get("sha256")
+        entry = _require_exact_keys(files[key], {"sha256"}, f"files.{key}")
+        expected_hash = entry["sha256"]
         if (
             not isinstance(expected_hash, str)
             or re.fullmatch(r"[0-9a-f]{64}", expected_hash) is None
@@ -247,12 +391,43 @@ def load_manifest_hashes(manifest_path: Path) -> dict[str, str]:
     return hashes
 
 
+def load_manifest_claims(manifest_path: Path) -> ManifestClaims:
+    """Strictly parse every reviewed manifest claim and artifact hash."""
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VerificationError(
+            f"could not read firmware manifest {manifest_path}: {exc}"
+        ) from exc
+    document = _require_exact_keys(
+        document,
+        {
+            "ardupilot_commit",
+            "board",
+            "board_id",
+            "build",
+            "files",
+            "installed_baseline",
+            "intentional_feature_changes",
+        },
+        "top-level",
+    )
+
+    _validate_manifest_identity(document)
+    image_size = _validate_manifest_build(document["build"])
+    _validate_manifest_baseline(document["installed_baseline"])
+    _validate_intentional_feature_changes(document["intentional_feature_changes"])
+    hashes = _load_manifest_hashes(document["files"])
+    return ManifestClaims(image_size=image_size, hashes=hashes)
+
+
 def manifest_errors(
     manifest_path: Path,
     build_dir: Path,
+    apj_image_size: int,
 ) -> list[str]:
     """Compare every reviewed manifest hash with its exact build input/output."""
-    expected_hashes = load_manifest_hashes(manifest_path)
+    claims = load_manifest_claims(manifest_path)
     targets = {
         "arducopter": build_dir / "bin" / "arducopter",
         "arducopter.bin": build_dir / "bin" / "arducopter.bin",
@@ -264,6 +439,11 @@ def manifest_errors(
     }
 
     errors: list[str] = []
+    if claims.image_size != apj_image_size:
+        errors.append(
+            f"manifest image_size is {claims.image_size}, "
+            f"APJ image_size is {apj_image_size}"
+        )
     for key in MANIFEST_ARTIFACT_KEYS:
         path = targets[key]
         try:
@@ -272,10 +452,10 @@ def manifest_errors(
         except OSError as exc:
             errors.append(f"could not hash manifest artifact {key} at {path}: {exc}")
             continue
-        if actual_hash != expected_hashes[key]:
+        if actual_hash != claims.hashes[key]:
             errors.append(
                 f"SHA-256 mismatch for {key}: got {actual_hash}, "
-                f"expected {expected_hashes[key]}"
+                f"expected {claims.hashes[key]}"
             )
     return errors
 
@@ -307,12 +487,13 @@ def verify_build(
     if not apj_path.is_file():
         raise VerificationError(f"ArduCopter APJ not found: {apj_path}")
 
-    reviewed_hash_errors = manifest_errors(
-        resolved_manifest_path,
-        resolved_build_dir,
-    )
     statuses = extract_feature_statuses(root, elf_path, nm=nm)
     metadata = load_apj_metadata(apj_path)
+    reviewed_manifest_errors = manifest_errors(
+        resolved_manifest_path,
+        resolved_build_dir,
+        metadata.image_size,
+    )
     try:
         binary_image = bin_path.read_bytes()
     except OSError as exc:
@@ -320,7 +501,7 @@ def verify_build(
             f"could not read ArduCopter BIN {bin_path}: {exc}"
         ) from exc
 
-    errors = [*reviewed_hash_errors, *feature_errors(statuses)]
+    errors = [*reviewed_manifest_errors, *feature_errors(statuses)]
     if metadata.board_id != EXPECTED_BOARD_ID:
         errors.append(
             f"APJ board_id is {metadata.board_id}, "
@@ -349,6 +530,22 @@ def verify_build(
         )
     if metadata.image != binary_image:
         errors.append("APJ decompressed image does not match arducopter.bin")
+    if EXPECTED_RUNTIME_VERSION_BANNER not in binary_image:
+        errors.append(
+            "arducopter.bin does not contain runtime version banner "
+            f"{EXPECTED_RUNTIME_VERSION_BANNER.decode('ascii')!r}"
+        )
+    if EXPECTED_RUNTIME_VERSION_BANNER not in metadata.image:
+        errors.append(
+            "APJ payload does not contain runtime version banner "
+            f"{EXPECTED_RUNTIME_VERSION_BANNER.decode('ascii')!r}"
+        )
+    if FORBIDDEN_RUNTIME_VERSION_BANNER in binary_image:
+        errors.append(
+            "arducopter.bin contains forbidden 'abcdef' runtime version banner"
+        )
+    if FORBIDDEN_RUNTIME_VERSION_BANNER in metadata.image:
+        errors.append("APJ payload contains forbidden 'abcdef' runtime version banner")
     if errors:
         raise VerificationError(
             "firmware verification failed:\n- " + "\n- ".join(errors)

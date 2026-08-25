@@ -66,7 +66,7 @@ added to this repository.
 records the exact reviewed build identity, intended two-value delta, flash
 limits, installed-baseline provenance hash, and all build/input hashes.
 
-## Reproducible exact-board build
+## Reviewed exact-board build
 
 Use an initialized ArduPilot checkout at exactly
 `1511f27194f1dcc3728270883047bdf022b3fd53`. The local
@@ -76,6 +76,11 @@ not contain the ARM toolchain. The compiler archive used to derive that local
 image was
 `https://firmware.ardupilot.org/Tools/STM32-tools/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2`;
 it was extracted under `/opt` with its `bin` directory placed on `PATH`.
+The local image tag is mutable and its creation recipe is not committed here,
+so this procedure is not by itself a bit-reproducible supply-chain record.
+Acceptance depends on the pinned source, linked-feature inspection, APJ checks,
+runtime identity, and exact reviewed hashes below. Treat any different rebuild
+as a new artifact requiring review.
 
 ```bash
 cd /home/abaris/ardupilot
@@ -87,10 +92,16 @@ podman run --rm --userns=keep-id \
   -v /home/abaris/ardupilot:/ardupilot \
   -v /home/abaris/ai-drone:/config:ro \
   localhost/ardupilot-firmware:4.7.0 \
-  bash -lc './waf configure --board FlywooF745 --consistent-builds \
+  bash -lc './waf configure --board FlywooF745 \
     --extra-hwdef=/config/firmware/FlywooF745-nogps-loiter-extra.hwdef && \
     ./waf copter'
 ```
+
+Do not add `--consistent-builds`. At this pinned revision that option
+deliberately replaces the runtime `AUTOPILOT_VERSION.flight_custom_version`
+with `abcdef`, even though APJ metadata retains `1511f271`. The project Pi's
+firmware safety gate correctly rejects that runtime identity. A usable build
+must report `1511f271` both in APJ metadata and over MAVLink after flashing.
 
 The flashable result is:
 
@@ -114,6 +125,7 @@ The verifier requires:
 
 - APJ magic `APJFWv1`, FlywooF745 board ID `1027`, and Git identity
   `1511f271`;
+- the embedded runtime version banner `ArduCopter V4.7.0 (1511f271)`;
 - APJ `image_maxsize` and `flash_total` equal to the 950,272-byte application
   limit, a strictly decoded image of the declared size, and a payload
   byte-identical to `arducopter.bin`;
@@ -124,19 +136,19 @@ The verifier requires:
   ELF; and
 - no linked `EK3_FEATURE_OPTFLOW_SRTM`.
 
-The final reviewed consistent-build artifact is:
+The final reviewed runtime-identity-preserving artifact is:
 
 | Item | Value |
 | --- | --- |
 | APJ board ID | `1027` |
 | APJ magic | `APJFWv1` |
 | Git identity | `1511f271` |
-| image size | `864920` bytes |
+| image size | `865792` bytes |
 | application limit | `950272` bytes |
-| free space | `85352` bytes |
-| ELF SHA-256 | `4b33321115c15a0dbfd18f1d512771f700c93a23ab3422900c89f02c51d715ce` |
-| BIN SHA-256 | `f7732d89e96123431f48abe05823a4f6b3b3afc0b1901672c684e3d387515704` |
-| APJ SHA-256 | `f5b10c53d37a675a21ac1792cad834a2fd453212d21219ca31cdff8cebbb8041` |
+| free space | `84480` bytes |
+| ELF SHA-256 | `498186052d8fa6bd78f047b3c48eff2e47c33ccf50922e91d62fc37339c21d36` |
+| BIN SHA-256 | `3a410c8142f0ce91ca8f509634f264411b027399bb5bebf0d95234b32929adee` |
+| APJ SHA-256 | `d8ab397bd41093a0669e36b0faf06af1845ad60b7280846e92a54be535400a04` |
 | resolved `hw.dat` SHA-256 | `d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe` |
 | overlay SHA-256 | `21d270a4f0f0da12c8c5cfa5d14c4b305e03d72741736c4a47aa10363529d7ae` |
 

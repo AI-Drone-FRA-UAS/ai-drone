@@ -3,19 +3,20 @@
   "board": "FlywooF745",
   "board_id": 1027,
   "build": {
-    "consistent_builds": true,
+    "consistent_builds": false,
     "image_max_size": 950272,
-    "image_size": 864920
+    "image_size": 865792,
+    "runtime_custom_version": "1511f271"
   },
   "files": {
     "arducopter": {
-      "sha256": "4b33321115c15a0dbfd18f1d512771f700c93a23ab3422900c89f02c51d715ce"
+      "sha256": "498186052d8fa6bd78f047b3c48eff2e47c33ccf50922e91d62fc37339c21d36"
     },
     "arducopter.apj": {
-      "sha256": "f5b10c53d37a675a21ac1792cad834a2fd453212d21219ca31cdff8cebbb8041"
+      "sha256": "d8ab397bd41093a0669e36b0faf06af1845ad60b7280846e92a54be535400a04"
     },
     "arducopter.bin": {
-      "sha256": "f7732d89e96123431f48abe05823a4f6b3b3afc0b1901672c684e3d387515704"
+      "sha256": "3a410c8142f0ce91ca8f509634f264411b027399bb5bebf0d95234b32929adee"
     },
     "build/FlywooF745/hw.dat": {
       "sha256": "d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe"
