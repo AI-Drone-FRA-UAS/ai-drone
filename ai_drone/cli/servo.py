@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 import time
+from pathlib import Path
 
 from ai_drone.platform import is_raspberry_pi
 
@@ -13,6 +15,7 @@ ACTUATION_CONFIRMATION = "SERVO_CLEAR"
 SERVO_GPIO_PIN = 12
 ABSOLUTE_MIN_PULSE_US = 750
 ABSOLUTE_MAX_PULSE_US = 2250
+_LOCK_PATH = Path("/tmp/ai-drone-bcm12-servo.lock")
 
 WIRING_DIAGRAM = """
 [Raspberry Pi Zero 2 WH Header (40 Pins)]
@@ -28,6 +31,34 @@ Use a suitably rated regulated 5V supply and connect its ground to Pi ground.
 Do not use the Pi header as servo power unless the complete shared 5V power
 budget, wiring, protection, and transient behavior have first been validated.
 """
+
+
+class ServoProcessLock:
+    """Prevent cooperating ai-drone processes from sharing BCM12."""
+
+    def __init__(self, path: Path = _LOCK_PATH) -> None:
+        import fcntl
+
+        self._fcntl = fcntl
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        self._handle = os.fdopen(descriptor, "r+")
+        try:
+            self._fcntl.flock(
+                self._handle.fileno(),
+                self._fcntl.LOCK_EX | self._fcntl.LOCK_NB,
+            )
+        except BlockingIOError as error:
+            self._handle.close()
+            raise RuntimeError(
+                f"payload servo GPIO {SERVO_GPIO_PIN} is already owned by another "
+                "ai-drone process"
+            ) from error
+
+    def close(self) -> None:
+        if self._handle.closed:
+            return
+        self._fcntl.flock(self._handle.fileno(), self._fcntl.LOCK_UN)
+        self._handle.close()
 
 
 def _target_value_from_input(
@@ -156,7 +187,9 @@ def main(arguments: list[str] | None = None) -> int:
         print("Install it with: sudo apt install python3-gpiozero", file=sys.stderr)
         return 1
 
+    process_lock = None
     try:
+        process_lock = ServoProcessLock()
         servo = Servo(
             args.pin,
             min_pulse_width=args.min_us / 1_000_000.0,
@@ -164,6 +197,8 @@ def main(arguments: list[str] | None = None) -> int:
             initial_value=None,
         )
     except Exception as error:
+        if process_lock is not None:
+            process_lock.close()
         print(
             f"ERROR: Failed to initialize Servo on GPIO {args.pin}: {error}",
             file=sys.stderr,
@@ -230,6 +265,7 @@ def main(arguments: list[str] | None = None) -> int:
         print("\nInterrupted.")
     finally:
         servo.close()
+        process_lock.close()
         print("Servo released.")
 
     return 0

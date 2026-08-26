@@ -1,4 +1,4 @@
-"""Shared helpers for synchronized, disarmed drone sensor recordings."""
+"""Shared helpers for synchronized drone sensor recordings."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ class RecordingPaths:
     camera_events: Path
     telemetry_tlog: Path
     telemetry_events: Path
+    actuation_events: Path
     first_frame: Path
     last_frame: Path
     manifest: Path
@@ -93,6 +94,7 @@ def create_recording_paths(
         camera_events=root / "camera.jsonl",
         telemetry_tlog=root / "telemetry.tlog",
         telemetry_events=root / "telemetry.jsonl",
+        actuation_events=root / "servo.jsonl",
         first_frame=root / "first-frame.jpg",
         last_frame=root / "last-frame.jpg",
         manifest=root / "manifest.json",

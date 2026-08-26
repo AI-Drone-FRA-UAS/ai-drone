@@ -20,6 +20,7 @@ drone-deploy = "ai_drone.link.deploy:main"
 drone-inspect = "ai_drone.cli.record:main"
 drone-motor-test = "ai_drone.cli.motor_test:main"
 drone-servo = "ai_drone.cli.servo:main"
+drone-tag-servo-record = "ai_drone.cli.tag_servo_record:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13"]

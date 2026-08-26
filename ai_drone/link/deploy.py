@@ -180,7 +180,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--run",
-        choices=("inspect", "servo", "motor-test", "control"),
+        choices=("inspect", "servo", "tag-servo-record", "motor-test", "control"),
         help="run one allowlisted task after deployment",
     )
     parser.add_argument("--dry-run", action="store_true", help="print commands only")
@@ -360,6 +360,7 @@ def mode_command(plan: DeployPlan) -> list[str] | None:
     modules = {
         "inspect": "ai_drone.cli.record",
         "servo": "ai_drone.cli.servo",
+        "tag-servo-record": "ai_drone.cli.tag_servo_record",
         "motor-test": "ai_drone.cli.motor_test",
         "control": "ai_drone.cli.control",
     }
@@ -681,6 +682,12 @@ def run(arguments: Sequence[str] | None = None) -> int:
         print("This mode never arms, changes mode, or actuates anything.", flush=True)
     elif plan.mode == "servo":
         print("Starting the SG90 servo test on the Pi ...", flush=True)
+    elif plan.mode == "tag-servo-record":
+        print(
+            "Starting explicitly confirmed armed-flight tag recording with BCM12 "
+            "servo actuation ...",
+            flush=True,
+        )
     elif plan.mode == "motor-test":
         print("Starting the guarded ArduPilot bench motor test ...", flush=True)
         print("PROPELLERS MUST BE REMOVED and the vehicle secured.", flush=True)

@@ -15,9 +15,10 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pymavlink import mavutil
+from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.durability import (
@@ -27,6 +28,7 @@ from ai_drone.durability import (
     synced_stream,
 )
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
+from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_armed_vehicle_heartbeat,
@@ -55,26 +57,63 @@ if TYPE_CHECKING:
 
 _TAG36H11_MAX_ID = 586
 MANUAL_FLIGHT_RECORDING_CONFIRMATION = "PASSIVE_MANUAL_FLIGHT_RECORDING"
+_INSPECT_OPERATION = "inspect"
+_TAG_SERVO_OPERATION = "tag-servo"
 
 
-def _parser() -> argparse.ArgumentParser:
+class DetectionObserver(Protocol):
+    """Optional active-mode hook called for each analyzed camera frame."""
+
+    def observe(
+        self,
+        frame: AnalysisFrame,
+        detections: list[Any],
+        tag_records: list[dict[str, Any]],
+    ) -> None: ...
+
+
+def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
+    if operation not in {_INSPECT_OPERATION, _TAG_SERVO_OPERATION}:
+        raise ValueError(f"unknown recording operation {operation!r}")
+    tag_servo = operation == _TAG_SERVO_OPERATION
     parser = argparse.ArgumentParser(
         description=(
-            "Inspect camera video, AprilTags, and all available FC sensor telemetry "
-            "for an exact requested interval. This command never arms, "
-            "changes flight mode, moves a motor, or actuates a servo."
+            (
+                "Record camera video, native AprilTag detections, and bounded FC "
+                "telemetry while allowing explicitly confirmed BCM12 payload-servo "
+                "pulses. This command can attach while the vehicle is armed but "
+                "never arms, changes mode, or sends flight-control setpoints."
+            )
+            if tag_servo
+            else (
+                "Inspect camera video, AprilTags, and all available FC sensor "
+                "telemetry for an exact requested interval. This command never "
+                "arms, changes flight mode, moves a motor, or actuates a servo."
+            )
         )
     )
-    parser.add_argument("--duration", type=float, default=10.0, metavar="SECONDS")
-    parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
-        "--confirm-manual-flight-recording",
-        metavar="ACKNOWLEDGEMENT",
+        "--duration",
+        type=float,
+        default=None if tag_servo else 10.0,
+        metavar="SECONDS",
         help=(
-            "permit the pilot to arm only after the synchronized recorder prints "
-            f"READY; must be exactly {MANUAL_FLIGHT_RECORDING_CONFIRMATION}"
+            "optional maximum runtime; omit to run until stopped"
+            if tag_servo
+            else "capture duration (default: 10)"
         ),
     )
+    parser.add_argument("--output-dir", type=Path)
+    if not tag_servo:
+        parser.add_argument(
+            "--confirm-manual-flight-recording",
+            metavar="ACKNOWLEDGEMENT",
+            help=(
+                "permit the pilot to arm only after the synchronized recorder "
+                "prints READY; must be exactly "
+                f"{MANUAL_FLIGHT_RECORDING_CONFIRMATION}"
+            ),
+        )
     parser.add_argument("--device", help="serial path or pymavlink network endpoint")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -86,12 +125,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bitrate", type=int, default=8_000_000)
     parser.add_argument("--warmup", type=float, default=2.0)
     parser.add_argument(
-        "--backend", choices=("auto", "native", "opencv"), default="auto"
+        "--backend",
+        choices=("native",) if tag_servo else ("auto", "native", "opencv"),
+        default="native" if tag_servo else "auto",
     )
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--decimate", type=float, default=1.0)
     parser.add_argument("--detect-every", type=int, default=1, metavar="FRAMES")
-    parser.add_argument("--target-id", type=int)
+    if not tag_servo:
+        parser.add_argument("--target-id", type=int)
     parser.add_argument("--calibration", type=Path)
     parser.add_argument("--tag-size", type=float, default=0.160, metavar="METRES")
     parser.add_argument("--max-reprojection-error", type=float, default=2.0)
@@ -108,12 +150,21 @@ def _parser() -> argparse.ArgumentParser:
             "throughput; each stream is still synced once when it closes."
         ),
     )
+    if tag_servo:
+        from ai_drone.cli.tag_servo_record import add_arguments
+
+        add_arguments(parser)
     return parser
 
 
-def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+def _validate_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    operation: str = _INSPECT_OPERATION,
+) -> None:
+    tag_servo = operation == _TAG_SERVO_OPERATION
     positive = {
-        "--duration": args.duration,
         "--baud": args.baud,
         "--timeout": args.timeout,
         "--fps": args.fps,
@@ -123,6 +174,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         "--tag-size": args.tag_size,
         "--max-reprojection-error": args.max_reprojection_error,
     }
+    if args.duration is not None:
+        positive["--duration"] = args.duration
     for name, value in positive.items():
         if not math.isfinite(value) or value <= 0:
             parser.error(f"{name} must be finite and positive")
@@ -132,7 +185,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--warmup must be finite and not negative")
     if not math.isfinite(args.decimate) or args.decimate < 1.0:
         parser.error("--decimate must be finite and at least 1.0")
-    if args.confirm_manual_flight_recording not in (
+    if getattr(args, "confirm_manual_flight_recording", None) not in (
         None,
         MANUAL_FLIGHT_RECORDING_CONFIRMATION,
     ):
@@ -140,7 +193,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             "--confirm-manual-flight-recording must be exactly "
             f"{MANUAL_FLIGHT_RECORDING_CONFIRMATION}"
         )
-    if args.target_id is not None and not 0 <= args.target_id <= _TAG36H11_MAX_ID:
+    target_id = getattr(args, "target_id", None)
+    if target_id is not None and not 0 <= target_id <= _TAG36H11_MAX_ID:
         parser.error(
             f"--target-id must be between 0 and {_TAG36H11_MAX_ID} for tag36h11"
         )
@@ -152,6 +206,10 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error(
             "recording and analysis resolutions must have the same aspect ratio"
         )
+    if tag_servo:
+        from ai_drone.cli.tag_servo_record import validate_args
+
+        validate_args(parser, args)
 
 
 @dataclass
@@ -171,6 +229,13 @@ class CaptureState:
     saw_armed: bool = False
     saw_disarmed_after_arm: bool = False
     last_vehicle_state: str | None = None
+    last_vehicle_heartbeat_monotonic: float | None = None
+    visible_tag_ids: tuple[int, ...] = ()
+    confirmed_tag_ids: tuple[int, ...] = ()
+    pending_servo_tag_ids: tuple[int, ...] = ()
+    completed_servo_tag_ids: tuple[int, ...] = ()
+    servo_pulses_completed: int = 0
+    stop_reason: str | None = None
     armed_abort: bool = False
     worker_error: str | None = None
     _error_lock: threading.Lock = field(
@@ -178,6 +243,10 @@ class CaptureState:
         repr=False,
     )
     disarmed_heartbeat: threading.Event = field(
+        default_factory=threading.Event,
+        repr=False,
+    )
+    vehicle_heartbeat: threading.Event = field(
         default_factory=threading.Event,
         repr=False,
     )
@@ -192,6 +261,8 @@ class CaptureState:
     def observe_vehicle_state(self, *, armed: bool) -> None:
         """Track selected-vehicle arm transitions from the telemetry worker."""
 
+        self.last_vehicle_heartbeat_monotonic = time.monotonic()
+        self.vehicle_heartbeat.set()
         if armed:
             self.saw_armed = True
             self.last_vehicle_state = "armed"
@@ -200,11 +271,18 @@ class CaptureState:
             self.saw_disarmed_after_arm = True
         self.last_vehicle_state = "disarmed"
 
+    def set_stop_reason(self, reason: str) -> None:
+        """Retain the first intentional or error stop reason."""
+
+        with self._error_lock:
+            if self.stop_reason is None:
+                self.stop_reason = reason
+
 
 class CaptureWindow:
     """One synchronized video, telemetry, and analysis capture epoch."""
 
-    def __init__(self, duration: float) -> None:
+    def __init__(self, duration: float | None) -> None:
         self.duration = duration
         self.started = threading.Event()
         self.ready = threading.Event()
@@ -222,17 +300,15 @@ class CaptureWindow:
             started_monotonic = time.monotonic()
             self.started_monotonic = started_monotonic
             self.started_utc = datetime.now(UTC)
-            self.deadline = started_monotonic + self.duration
+            self.deadline = (
+                None if self.duration is None else started_monotonic + self.duration
+            )
             self.started.set()
 
-    def require_started(self) -> tuple[float, datetime, float]:
+    def require_started(self) -> tuple[float, datetime, float | None]:
         """Return the established epoch or fail if encoding never began."""
 
-        if (
-            self.started_monotonic is None
-            or self.started_utc is None
-            or self.deadline is None
-        ):
+        if self.started_monotonic is None or self.started_utc is None:
             raise RuntimeError("capture epoch was not established")
         return self.started_monotonic, self.started_utc, self.deadline
 
@@ -245,6 +321,7 @@ class AnalysisFrame:
     elapsed_s: float
     grayscale: NDArray[np.uint8]
     metadata: dict[str, object]
+    captured_monotonic: float | None = None
 
 
 class TelemetryWorker(threading.Thread):
@@ -262,6 +339,8 @@ class TelemetryWorker(threading.Thread):
         state: CaptureState,
         sync: IntervalSync,
         allow_armed_after_ready: bool = False,
+        allow_armed_at_any_time: bool = False,
+        stop_after_disarm: bool = False,
     ) -> None:
         super().__init__(name="telemetry-recorder", daemon=True)
         self.connection = connection
@@ -273,6 +352,8 @@ class TelemetryWorker(threading.Thread):
         self.state = state
         self.sync = sync
         self.allow_armed_after_ready = allow_armed_after_ready
+        self.allow_armed_at_any_time = allow_armed_at_any_time
+        self.stop_after_disarm = stop_after_disarm
 
     def run(self) -> None:
         try:
@@ -303,10 +384,14 @@ class TelemetryWorker(threading.Thread):
                     )
                     if is_vehicle_heartbeat:
                         armed = heartbeat_is_armed(message)
+                        had_seen_armed = self.state.saw_armed
                         self.state.observe_vehicle_state(armed=armed)
                         if armed and (
-                            not self.allow_armed_after_ready
-                            or not self.window.ready.is_set()
+                            not self.allow_armed_at_any_time
+                            and (
+                                not self.allow_armed_after_ready
+                                or not self.window.ready.is_set()
+                            )
                         ):
                             self.state.armed_abort = True
                             self.state.record_error(
@@ -319,8 +404,17 @@ class TelemetryWorker(threading.Thread):
                             return
                         if not armed:
                             self.state.disarmed_heartbeat.set()
+                        disarm_stop = (
+                            not armed and self.stop_after_disarm and had_seen_armed
+                        )
+                    else:
+                        disarm_stop = False
                     started = self.window.started_monotonic
                     deadline = self.window.deadline
+                    if disarm_stop and started is None:
+                        self.state.set_stop_reason("vehicle_disarmed")
+                        self.stop.set()
+                        return
                     if started is None or received_at < started:
                         continue
                     if deadline is not None and received_at >= deadline:
@@ -337,6 +431,10 @@ class TelemetryWorker(threading.Thread):
                         ),
                     )
                     self.sync.after_record(handle)
+                    if disarm_stop:
+                        self.state.set_stop_reason("vehicle_disarmed")
+                        self.stop.set()
+                        return
         except Exception as error:  # keep the camera cleanup path deterministic
             self.state.record_error(f"telemetry worker: {error}")
             self.stop.set()
@@ -359,6 +457,7 @@ class DetectionWorker(threading.Thread):
         stop: threading.Event,
         state: CaptureState,
         sync: IntervalSync,
+        observer: DetectionObserver | None = None,
     ) -> None:
         super().__init__(name="apriltag-recorder", daemon=True)
         self.frames = frames
@@ -372,6 +471,7 @@ class DetectionWorker(threading.Thread):
         self.stop = stop
         self.state = state
         self.sync = sync
+        self.observer = observer
 
     def run(self) -> None:
         visible_ids: set[int] = set()
@@ -420,6 +520,9 @@ class DetectionWorker(threading.Thread):
                         self.state.tag_detections += len(tags)
                         self.state.processed_frames += 1
                         current_ids = {int(tag["id"]) for tag in tags}
+                        self.state.visible_tag_ids = tuple(sorted(current_ids))
+                        if self.observer is not None:
+                            self.observer.observe(item, detections, tags)
                         for event, identifiers in (
                             ("detected", current_ids - visible_ids),
                             ("lost", visible_ids - current_ids),
@@ -720,7 +823,7 @@ def _wait_for_capture_epoch(
     stop: threading.Event,
     state: CaptureState,
     timeout: float,
-) -> tuple[float, datetime, float]:
+) -> tuple[float, datetime, float | None]:
     """Wait boundedly for the first encoded keyframe or an early safety abort."""
 
     deadline = time.monotonic() + timeout
@@ -750,6 +853,24 @@ def _wait_for_fresh_disarmed_heartbeat(
         if time.monotonic() >= deadline:
             raise RuntimeError("no fresh disarmed vehicle heartbeat before capture")
     _raise_if_startup_stopped(stop, state, "fresh heartbeat check")
+
+
+def _wait_for_fresh_vehicle_heartbeat(
+    stop: threading.Event,
+    state: CaptureState,
+    timeout: float,
+) -> None:
+    """Require a new selected-FC heartbeat without requiring an arm state."""
+
+    state.vehicle_heartbeat.clear()
+    deadline = time.monotonic() + timeout
+    while not state.vehicle_heartbeat.wait(
+        timeout=min(0.1, max(0.0, deadline - time.monotonic()))
+    ):
+        _raise_if_startup_stopped(stop, state, "fresh vehicle heartbeat check")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("no fresh selected flight-controller heartbeat")
+    _raise_if_startup_stopped(stop, state, "fresh vehicle heartbeat check")
 
 
 def _safe_video_timestamp_summary(
@@ -844,33 +965,91 @@ def _component_report(
     return report
 
 
-def _print_live_status(state: CaptureState) -> None:
+def _print_live_status(
+    state: CaptureState,
+    *,
+    tag_servo: bool = False,
+    stop_after: int | None = None,
+) -> None:
     downward = state.latest_distance_m.get(25)
     forward = state.latest_distance_m.get(0)
+    tag_status = "DETECTED" if state.visible_tag_ids else "NO_TAG"
+    progress = (
+        f"{state.servo_pulses_completed}/{stop_after}"
+        if stop_after is not None
+        else f"{state.servo_pulses_completed}/unbounded"
+    )
+    active_fields = (
+        f" apriltag={tag_status} visible_ids={list(state.visible_tag_ids)} "
+        f"servo_progress={progress} "
+        f"pending_ids={list(state.pending_servo_tag_ids)}"
+        if tag_servo
+        else ""
+    )
     print(
         "status "
+        f"vehicle_state={state.last_vehicle_state or 'unavailable'} "
         f"camera_frames={state.camera_frames} "
         f"telemetry={sum(state.telemetry_counts.values())} "
         f"downward_m={downward if downward is not None else 'unavailable'} "
         f"forward_m={forward if forward is not None else 'unavailable'} "
         f"flow_quality={state.latest_flow_quality if state.latest_flow_quality is not None else 'unavailable'} "
-        f"tags={state.tag_detections}",
+        f"tags={state.tag_detections}"
+        f"{active_fields}",
         flush=True,
     )
 
 
-def run(arguments: list[str] | None = None) -> int:  # noqa: C901
-    parser = _parser()
+def _queue_analysis_frame(
+    frames: queue.Queue[AnalysisFrame | None],
+    item: AnalysisFrame,
+    state: CaptureState,
+    *,
+    latest_wins: bool,
+) -> None:
+    """Queue analysis without blocking; active mode replaces stale queued work."""
+
+    try:
+        frames.put_nowait(item)
+        return
+    except queue.Full:
+        state.dropped_analysis_frames += 1
+    if not latest_wins:
+        return
+    try:
+        discarded = frames.get_nowait()
+    except queue.Empty:
+        return
+    else:
+        frames.task_done()
+        if discarded is None:
+            return
+    try:
+        frames.put_nowait(item)
+    except queue.Full:
+        state.dropped_analysis_frames += 1
+
+
+def run(  # noqa: C901
+    arguments: list[str] | None = None,
+    *,
+    operation: str = _INSPECT_OPERATION,
+) -> int:
+    parser = _parser(operation=operation)
     args = parser.parse_args(arguments)
-    _validate_args(parser, args)
+    _validate_args(parser, args, operation=operation)
+    tag_servo = operation == _TAG_SERVO_OPERATION
     manual_flight_recording = (
-        args.confirm_manual_flight_recording == MANUAL_FLIGHT_RECORDING_CONFIRMATION
+        getattr(args, "confirm_manual_flight_recording", None)
+        == MANUAL_FLIGHT_RECORDING_CONFIRMATION
     )
     paths = create_recording_paths(args.output_dir)
     state = CaptureState()
     window = CaptureWindow(args.duration)
     stop = threading.Event()
-    frames: queue.Queue[AnalysisFrame | None] = queue.Queue(maxsize=8)
+    frames: queue.Queue[AnalysisFrame | None] = queue.Queue(
+        maxsize=1 if tag_servo else 8
+    )
     details: dict[str, str] = {}
     on_pi = is_raspberry_pi()
     connection = None
@@ -879,6 +1058,9 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
     flight_controller_status = "unavailable"
     initial_vehicle_state = "unavailable"
     requested_messages: list[str] = []
+    arming_skipchk: float | None = None
+    tag_servo_session: Any | None = None
+    tag_servo_config: Any | None = None
 
     try:
         endpoint = resolve_mavlink_endpoint(
@@ -890,7 +1072,38 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         heartbeat = candidate.wait_heartbeat(timeout=args.timeout)
         if heartbeat is None:
             raise TimeoutError("no ArduPilot heartbeat received")
-        if is_armed_vehicle_heartbeat(
+        if tag_servo:
+            source_system = int(heartbeat.get_srcSystem())
+            source_component = int(heartbeat.get_srcComponent())
+            if (source_system, source_component) != (1, 1):
+                raise RuntimeError(
+                    "armed tag-servo recording requires the project FC at MAVLink "
+                    f"target 1/1, received {source_system}/{source_component}"
+                )
+            if int(heartbeat.autopilot) != mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA:
+                raise RuntimeError("selected heartbeat is not from ArduPilot")
+            if int(heartbeat.type) != mavlink.MAV_TYPE_QUADROTOR:
+                raise RuntimeError("selected ArduPilot vehicle is not a quadrotor")
+            candidate.target_system = source_system
+            candidate.target_component = source_component
+            initially_armed = heartbeat_is_armed(heartbeat)
+            initial_vehicle_state = "armed" if initially_armed else "disarmed"
+            state.observe_vehicle_state(armed=initially_armed)
+            arming_skipchk = request_parameter(
+                candidate,
+                "ARMING_SKIPCHK",
+                timeout=args.timeout,
+                require_disarmed=False,
+            )
+            if arming_skipchk != 0.0:
+                raise RuntimeError(
+                    f"ARMING_SKIPCHK={arming_skipchk:g}; armed tag-servo recording "
+                    "requires exact ARMING_SKIPCHK=0"
+                )
+            connection = candidate
+            flight_controller_status = "ok"
+            requested_messages = request_telemetry_messages(connection)
+        elif is_armed_vehicle_heartbeat(
             heartbeat, system_id=int(candidate.target_system)
         ):
             connection = candidate
@@ -905,7 +1118,13 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             state.observe_vehicle_state(armed=False)
             flight_controller_status = "ok"
             requested_messages = request_telemetry_messages(connection)
-    except (FileNotFoundError, OSError, RuntimeError, TimeoutError) as error:
+    except (
+        FileNotFoundError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+    ) as error:
         details["flight_controller"] = str(error)
         if candidate is not None:
             with suppress(OSError):
@@ -923,6 +1142,8 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             state=state,
             sync=IntervalSync(args.sync_interval),
             allow_armed_after_ready=manual_flight_recording,
+            allow_armed_at_any_time=tag_servo,
+            stop_after_disarm=tag_servo,
         )
         telemetry_worker.start()
 
@@ -1019,7 +1240,10 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             if args.warmup and stop.wait(args.warmup):
                 _raise_if_startup_stopped(stop, state, "camera warm-up")
             if connection is not None:
-                _wait_for_fresh_disarmed_heartbeat(stop, state, args.timeout)
+                if tag_servo:
+                    _wait_for_fresh_vehicle_heartbeat(stop, state, args.timeout)
+                else:
+                    _wait_for_fresh_disarmed_heartbeat(stop, state, args.timeout)
 
             if args.stream:
                 try:
@@ -1045,6 +1269,26 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
                 timeout=max(2.0, 10.0 / args.fps),
             )
             camera_status = "ok"
+            if tag_servo:
+                if detector is None:
+                    raise RuntimeError(
+                        "armed tag-servo recording requires the native AprilTag "
+                        "detector"
+                    )
+                from ai_drone.cli.tag_servo_record import (
+                    TagServoConfig,
+                    TagServoSession,
+                )
+
+                tag_servo_config = TagServoConfig.from_args(args)
+                tag_servo_session = TagServoSession(
+                    config=tag_servo_config,
+                    event_path=paths.actuation_events,
+                    state=state,
+                    capture_stop=stop,
+                    ready=window.ready,
+                )
+                tag_servo_session.install_signal_handlers()
             if detector is not None:
                 detection_worker = DetectionWorker(
                     frames=frames,
@@ -1054,14 +1298,22 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
                     tag_size=args.tag_size,
                     resolution=args.analysis_resolution,
                     max_reprojection_error=args.max_reprojection_error,
-                    target_id=args.target_id,
+                    target_id=getattr(args, "target_id", None),
                     stop=stop,
                     state=state,
                     sync=IntervalSync(args.sync_interval),
+                    observer=tag_servo_session,
                 )
                 detection_worker.start()
         except (ImportError, OSError, RuntimeError, ValueError) as error:
             details["camera"] = str(error)
+            if tag_servo:
+                state.record_error(f"armed tag-servo startup: {error}")
+                state.set_stop_reason("startup_failed")
+                stop.set()
+            if tag_servo_session is not None:
+                tag_servo_session.close()
+                tag_servo_session = None
             _cleanup_camera(
                 camera,
                 encoder,
@@ -1085,6 +1337,19 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         )
         stop.set()
 
+    if tag_servo and (
+        connection is None
+        or camera_status != "ok"
+        or detector_status != "ok"
+        or tag_servo_session is None
+    ):
+        state.record_error(
+            "armed tag-servo recording requires selected FC telemetry, camera, "
+            "native AprilTag detection, and exclusive BCM12 servo access"
+        )
+        state.set_stop_reason("startup_failed")
+        stop.set()
+
     if not window.started.is_set() and not state.armed_abort:
         _start_capture_epoch(connection, paths.telemetry_tlog, window, stop, state)
 
@@ -1102,6 +1367,23 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
                 flush=True,
             )
 
+    if tag_servo and window.started.is_set() and not stop.is_set():
+        try:
+            _wait_for_fresh_vehicle_heartbeat(stop, state, args.timeout)
+        except (RuntimeError, TimeoutError) as error:
+            state.record_error(f"final armed tag-servo readiness check: {error}")
+            state.set_stop_reason("startup_failed")
+            stop.set()
+        else:
+            window.ready.set()
+            print(
+                "READY: synchronized armed-flight recording and native AprilTag "
+                "detection are active; BCM12 is detached until a tag qualifies. "
+                "No arm, mode, motor, throttle, RC, mission, or FC-servo command "
+                "will be sent.",
+                flush=True,
+            )
+
     started_monotonic = time.monotonic()
     started_utc: datetime | None = None
     ended_monotonic = started_monotonic
@@ -1111,13 +1393,34 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         next_status = started_monotonic
         try:
             frame_index = 0
-            while not stop.is_set() and time.monotonic() < deadline:
+            while not stop.is_set():
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    state.set_stop_reason("duration_elapsed")
+                    break
+                if tag_servo_session is not None:
+                    health_error = tag_servo_session.health_error(now)
+                    if health_error is not None:
+                        state.record_error(health_error)
+                        state.set_stop_reason("runtime_watchdog")
+                        stop.set()
+                        break
                 if camera is None:
-                    now = time.monotonic()
                     if now >= next_status:
-                        _print_live_status(state)
+                        _print_live_status(
+                            state,
+                            tag_servo=tag_servo,
+                            stop_after=(
+                                tag_servo_config.stop_after
+                                if tag_servo_config is not None
+                                else None
+                            ),
+                        )
                         next_status = now + 1.0
-                    stop.wait(min(0.1, max(0.0, deadline - now)))
+                    wait_time = (
+                        0.1 if deadline is None else min(0.1, max(0.0, deadline - now))
+                    )
+                    stop.wait(wait_time)
                     continue
                 request = camera.capture_request()
                 try:
@@ -1131,23 +1434,25 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
                     grayscale = np.ascontiguousarray(yuv[:height, :width]).copy()
                 finally:
                     request.release()
-                if captured_at >= deadline:
+                if deadline is not None and captured_at >= deadline:
+                    state.set_stop_reason("duration_elapsed")
                     break
                 state.camera_frames += 1
                 first_frame = grayscale.copy() if first_frame is None else first_frame
                 last_frame = grayscale.copy()
                 if frame_index % args.detect_every == 0:
-                    try:
-                        frames.put_nowait(
-                            AnalysisFrame(
-                                frame_index=frame_index,
-                                elapsed_s=captured_at - started_monotonic,
-                                grayscale=grayscale,
-                                metadata=metadata,
-                            )
-                        )
-                    except queue.Full:
-                        state.dropped_analysis_frames += 1
+                    _queue_analysis_frame(
+                        frames,
+                        AnalysisFrame(
+                            frame_index=frame_index,
+                            elapsed_s=captured_at - started_monotonic,
+                            grayscale=grayscale,
+                            metadata=metadata,
+                            captured_monotonic=captured_at,
+                        ),
+                        state,
+                        latest_wins=tag_servo,
+                    )
                     if push_stream_frame is not None and cv2 is not None:
                         ok, jpeg = cv2.imencode(
                             ".jpg", grayscale, [cv2.IMWRITE_JPEG_QUALITY, 80]
@@ -1156,12 +1461,26 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
                             push_stream_frame(jpeg.tobytes())
                 frame_index += 1
                 if captured_at >= next_status:
-                    _print_live_status(state)
+                    _print_live_status(
+                        state,
+                        tag_servo=tag_servo,
+                        stop_after=(
+                            tag_servo_config.stop_after
+                            if tag_servo_config is not None
+                            else None
+                        ),
+                    )
                     next_status = captured_at + 1.0
         except KeyboardInterrupt:
-            state.record_error("interrupted by user")
+            if tag_servo:
+                state.set_stop_reason("operator_interrupt")
+                if tag_servo_session is not None:
+                    tag_servo_session.stop_accepting()
+            else:
+                state.record_error("interrupted by user")
         except Exception as error:
             state.record_error(str(error))
+            state.set_stop_reason("runtime_error")
         finally:
             stop.set()
             ended_monotonic = time.monotonic()
@@ -1186,6 +1505,8 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         stop=stop,
         state=state,
     )
+    if tag_servo_session is not None:
+        tag_servo_session.close()
 
     actual_duration = max(0.0, ended_monotonic - started_monotonic)
     components = _component_report(
@@ -1202,17 +1523,30 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             "status": "ok" if server is not None else "unavailable",
             **({"detail": details["stream"]} if "stream" in details else {}),
         }
+    if tag_servo:
+        components["servo"] = {
+            "status": (
+                "commanded"
+                if state.servo_pulses_completed
+                else ("ready" if tag_servo_session is not None else "unavailable")
+            ),
+            "gpio": 12,
+            "feedback_available": False,
+            "completed_commanded_pulses": state.servo_pulses_completed,
+        }
     files = {
         "video": paths.video,
         "video_timestamps": paths.video_timestamps,
         "camera_events": paths.camera_events,
         "telemetry_tlog": paths.telemetry_tlog,
         "telemetry_events": paths.telemetry_events,
+        "actuation_events": paths.actuation_events,
         "first_frame": paths.first_frame,
         "last_frame": paths.last_frame,
     }
     manifest = {
         "schema": 1,
+        "operation": operation,
         "requested_duration_s": args.duration,
         "actual_duration_s": round(actual_duration, 6),
         "started_utc": started_utc.isoformat() if started_utc else None,
@@ -1220,6 +1554,7 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
         "completed": not state.armed_abort and state.worker_error is None,
         "armed_abort": state.armed_abort,
         "error": state.worker_error,
+        "stop_reason": state.stop_reason,
         "components": components,
         "safety": {
             "initial_vehicle_state": initial_vehicle_state,
@@ -1227,15 +1562,37 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             "saw_armed": state.saw_armed,
             "saw_disarmed_after_arm": state.saw_disarmed_after_arm,
             "last_vehicle_state": state.last_vehicle_state or "unavailable",
-            "commands_never_sent": [
+            "arming_skipchk": arming_skipchk,
+            "mavlink_commands_never_sent": [
                 "arm",
                 "disarm",
                 "mode change",
                 "motor/throttle",
                 "RC override",
-                "servo",
+                "flight-controller servo",
                 "mission start",
             ],
+            "commands_never_sent": (
+                [
+                    "arm",
+                    "disarm",
+                    "mode change",
+                    "motor/throttle",
+                    "RC override",
+                    "mission start",
+                ]
+                if tag_servo
+                else [
+                    "arm",
+                    "disarm",
+                    "mode change",
+                    "motor/throttle",
+                    "RC override",
+                    "servo",
+                    "mission start",
+                ]
+            ),
+            "gpio_servo_actuation_enabled": tag_servo,
         },
         "camera": {
             "recording_resolution": list(args.resolution),
@@ -1248,7 +1605,18 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
             "baud": args.baud,
             "requested_messages": requested_messages,
             "message_counts": dict(sorted(state.telemetry_counts.items())),
+            "outbound": (
+                [
+                    "PARAM_REQUEST_READ ARMING_SKIPCHK",
+                    "MAV_CMD_SET_MESSAGE_INTERVAL for requested_messages",
+                ]
+                if tag_servo
+                else ["MAV_CMD_SET_MESSAGE_INTERVAL for requested_messages"]
+            ),
         },
+        "tag_servo": (
+            tag_servo_session.manifest() if tag_servo_session is not None else None
+        ),
         "files": {name: path.name for name, path in files.items() if path.exists()},
     }
     try:
@@ -1263,7 +1631,9 @@ def run(arguments: list[str] | None = None) -> int:  # noqa: C901
     print(
         f"Finished in {actual_duration:.3f} s: camera={state.camera_frames} frames, "
         f"telemetry={sum(state.telemetry_counts.values())} messages, "
-        f"tags={state.tag_detections}",
+        f"tags={state.tag_detections}, "
+        f"servo_pulses={state.servo_pulses_completed}, "
+        f"stop_reason={state.stop_reason or 'unspecified'}",
         flush=True,
     )
     print(f"Manifest: {paths.manifest}", flush=True)

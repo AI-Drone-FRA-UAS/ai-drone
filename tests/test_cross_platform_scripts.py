@@ -148,6 +148,11 @@ def test_deploy_install_command_preserves_system_site_packages(tmp_path: Path) -
     [
         ("inspect", "ai_drone.cli.record", ("--duration", "12.5")),
         ("servo", "ai_drone.cli.servo", ("--mode", "center")),
+        (
+            "tag-servo-record",
+            "ai_drone.cli.tag_servo_record",
+            ("--stop-after", "3"),
+        ),
         ("motor-test", "ai_drone.cli.motor_test", ("--motor", "1")),
         ("control", "ai_drone.cli.control", ("hover", "--duration", "2")),
     ],
@@ -381,6 +386,7 @@ def test_hardware_tool_entrypoints_live_in_package_cli() -> None:
 
     assert scripts["drone-inspect"] == "ai_drone.cli.record:main"
     assert scripts["drone-servo"] == "ai_drone.cli.servo:main"
+    assert scripts["drone-tag-servo-record"] == "ai_drone.cli.tag_servo_record:main"
 
     # Flight functionality is consolidated behind one guarded command; the
     # former duplicate wrappers are intentionally not installed.

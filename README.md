@@ -35,6 +35,7 @@ apt-installed Picamera2 and libcamera bindings.
 | `drone-deploy` | Synchronize the runtime and optionally run an allowlisted task |
 | `drone-inspect` | Report and save all available disarmed camera/MAVLink streams |
 | `drone-servo` | Guarded direct-BCM12 payload-servo bench test |
+| `drone-tag-servo-record` | Explicit armed-flight tag recorder and bounded BCM12 pulses |
 | `drone-motor-test` | Guarded, low-power, propeller-off ArduPilot motor check |
 | `drone-control hover` | Guarded takeoff, timed hold, and landing |
 | `drone-config-sync` | Capture the ArduPilot configuration |
@@ -120,6 +121,7 @@ git diff --check
 - [MAVLink control and staged flight tests](docs/PI_MAVLINK_CONTROL.md)
 - [Sensor recording and wiring](docs/SENSOR_RECORDING.md)
 - [AprilTag mission architecture](docs/APRILTAG_MISSION.md)
+- [Armed AprilTag/servo recorder](docs/ARMED_TAG_SERVO_RECORDING.md)
 - [Pi networking](docs/pi-networking.md)
 - [Direct flight-controller USB connection](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md)
 - [Pi USB SSH](docs/RPI_ZERO2W_USB_SSH_SETUP.md)
