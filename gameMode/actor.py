@@ -1,25 +1,28 @@
-"""AI Drone — camera, computer vision, and flight integration."""
+"""GameMode Drohnen-Actor & Vektor-Mathematik.
+
+Re-exportiert die Klassen und Funktionen aus `ai_drone.game_actor` für Rückwärtskompatibilität.
+"""
 
 from __future__ import annotations
 
-from ai_drone.controller import DroneController
-from ai_drone.follower import AutonomousFollower, PersonTarget, get_person_target
 from ai_drone.game_actor import (
     DEFAULT_FAILSAFE_CONFIG,
     DroneGameActor,
     FailsafeConfig,
     FailsafeException,
+    PWM_NEUTRAL,
+    PWM_THROTTLE_DISARM,
+    PWM_THROTTLE_HOVER,
     Vector3,
 )
 
 __all__ = [
     "DEFAULT_FAILSAFE_CONFIG",
-    "AutonomousFollower",
-    "DroneController",
     "DroneGameActor",
     "FailsafeConfig",
     "FailsafeException",
-    "PersonTarget",
+    "PWM_NEUTRAL",
+    "PWM_THROTTLE_DISARM",
+    "PWM_THROTTLE_HOVER",
     "Vector3",
-    "get_person_target",
 ]

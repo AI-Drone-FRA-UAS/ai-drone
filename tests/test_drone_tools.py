@@ -44,6 +44,29 @@ def test_servo_input_parsing() -> None:
     assert servo._target_value_from_input("-0.25", min_us=900, max_us=2100) == -0.25
 
 
+def test_servo_conversions() -> None:
+    assert servo._pulse_to_value(1500, min_us=900, max_us=2100) == 0.0
+    assert servo._pulse_to_value(2100, min_us=900, max_us=2100) == 1.0
+    assert servo._pulse_to_value(900, min_us=900, max_us=2100) == -1.0
+    assert servo._value_to_pulse(0.0, min_us=900, max_us=2100) == 1500
+    assert servo._value_to_pulse(1.0, min_us=900, max_us=2100) == 2100
+    assert servo._value_to_pulse(-1.0, min_us=900, max_us=2100) == 900
+    assert servo._pulse_to_angle(1500, min_us=900, max_us=2100) == 0.0
+    assert servo._pulse_to_angle(2100, min_us=900, max_us=2100) == 60.0
+    assert servo._pulse_to_angle(900, min_us=900, max_us=2100) == -60.0
+
+
+def test_servo_mock_simulation() -> None:
+    mock = servo.MockServo(18)
+    assert mock.pin == 18
+    assert mock.value == 0.0
+    mock.value = 0.5
+    assert mock.value == 0.5
+    mock.close()
+    assert mock.is_closed is True
+
+
+
 def test_drone_console_uses_requested_device(tmp_path, monkeypatch) -> None:
     device = tmp_path / "tty-test"
     device.touch()
