@@ -24,6 +24,14 @@
   with `sudo ai-drone-network auto`, `sudo ai-drone-network connect "PROFILE"`,
   or `sudo ai-drone-network hotspot`.
 - Prefer Tailscale access with `ssh -F /dev/null seb@seb-is-pm.tail59e6a4.ts.net` when online.
+- The maintenance laptop also has a verified `seb-is-pm` SSH alias pointing
+  to that full hostname. Use `ssh seb@seb-is-pm` without `-F` to use the alias.
+  Shared teammates need the alias described in `docs/pi-networking.md`.
+- The owner's Tailscale administrative API credential is in GNOME Keyring
+  under service `tailscale-api`, purpose `acl-management`. Read it only into
+  process memory; never print, commit or pass it as a command-line argument.
+  The shared-drone TCP 22 grant was applied and verified on 7 September 2026;
+  see `state/2026-09-07/team-access.md` before changing policy.
 
 ## Hardware safety
 

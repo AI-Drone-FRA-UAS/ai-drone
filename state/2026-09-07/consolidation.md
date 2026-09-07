@@ -2,8 +2,9 @@
 
 Maintenance on 7 September 2026 consolidated the maintained software onto
 `main`, restored Pi connectivity using its existing eduroam credentials and
-Tailscale identity, and installed the consolidated runtime. Shared teammate
-SSH access still needs a central Tailscale policy change, described below.
+Tailscale identity, and installed the consolidated runtime. The subsequent
+[team-access follow-up](team-access.md) completed the central Tailscale policy
+change and verified eduroam preference without an access-point lock.
 
 This is a software/network maintenance record. The separate
 [indoor repair report](indoor-repair.md) remains the hardware reference.
@@ -126,6 +127,8 @@ unavailable access-point BSSID. Enabling autoconnect, setting priority 100 and
 clearing that stale BSSID restriction restored the connection without copying
 the laptop's profile. The installed boot selector now prefers `eduroam`, then
 other saved client profiles, then the existing `AI-Drone-Zero` hotspot.
+The later [network preference verification](team-access.md#eduroam-preference)
+raised eduroam's priority to 400 after finding another saved client at 300.
 
 The USB Ethernet gadget had a stalled transmit path. A module reload initially
 recovered it, but the second Pi reboot reproduced the host's `NETDEV WATCHDOG`
@@ -171,26 +174,18 @@ Credential-bearing NetworkManager profiles and Tailscale node state were
 backed up only on the Pi in root-only
 `/root/ai-drone-maintenance-20260907/`; they were not copied into Git.
 
-### Remaining shared-access policy change
+### Shared-access policy follow-up
 
-The Pi's effective Tailscale packet policy permits TCP 22 only from the
-owner's devices. Shared teammates are visible but are absent from those
-allow rules. The existing three authorized OpenSSH keys were retained.
-Tailscale SSH itself is disabled; access uses ordinary OpenSSH over Tailscale.
+The initial inspection found TCP 22 allowed only from the owner's devices.
+After the user identified the administrator credential in GNOME Keyring, the
+[19:15–19:18 CEST follow-up](team-access.md) added and verified SSH access for
+all three accepted drone-share recipients. Existing policy and the Pi's three
+authorized OpenSSH keys were retained. Tailscale SSH remains disabled; access
+uses ordinary OpenSSH over Tailscale.
 
-The proposed additive grant is:
-
-```json
-{"src": ["autogroup:shared"], "dst": ["tag:pi-drone"], "ip": ["tcp:22"]}
-```
-
-It belongs in the existing central `grants` list, preserving the rest of the
-policy. There is no available administrator API credential or admin connector
-in this session, so the global ACL has **not** been changed. The user was asked
-for a private credential-file path or to apply the grant in the admin console.
-After that change, recheck the Pi's delivered rules and have a shared teammate
-verify their actual SSH login. See [networking](../../docs/pi-networking.md)
-and Tailscale's [sharing documentation](https://tailscale.com/docs/features/sharing).
+The exact short command works on the maintenance laptop. Teammates need the
+[documented SSH alias](../../docs/pi-networking.md#shared-teammate-ssh-access)
+on their own computers; their individual SSH logins were not tested.
 
 ## Validation evidence
 

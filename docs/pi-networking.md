@@ -5,6 +5,14 @@ The Pi uses one onboard Wi-Fi interface, `wlan0`. At boot,
 saved auto-connect client profiles, and finally starts the `AI-Drone-Zero`
 fallback hotspot.
 
+The saved `eduroam` profile has autoconnect enabled at priority **400**, above
+the other saved client profiles (currently at most 300). Its BSSID and band
+fields are empty and its channel is unrestricted, so NetworkManager can select
+any reachable eduroam access point. Preserve the institution's certificate
+validation when maintaining this profile. These settings govern connection
+selection; the boot selector does not continuously switch away from an
+already connected fallback network when eduroam later becomes available.
+
 Only one `wlan0` mode is active at a time: joining a client network stops the
 hotspot, and starting the hotspot disconnects the client network.
 
@@ -44,12 +52,32 @@ in this repository.
 
 ## Shared teammate SSH access
 
-Use the full hostname above, or the Pi address shown in the teammate's own
-`tailscale status`. A shared machine can have a different address in the
-recipient's tailnet; `100.84.84.2` is the address observed in the owning
-tailnet. The short name `seb-is-pm` works within the owning tailnet; shared
-teammates need the fully qualified name for MagicDNS. See
+For the same short SSH command on each teammate's computer, add this alias to
+`~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`), before any broad
+`Host *` block:
+
+```sshconfig
+Host seb-is-pm
+    HostName seb-is-pm.tail59e6a4.ts.net
+    User seb
+```
+
+If the alias already exists, update its `HostName` and preserve personal
+settings such as `IdentityFile`. Connect with:
+
+```bash
+ssh seb@seb-is-pm
+```
+
+Use this command without `-F /dev/null`, which would bypass the alias. The
+full-hostname command in the previous section also works without an alias.
+Shared teammates need the fully qualified name for MagicDNS; a central access
+rule cannot install this client-side SSH alias. See
 [sharing and MagicDNS](https://tailscale.com/docs/features/sharing#sharing-and-magicdns).
+
+Alternatively, use the Pi address shown in the teammate's own
+`tailscale status`. A shared machine can have a different address in the
+recipient's tailnet; `100.84.84.2` is the address observed in the owning tailnet.
 
 The Pi uses ordinary OpenSSH over Tailscale. A successful device share must
 also be allowed by the tailnet's network policy, and the teammate still needs
@@ -57,18 +85,25 @@ an accepted SSH key or the appropriate Unix-account credentials. The Pi's
 Tailscale SSH server is disabled; do not enable it without separately reviewing
 the tailnet's SSH policy, because it takes over SSH on the Tailscale address.
 
-For already accepted shares, this narrow grant allows SSH to the drone tag:
+The following grant was installed and verified on 7 September 2026. It allows
+already accepted shares to reach the drone's SSH port:
 
 ```json
 {"src": ["autogroup:shared"], "dst": ["tag:pi-drone"], "ip": ["tcp:22"]}
 ```
 
-Append it to the existing `grants` list in the owning tailnet's policy; it is
-not a replacement policy. Preserve existing owner access and other rules.
-Validate the full policy before saving. Editing global policy requires an
-administrator session or API credential; inspecting the Pi's delivered packet
-rules alone does not grant administrative write access. Credentials belong in
-a private local store, never this repository.
+It is an addition to the existing `grants` list in the owning tailnet's policy.
+Existing owner access and other rules were preserved. The full policy passed
+validation, and the Pi's delivered rules cover all three accepted share
+recipients and their eight visible devices. The short command was verified on
+the maintenance laptop; teammates must configure their own alias and use
+their existing OpenSSH credentials. See the
+[dated access verification](../state/2026-09-07/team-access.md).
+
+For future changes, validate the complete policy and preserve unrelated rules.
+Use the current ETag when saving to avoid overwriting a concurrent edit.
+Administrative credentials belong in a private local store, never this
+repository.
 
 See Tailscale's [sharing rules](https://tailscale.com/docs/features/sharing)
 and [Tailscale SSH distinction](https://tailscale.com/docs/features/tailscale-ssh).

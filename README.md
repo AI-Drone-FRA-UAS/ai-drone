@@ -17,8 +17,11 @@ and a compass pre-arm failure. Recheck hardware before use; a dated result is
 not a continuing health guarantee.
 
 The [consolidation report](state/2026-09-07/consolidation.md) records the shared
-`main` branch, Pi deployment, restored connectivity and remaining teammate
-access-policy change. See [CONTRIBUTING.md](CONTRIBUTING.md) before starting new
+`main` branch, Pi deployment and restored connectivity. The
+[team-access follow-up](state/2026-09-07/team-access.md) verifies shared SSH
+permissions and eduroam preference; use the
+[SSH alias setup](docs/pi-networking.md#shared-teammate-ssh-access) for
+`ssh seb@seb-is-pm`. See [CONTRIBUTING.md](CONTRIBUTING.md) before starting new
 development work.
 
 ## Start here
