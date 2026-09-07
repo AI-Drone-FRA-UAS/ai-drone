@@ -115,6 +115,10 @@ git diff --check
 
 ## Documentation
 
+The [documentation index](docs/README.md), [project site](site/README.md),
+and [historical project poster](docs/poster/README.md) are maintained here.
+Preview the site with `uv run --group docs python site/build.py --serve`.
+
 - [Hardware inventory](docs/drone-project.md)
 - [Flight-controller configuration](docs/DRONE_CONFIGURATION.md)
 - [ArduCopter 4.7 no-GPS Loiter review](docs/ARDUCOPTER_4_7_NOGPS_LOITER.md)

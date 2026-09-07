@@ -30,6 +30,9 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
 ]
+docs = [
+    { name = "markdown-it-py" },
+]
 raspi = [
     { name = "opencv-python" },
 ]
@@ -51,6 +54,7 @@ dev = [
     { name = "ruff", specifier = ">=0.15.12" },
     { name = "ty", specifier = ">=0.0.35" },
 ]
+docs = [{ name = "markdown-it-py", specifier = ">=3.0" }]
 raspi = [{ name = "opencv-python", specifier = ">=4.11.0.86" }]
 
 [[package]]
