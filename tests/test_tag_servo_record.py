@@ -311,7 +311,8 @@ def test_three_consecutive_frames_command_one_bounded_pulse(tmp_path: Path) -> N
         _observe(session, 7)
         _wait_for(lambda: state.servo_pulses_completed == 1)
 
-        assert stop.is_set()
+        # Completion is published before the event log is synced and stop is set.
+        assert stop.wait(timeout=2.0)
         assert state.stop_reason == "tag_limit_reached"
         assert state.completed_servo_tag_ids == (7,)
         assert servo.actions[:3] == [
@@ -413,7 +414,8 @@ def test_stop_after_three_counts_completed_distinct_ids(tmp_path: Path) -> None:
             _observe(session, tag_id, 3)
             _wait_for(lambda tag_id=tag_id: tag_id in state.completed_servo_tag_ids)
 
-        assert stop.is_set()
+        # The final completed ID can be visible while its log is still syncing.
+        assert stop.wait(timeout=2.0)
         assert state.stop_reason == "tag_limit_reached"
         assert state.completed_servo_tag_ids == (3, 8, 13)
         assert state.servo_pulses_completed == 3
