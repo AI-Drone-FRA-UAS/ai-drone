@@ -3,6 +3,8 @@ from __future__ import annotations
 from time import monotonic
 from typing import Any, TypedDict
 
+from ai_drone.mavlink.safety import is_vehicle_message
+
 
 class DataFlashLog(TypedDict):
     number: int
@@ -23,7 +25,11 @@ def latest_dataflash_log(
         message = connection.recv_match(
             type="LOG_ENTRY", blocking=True, timeout=remaining
         )
-        if message is None or int(message.num_logs) == 0:
+        if message is None:
+            return None
+        if not is_vehicle_message(message, system_id=system, component_id=component):
+            continue
+        if int(message.num_logs) == 0:
             return None
         latest = int(message.last_log_num)
         if int(message.id) == latest:

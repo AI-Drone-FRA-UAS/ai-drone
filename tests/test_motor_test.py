@@ -93,6 +93,55 @@ def test_motor_test_requires_exact_physical_confirmations() -> None:
         )
 
 
+def test_motor_test_does_not_select_a_different_vehicle(monkeypatch) -> None:
+    wrong_vehicle = SimpleNamespace(
+        get_type=lambda: "HEARTBEAT",
+        get_srcSystem=lambda: 1,
+        get_srcComponent=lambda: 1,
+        autopilot=mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+        type=mavlink.MAV_TYPE_QUADROTOR,
+        base_mode=0,
+    )
+    incoming = iter([wrong_vehicle, None])
+    connection = SimpleNamespace(
+        recv_match=lambda **_kwargs: next(incoming),
+        close=lambda: setattr(connection, "closed", True),
+        closed=False,
+    )
+    monkeypatch.setattr(
+        motor_test, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "fake"
+    )
+    monkeypatch.setattr(
+        motor_test.mavutil, "mavlink_connection", lambda *_args, **_kwargs: connection
+    )
+    monkeypatch.setattr(
+        motor_test,
+        "_request_parameter",
+        lambda *_args, **_kwargs: pytest.fail("must not query a different vehicle"),
+    )
+    monkeypatch.setattr(
+        motor_test,
+        "_send_motor_test",
+        lambda *_args, **_kwargs: pytest.fail("must not command a different vehicle"),
+    )
+
+    with pytest.raises(TimeoutError, match="42/1"):
+        motor_test.main(
+            [
+                "--motor",
+                "1",
+                "--target-system",
+                "42",
+                "--confirm-props-removed",
+                "PROPS_REMOVED",
+                "--confirm-vehicle-secured",
+                "VEHICLE_SECURED",
+            ]
+        )
+
+    assert connection.closed
+
+
 @pytest.mark.parametrize("arming_skipchk", [1.0, 4.0, 2097150.0])
 def test_motor_test_requires_exact_all_checks_value(
     monkeypatch, arming_skipchk: float
@@ -100,13 +149,16 @@ def test_motor_test_requires_exact_all_checks_value(
     requested = []
     heartbeat = SimpleNamespace(
         base_mode=0,
+        get_type=lambda: "HEARTBEAT",
+        autopilot=mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+        type=mavlink.MAV_TYPE_QUADROTOR,
         get_srcSystem=lambda: 1,
         get_srcComponent=lambda: 1,
     )
     connection = SimpleNamespace(
         target_system=1,
         target_component=1,
-        wait_heartbeat=lambda *, timeout: heartbeat,
+        recv_match=lambda **_kwargs: heartbeat,
         close=lambda: None,
     )
     monkeypatch.setattr(
@@ -223,13 +275,16 @@ def test_post_stop_disarm_check_reports_fresh_heartbeat_timeout(monkeypatch) -> 
 def test_partial_motor_command_write_still_triggers_stop_cleanup(monkeypatch) -> None:
     heartbeat = SimpleNamespace(
         base_mode=0,
+        get_type=lambda: "HEARTBEAT",
+        autopilot=mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+        type=mavlink.MAV_TYPE_QUADROTOR,
         get_srcSystem=lambda: 1,
         get_srcComponent=lambda: 1,
     )
     connection = SimpleNamespace(
         target_system=1,
         target_component=1,
-        wait_heartbeat=lambda *, timeout: heartbeat,
+        recv_match=lambda **_kwargs: heartbeat,
         close=lambda: setattr(connection, "closed", True),
         closed=False,
     )

@@ -47,18 +47,22 @@ class ServoProcessLock:
                 self._handle.fileno(),
                 self._fcntl.LOCK_EX | self._fcntl.LOCK_NB,
             )
-        except BlockingIOError as error:
+        except BaseException as error:
             self._handle.close()
-            raise RuntimeError(
-                f"payload servo GPIO {SERVO_GPIO_PIN} is already owned by another "
-                "ai-drone process"
-            ) from error
+            if isinstance(error, BlockingIOError):
+                raise RuntimeError(
+                    f"payload servo GPIO {SERVO_GPIO_PIN} is already owned by another "
+                    "ai-drone process"
+                ) from error
+            raise
 
     def close(self) -> None:
         if self._handle.closed:
             return
-        self._fcntl.flock(self._handle.fileno(), self._fcntl.LOCK_UN)
-        self._handle.close()
+        try:
+            self._fcntl.flock(self._handle.fileno(), self._fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
 
 
 def _target_value_from_input(
@@ -72,11 +76,8 @@ def _target_value_from_input(
         pulse_us = int(command.removesuffix("us").strip())
         if not min_us <= pulse_us <= max_us:
             raise ValueError(f"pulse width must be between {min_us} and {max_us}us")
-        if pulse_us == 1500:
-            return 0.0
-        if pulse_us > 1500:
-            return (pulse_us - 1500) / (max_us - 1500)
-        return (pulse_us - 1500) / (1500 - min_us)
+        # gpiozero interpolates across one interval, even for asymmetric limits.
+        return 2 * (pulse_us - min_us) / (max_us - min_us) - 1
 
     if command.endswith("deg"):
         degrees = float(command.removesuffix("deg").strip())
@@ -91,9 +92,7 @@ def _target_value_from_input(
 
 
 def _pulse_us(value: float, *, min_us: int, max_us: int) -> int:
-    if value >= 0:
-        return int(1500 + value * (max_us - 1500))
-    return int(1500 + value * (1500 - min_us))
+    return round(min_us + (value + 1) * (max_us - min_us) / 2)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -196,25 +195,32 @@ def main(arguments: list[str] | None = None) -> int:
             max_pulse_width=args.max_us / 1_000_000.0,
             initial_value=None,
         )
-    except Exception as error:
+    except BaseException as error:
         if process_lock is not None:
             process_lock.close()
+        if isinstance(error, KeyboardInterrupt):
+            return 130
+        if not isinstance(error, Exception):
+            raise
         print(
             f"ERROR: Failed to initialize Servo on GPIO {args.pin}: {error}",
             file=sys.stderr,
         )
         return 1
 
-    print(
-        f"Active pin: BCM GPIO {args.pin} (physical pin 32)\n"
-        f"Pulse range: {args.min_us}us to {args.max_us}us\n"
-        f"Mode: {args.mode.upper()}\n"
-        f"{WIRING_DIAGRAM}"
-    )
-
     try:
+        print(
+            f"Active pin: BCM GPIO {args.pin} (physical pin 32)\n"
+            f"Pulse range: {args.min_us}us to {args.max_us}us\n"
+            f"Mode: {args.mode.upper()}\n"
+            f"{WIRING_DIAGRAM}"
+        )
+
         if args.mode == "center":
-            print("Moving servo to center position. Press Ctrl-C to release.")
+            midpoint = _pulse_us(0.0, min_us=args.min_us, max_us=args.max_us)
+            print(
+                f"Moving to the configured midpoint ({midpoint}us). Press Ctrl-C to release."
+            )
             servo.value = 0.0
             while True:
                 time.sleep(1)
@@ -264,8 +270,10 @@ def main(arguments: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
-        servo.close()
-        process_lock.close()
+        try:
+            servo.close()
+        finally:
+            process_lock.close()
         print("Servo released.")
 
     return 0

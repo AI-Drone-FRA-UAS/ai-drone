@@ -13,6 +13,7 @@ from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.vision.apriltags import (
     CameraCalibration,
     NativeAprilTagDetector,
+    PoseEstimationError,
     TagDetection,
     TagPose,
     create_detector,
@@ -244,6 +245,145 @@ def test_tag_pose_rejects_non_finite_results() -> None:
             distance_m=1.0,
             reprojection_error_px=math.nan,
         )
+
+
+def _pose_detection() -> TagDetection:
+    return TagDetection(
+        tag_id=7,
+        corners=np.asarray(
+            [[300.0, 220.0], [340.0, 220.0], [340.0, 260.0], [300.0, 260.0]]
+        ),
+        center=(320.0, 240.0),
+    )
+
+
+def _estimate_test_pose(detection: TagDetection) -> TagPose:
+    return estimate_pose(
+        detection,
+        _calibration(),
+        tag_size_m=0.16,
+        image_width=1280,
+        image_height=960,
+    )
+
+
+def test_unsolved_pose_has_recoverable_geometric_error(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "cv2",
+        SimpleNamespace(
+            SOLVEPNP_IPPE_SQUARE=7,
+            solvePnPGeneric=lambda *_args, **_kwargs: (False, (), ()),
+        ),
+    )
+
+    with pytest.raises(PoseEstimationError, match="pose solve failed for tag 7"):
+        _estimate_test_pose(_pose_detection())
+
+
+@pytest.mark.parametrize(
+    ("rotation", "translation", "projection_value"),
+    [
+        ((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), 0.0),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0),
+        ((math.nan, 0.0, 0.0), (0.0, 0.0, 1.0), 0.0),
+        ((0.0, math.inf, 0.0), (0.0, 0.0, 1.0), 0.0),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, math.nan), 0.0),
+        ((0.0, 0.0, 0.0), (math.inf, 0.0, 1.0), 0.0),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), math.nan),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), math.inf),
+    ],
+)
+def test_invalid_pose_candidates_have_recoverable_geometric_error(
+    monkeypatch, rotation, translation, projection_value
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "cv2",
+        SimpleNamespace(
+            SOLVEPNP_IPPE_SQUARE=7,
+            solvePnPGeneric=lambda *_args, **_kwargs: (
+                True,
+                [rotation],
+                [translation],
+            ),
+            projectPoints=lambda *_args: (
+                np.full((4, 1, 2), projection_value),
+                None,
+            ),
+        ),
+    )
+
+    with pytest.raises(PoseEstimationError, match="no positive-depth pose for tag 7"):
+        _estimate_test_pose(_pose_detection())
+
+
+def test_valid_pose_survives_invalid_candidates(monkeypatch) -> None:
+    detection = _pose_detection()
+    projected_translations = []
+
+    def project_points(_objects, _rotation, translation, *_args):
+        xyz = tuple(translation.ravel())
+        projected_translations.append(xyz)
+        if xyz[0] == 1.0:
+            return np.full((4, 1, 2), math.nan), None
+        return detection.corners.reshape(4, 1, 2), None
+
+    expected_translation = (0.1, -0.05, 2.0)
+    monkeypatch.setitem(
+        sys.modules,
+        "cv2",
+        SimpleNamespace(
+            SOLVEPNP_IPPE_SQUARE=7,
+            solvePnPGeneric=lambda *_args, **_kwargs: (
+                True,
+                [(math.nan, 0.0, 0.0), *[(0.0, 0.0, 0.0)] * 3],
+                [
+                    (0.0, 0.0, 1.0),
+                    (0.0, 0.0, -1.0),
+                    (1.0, 0.0, 2.0),
+                    expected_translation,
+                ],
+            ),
+            projectPoints=project_points,
+        ),
+    )
+
+    pose = _estimate_test_pose(detection)
+
+    assert pose.tag_id == detection.tag_id
+    assert pose.translation_m == pytest.approx(expected_translation)
+    assert pose.distance_m == pytest.approx(np.linalg.norm(expected_translation))
+    assert pose.reprojection_error_px == pytest.approx(0.0)
+    assert projected_translations == [(1.0, 0.0, 2.0), expected_translation]
+
+
+def test_missing_opencv_is_not_a_recoverable_pose_error(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "cv2", None)
+
+    with pytest.raises(RuntimeError, match="OpenCV is required") as error:
+        _estimate_test_pose(_pose_detection())
+
+    assert not isinstance(error.value, PoseEstimationError)
+
+
+@pytest.mark.parametrize("invalid_calibration", [False, True])
+def test_pose_configuration_errors_remain_fatal(monkeypatch, invalid_calibration):
+    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
+    calibration = _calibration()
+    if invalid_calibration:
+        calibration = replace(calibration, distortion_coefficients=(math.nan,) * 5)
+
+    with pytest.raises(ValueError) as error:
+        estimate_pose(
+            _pose_detection(),
+            calibration,
+            tag_size_m=0.16,
+            image_width=1280,
+            image_height=960 if invalid_calibration else 720,
+        )
+
+    assert not isinstance(error.value, PoseEstimationError)
 
 
 def test_pose_estimate_recovers_synthetic_distance() -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_drone.config import sync as config_sync
 from ai_drone.link import connect, deploy, usb_ssh, wifi
 from ai_drone.link.targets import (
     DEFAULT_PI_AP_SSID,
@@ -132,7 +133,7 @@ def test_deploy_install_command_preserves_system_site_packages(tmp_path: Path) -
 
     command = deploy.install_command(plan)
 
-    assert command[:2] == ["ssh", "pilot@drone"]
+    assert command[:4] == ["ssh", "-F", os.devnull, "pilot@drone"]
     assert (
         "uv venv --clear --python /usr/bin/python3 --system-site-packages"
         in command[-1]
@@ -172,7 +173,7 @@ def test_deploy_run_uses_allowlisted_module_and_forwards_arguments(
 
     assert plan.extra_args == task_args
     assert command is not None
-    assert command[:2] == ["ssh", "-t"]
+    assert command[:4] == ["ssh", "-F", os.devnull, "-t"]
     assert f".venv/bin/python -m {module}" in command[-1]
     assert all(argument in command[-1] for argument in task_args)
 
@@ -238,6 +239,43 @@ def test_connection_target_allows_explicit_default_ssh_config_opt_in() -> None:
     target = resolve_connection_target({"SSH_CONFIG": ""})
 
     assert target.ssh_config is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, os.devnull),
+        ({"SSH_CONFIG": ""}, None),
+        ({"SSH_CONFIG": "/tmp/custom"}, "/tmp/custom"),
+    ],
+)
+def test_deployment_and_connection_share_ssh_config_selection(
+    tmp_path: Path, overrides: dict[str, str], expected: str | None
+) -> None:
+    config = tmp_path / ".ssh" / "config"
+    config.parent.mkdir()
+    config.write_text("Host *\n  InvalidHostConfiguration yes\n")
+    environment = {"HOME": str(tmp_path), "PI_HOST": "seb@drone", **overrides}
+
+    target = resolve_deploy_target(environment)
+
+    assert target.ssh_config == expected
+    assert target.ssh_config == resolve_connection_target(environment).ssh_config
+    prefix = ["ssh", "-F", expected] if expected else ["ssh"]
+    assert deploy.remote_command(target, "true") == [*prefix, "seb@drone", "true"]
+
+
+def test_config_sync_export_bypasses_host_ssh_config_by_default() -> None:
+    plan = deploy.build_plan(
+        [], environ={"PI_HOST": "seb@drone"}, system="Linux", rsync_path=""
+    )
+
+    command = config_sync.remote_export_command(
+        plan, device="/dev/serial0", baud=115200, timeout=30.0
+    )
+
+    assert command[:4] == ["ssh", "-F", os.devnull, "seb@drone"]
+    assert "ai_drone.cli.config_export" in command[-1]
 
 
 def test_ping_command_is_platform_specific() -> None:

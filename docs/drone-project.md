@@ -31,8 +31,8 @@ the [AprilTag mission architecture](APRILTAG_MISSION.md).
 | Propellers | Gemfan D90-5, 3.5-inch ducted five-blade |
 | GPS/compass | HGLRC M100 |
 | Receiver | Radiomaster XR4 Gemini Xrossband ELRS |
-| FPV camera | RunCam Phoenix 2 analog |
-| Video transmitter | SpeedyBee TX800 with 5.8 GHz RHCP antenna |
+| FPV camera | RunCam Phoenix 2 analog, removed according to the user on 2026-09-07 |
+| Video transmitter | Historical SpeedyBee TX800; its FC cable was reused for the forward sensor |
 
 Radio binding credentials are intentionally not stored in the repository.
 
@@ -43,7 +43,7 @@ Radio binding credentials are intentionally not stored in the repository.
 | Raspberry Pi Zero 2 WH | MAVLink companion computer |
 | Raspberry Pi IMX500 AI Camera | AprilTag detection and recording |
 | MicoAir MTF-01P | Downward range and optical flow |
-| MicoAir MT-15 | Candidate forward range sensor; one beam is not complete obstacle avoidance |
+| MicoAir MT-15 | Forward lidar, configured for ArduPilot MAVLink at 115200 baud; its FC receive wiring still requires verification |
 | MacroSilicon MS210x USB grabber | Optional analog FPV capture |
 | CP2102 USB-UART adapter | Sensor configuration |
 
@@ -51,6 +51,11 @@ The mission camera should be rigidly mounted downward, focused at the intended
 working range, strain-relieved, and calibrated at its operating resolution.
 Camera mounting and calibration are live-state facts and must be confirmed
 rather than inferred from this inventory.
+
+The HGLRC M100 contains both GPS and an external compass. The GPS uses FC
+UART6; the compass uses I2C. Indoor optical-flow operation leaves GPS disabled
+while retaining the compass as the EKF heading source. See the latest dated
+state record for sensor health and any remaining calibration problems.
 
 ## Payload mechanism
 

@@ -56,6 +56,8 @@ def _write_runtime_source(root: Path) -> None:
     _write_file(root, "uv.lock", "version = 1\n")
     _write_file(root, "ai_drone/__init__.py", "")
     _write_file(root, "ai_drone/runtime.py", "VALUE = 1\n")
+    _write_file(root, "scripts/ai-drone-network", "#!/bin/sh\n")
+    _write_file(root, "scripts/ai-drone-network.service", "[Service]\n")
     _write_file(root, "scripts/setup-pi-dual-network.sh", "#!/bin/sh\n")
     _write_file(root, "scripts/setup-pi-hotspot.sh", "#!/bin/sh\n")
 
@@ -262,6 +264,8 @@ def test_runtime_payload_is_allowlisted_and_omits_secrets(tmp_path: Path) -> Non
 
     assert paths >= deploy.REQUIRED_RUNTIME_PATHS
     assert "ai_drone/runtime.py" in paths
+    assert "scripts/ai-drone-network" in paths
+    assert "scripts/ai-drone-network.service" in paths
     assert "scripts/setup-pi-dual-network.sh" in paths
     assert "scripts/setup-pi-hotspot.sh" in paths
     assert not any(".env" in part for path in paths for part in Path(path).parts)
@@ -294,6 +298,8 @@ def test_rsync_uses_the_same_allowlist_and_protects_remote_state(
     assert "show /ai_drone/***" in rules
     assert "show /pyproject.toml" in rules
     assert "show /uv.lock" in rules
+    assert "show /scripts/ai-drone-network" in rules
+    assert "show /scripts/ai-drone-network.service" in rules
     assert "show /scripts/setup-pi-dual-network.sh" in rules
     assert rules[-1] == "hide /***"
     assert command[-1] == "seb@drone:/home/seb/ai-drone/"
@@ -336,6 +342,8 @@ def test_rsync_filters_delete_nonruntime_files_but_preserve_remote_state(
     assert (destination / ".env").read_text() == "REMOTE_SECRET=1\n"
     assert (destination / "ai_drone/.env.local").read_text() == "REMOTE_SECRET=2\n"
     assert (destination / "ai_drone/runtime.py").is_file()
+    assert (destination / "scripts/ai-drone-network").is_file()
+    assert (destination / "scripts/ai-drone-network.service").is_file()
     assert not (destination / "docs/not-deployed.md").exists()
     assert not (destination / "scripts/not-deployed.sh").exists()
 
@@ -362,6 +370,8 @@ def test_tar_archive_contains_only_runtime_payload_and_bound_metadata(
         archive.unlink(missing_ok=True)
 
     assert names >= deploy.REQUIRED_RUNTIME_PATHS
+    assert "scripts/ai-drone-network" in names
+    assert "scripts/ai-drone-network.service" in names
     assert "ai_drone/.env.production" not in names
     assert "docs/private-notes.md" not in names
     assert "scripts/not-deployed.sh" not in names

@@ -10,6 +10,7 @@ from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_armed_vehicle_heartbeat,
     is_vehicle_message,
+    require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
 )
 from ai_drone.platform import is_raspberry_pi
@@ -23,11 +24,15 @@ class _Message:
         system: int = 1,
         component: int = 1,
         armed: bool = False,
+        autopilot: int = mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+        vehicle_type: int = mavlink.MAV_TYPE_QUADROTOR,
     ) -> None:
         self._message_type = message_type
         self._system = system
         self._component = component
         self.base_mode = mavlink.MAV_MODE_FLAG_SAFETY_ARMED if armed else 0
+        self.autopilot = autopilot
+        self.type = vehicle_type
 
     def get_type(self) -> str:
         return self._message_type
@@ -112,6 +117,47 @@ def test_fresh_disarmed_check_drains_stale_heartbeat_and_filters_source() -> Non
     assert result is fresh
     assert connection.queued == []
     assert connection.incoming == []
+
+
+def test_ardupilot_bootstrap_ignores_other_sources_and_nonvehicle_heartbeats() -> None:
+    expected = _Message(system=42, component=1)
+    connection = _Connection(
+        incoming=[
+            _Message(system=1),
+            _Message(system=42, component=200),
+            _Message(system=42, vehicle_type=mavlink.MAV_TYPE_GCS),
+            _Message(system=42, autopilot=mavlink.MAV_AUTOPILOT_PX4),
+            _Message(system=42, vehicle_type=mavlink.MAV_TYPE_FIXED_WING),
+            _Message(system=42, message_type="STATUSTEXT"),
+            expected,
+        ]
+    )
+
+    assert (
+        require_ardupilot_heartbeat(
+            connection, system_id=42, component_id=1, timeout=1.0
+        )
+        is expected
+    )
+    assert connection.incoming == []
+
+
+def test_ardupilot_bootstrap_does_not_fall_back_to_a_different_vehicle() -> None:
+    with pytest.raises(TimeoutError, match="42/1"):
+        require_ardupilot_heartbeat(
+            _Connection(incoming=[_Message(system=1)]),
+            system_id=42,
+            component_id=1,
+            timeout=1.0,
+        )
+
+
+@pytest.mark.parametrize("value", [0, -1, 256, True])
+@pytest.mark.parametrize("field", ["system_id", "component_id"])
+def test_ardupilot_bootstrap_requires_explicit_valid_source_ids(field, value) -> None:
+    arguments = {"system_id": 1, "component_id": 1, field: value}
+    with pytest.raises(ValueError, match=field):
+        require_ardupilot_heartbeat(_Connection(), timeout=1.0, **arguments)
 
 
 @pytest.mark.parametrize("queued", [True, False])

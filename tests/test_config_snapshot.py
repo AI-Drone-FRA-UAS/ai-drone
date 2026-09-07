@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -176,6 +177,66 @@ def test_write_snapshot_verifies_hash_and_uses_date_paths(tmp_path) -> None:
     assert contents.endswith(parameter_text)
     assert metadata_path == tmp_path / "state/2026-08-18/drone-config.json"
     assert '"parameters"' not in metadata_path.read_text()
+
+
+def test_publish_snapshot_excludes_and_preserves_unrelated_staged_changes(
+    tmp_path, monkeypatch
+) -> None:
+    # Keep Git entirely local and independent of host identity, signing, or hooks.
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Snapshot Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "snapshot@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Snapshot Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "snapshot@example.invalid")
+    repository = tmp_path / "repository"
+    origin = tmp_path / "origin.git"
+    repository.mkdir()
+
+    def git(*arguments, cwd=repository):
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    git("init", "-b", "main")
+    git("init", "--bare", str(origin))
+    unrelated = repository / "unrelated.txt"
+    unrelated.write_text("original content\n")
+    git("add", "unrelated.txt")
+    git("commit", "-m", "Initial local fixture")
+    git("remote", "add", "origin", str(origin))
+    git("push", "-u", "origin", "main")
+    unrelated.write_text("staged work that must remain private\n")
+    git("add", "unrelated.txt")
+    snapshot_paths = (
+        repository / "params/flywoo-f745-live-2026-09-07.param",
+        repository / "state/2026-09-07/drone-config.json",
+    )
+    for path, contents in zip(snapshot_paths, ("ALPHA,2\n", "{}\n"), strict=True):
+        path.parent.mkdir(parents=True)
+        path.write_text(contents)
+
+    config_sync.publish_snapshot(snapshot_paths, repository)
+
+    expected_paths = {str(path.relative_to(repository)) for path in snapshot_paths}
+    assert (
+        set(
+            git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines()
+        )
+        == expected_paths
+    )
+    assert git("show", "HEAD:unrelated.txt") == "original content\n"
+    assert git("diff", "--cached", "--name-only").splitlines() == ["unrelated.txt"]
+    assert git("show", ":unrelated.txt") == "staged work that must remain private\n"
+    assert git("rev-parse", "HEAD") == git("rev-parse", "main", cwd=origin)
+    assert git("show", "main:unrelated.txt", cwd=origin) == "original content\n"
+    for path in snapshot_paths:
+        relative = str(path.relative_to(repository))
+        assert git("show", f"main:{relative}", cwd=origin) == path.read_text()
 
 
 def test_config_export_certifies_a_fresh_final_disarmed_heartbeat(

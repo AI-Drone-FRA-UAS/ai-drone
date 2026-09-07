@@ -85,6 +85,10 @@ done
 command -v nmcli >/dev/null 2>&1 || die "NetworkManager/nmcli is required"
 [[ "$AP_INTERFACE" != "$UPLINK_INTERFACE" ]] \
     || die "the access point and uplink must use different interfaces"
+[[ "$SOURCE_PROFILE" != "$UPLINK_PROFILE" \
+    && "$SOURCE_PROFILE" != "$HOTSPOT_PROFILE" \
+    && "$UPLINK_PROFILE" != "$HOTSPOT_PROFILE" ]] \
+    || die "source, uplink, and hotspot must use different profile names"
 nmcli -g connection.id connection show "$HOTSPOT_PROFILE" >/dev/null 2>&1 \
     || die "hotspot profile '$HOTSPOT_PROFILE' does not exist"
 nmcli -g connection.id connection show "$SOURCE_PROFILE" >/dev/null 2>&1 \
@@ -104,6 +108,22 @@ if [[ $APPLY -eq 0 ]]; then
 fi
 
 [[ $EUID -eq 0 ]] || die "--apply must be run as root"
+
+# The single-radio boot selector would otherwise disconnect this hotspot.
+# Stop it before changing profiles; NetworkManager autoconnect owns both links.
+command -v systemctl >/dev/null 2>&1 || die "systemctl is required for --apply"
+SELECTOR_STATE="$(systemctl show ai-drone-network.service --property=LoadState --value)" \
+    || die "cannot inspect the single-radio boot selector"
+case "$SELECTOR_STATE" in
+    loaded|masked)
+        systemctl disable --now ai-drone-network.service
+        ;;
+    not-found)
+        ;;
+    *)
+        die "unexpected single-radio selector state: $SELECTOR_STATE"
+        ;;
+esac
 
 if nmcli -g connection.id connection show "$UPLINK_PROFILE" >/dev/null 2>&1; then
     echo "Using existing uplink profile '$UPLINK_PROFILE'."
@@ -136,3 +156,4 @@ nmcli -f DEVICE,TYPE,STATE,CONNECTION device status
 echo
 ip -4 route
 echo "Dual-interface networking is active. Test with: ping -c3 1.1.1.1"
+echo "NetworkManager autoconnect manages both links; the single-radio boot selector is disabled."

@@ -1,16 +1,18 @@
 # MAVLink control and staged flight testing
 
-`drone-control hover` owns a guarded takeoff, timed hold, landing, and cleanup
-sequence. Passive status belongs to `drone-inspect`.
+`drone-control hover` owns a guarded GPS-free takeoff, flow-backed Loiter hold,
+landing, and cleanup sequence. Passive status belongs to `drone-inspect`.
 
-No live arm, takeoff, or altitude hold has been validated on
-this aircraft. Check the newest `state/` capture and `params/` dump before use.
+The current guarded GPS-free hover path has passed pinned ArduCopter SITL tests;
+its armed execution has not been validated on this aircraft. Check the newest
+`state/` capture and `params/` dump before use. Firmware and acceptance details
+are in the [no-GPS Loiter review](ARDUCOPTER_4_7_NOGPS_LOITER.md).
 
 ## Modes
 
 | Mode | Behavior | Hardware effect |
 | --- | --- | --- |
-| `hover` (`takeoff` alias) | Guided takeoff, timed hold, then land | Arms and flies |
+| `hover` (`takeoff` alias) | `GUIDED_NOGPS` climb, flow-backed `LOITER`, then `LAND` | Arms and flies |
 
 Open a Pi shell and inspect the authoritative command help:
 
@@ -43,6 +45,14 @@ requires exactly `ARMING_SKIPCHK=0` before an arm path, verifies state
 transitions, caps commands, and uses bounded timeouts. Cleanup lands only a
 flight started by that controller instance.
 
+This control path requires fresh `RC_CHANNELS.chancount=0` before arming and
+throughout its takeoff and hold. An active RC receiver causes preflight refusal;
+receiver channels appearing or their report becoming stale during flight
+requests LAND. The captured aircraft has no active RC receiver, and the code
+does not provide an RC override or kill path. Installing a receiver requires
+reviewing and testing mode authority and throttle behavior before changing this
+guard.
+
 ## Required validation sequence
 
 1. Run the repository checks and every control mode in ArduPilot Copter SITL,
@@ -54,10 +64,15 @@ flight started by that controller instance.
    behavior.
 4. With all propellers removed and the frame secured, verify motor numbering
    and direction using the [guarded motor procedure](BENCH_MOTOR_TEST.md).
-5. With a safety pilot, tested RC override/kill path, protective enclosure,
-   fresh battery, and clear area, perform the smallest restrained hover test.
-6. Review range, flow, EKF, and battery recordings before expanding the
-   envelope only after reviewing the results.
+5. Establish and separately validate an emergency-stop or emergency-control
+   arrangement for the actual aircraft, including loss of the companion and its
+   link. None is established by the present disarmed checks. The configured GCS
+   heartbeat-loss LAND response has passed SITL, but that does not demonstrate
+   an independent live emergency control. Resolve this limitation before flight.
+6. With a safety observer, protective enclosure, suitable battery, clear area,
+   and the validated emergency arrangement, perform the smallest authorized
+   hover test: the default target is 0.5 m with a 0.8 m software ceiling.
+7. Review range, flow, EKF, and battery recordings before expanding the envelope.
 
 AprilTag approach, autonomous search, and payload release are mission work,
 not existing `drone-control` modes. Their additional prerequisites are in the

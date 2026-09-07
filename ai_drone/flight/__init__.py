@@ -1,1 +1,1 @@
-"""MAVLink flight control and person-follow state."""
+"""Guarded MAVLink control for GPS-free takeoff, Loiter, and landing."""

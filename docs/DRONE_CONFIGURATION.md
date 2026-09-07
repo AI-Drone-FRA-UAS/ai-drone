@@ -12,6 +12,7 @@ inspect the newest file under `params/` and its matching capture under
 | Flywoo GOKU GN745 AIO | Developer USB | MAVLink, usually `/dev/serial/by-id/...` |
 | Raspberry Pi companion | FC UART4 ↔ Pi `/dev/serial0` | MAVLink2, 115200 baud |
 | MicoAir MTF-01P | FC UART5 | MAVLink1, 115200 baud |
+| Forward MicoAir MT-15 | FC UART3 assigned; physical receive path unverified | Sensor configured for MAVLink/APM, 115200 baud, forward orientation |
 | IMX500 camera | Pi CSI | Picamera2/libcamera |
 | Payload servo | Pi BCM12 | Direct GPIO; not a flight-controller servo output |
 
@@ -22,6 +23,13 @@ Pi pin 8  / GPIO14 / TXD -> FC R4
 Pi pin 10 / GPIO15 / RXD <- FC T4
 Pi pin 6  / GND           -> FC GND
 ```
+
+The reviewed FlywooF745 firmware has five MAVLink channels. For this topology,
+disable unused UART1 so USB, UART2, UART3, UART4 and UART5 receive those five
+channels. Enabling an additional earlier UART can silently exclude UART5 from
+MAVLink processing even when `SERIAL5_PROTOCOL=1`. `MAVn_OPTIONS` follows the
+allocated MAVLink instance order, so review its mapping whenever serial
+protocol assignments change. Dated repair records contain the applied values.
 
 Confirm power capacity and the exact board revision before relying on any
 wiring description. Dated state captures record what was observed, not a
@@ -57,10 +65,16 @@ The MTF-01P provides downward range and optical flow. Historical captures used
 alone does not validate mounting, calibration, floor texture, lighting, EKF
 quality, or altitude hold.
 
-A planned forward MT-15 should remain distinct from the downward sensor. Verify
+The forward MT-15 must remain distinct from the downward sensor. Verify
 its physical UART, regulated power, outgoing MAVLink sensor ID/orientation, and
 firmware support before writing `SERIALx`, `RNGFND2`, proximity, or avoidance
 parameters. One forward beam is not full obstacle avoidance.
+
+The old analog VTX connector has TX3 and video connections but no RX3. MT-15 TX
+must reach RX3 on the separate DJI connector; MT-15 RX connects to TX3. Verify
+common ground and regulated 5 V rather than relying on old wire colours. The
+MT-15 firmware tested on 2026-09-07 saves sensor ID1 but emits MAVLink ID0;
+the pinned ArduPilot rangefinder backend separates readings by orientation.
 
 See [sensor recording and wiring](SENSOR_RECORDING.md).
 The reviewed ArduCopter 4.7 EKF correction, comparison evidence, and SITL

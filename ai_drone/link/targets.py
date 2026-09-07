@@ -8,7 +8,6 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 DEFAULT_PI_HOSTNAME = "seb-is-pm"
 DEFAULT_PI_USERNAME = "seb"
@@ -49,19 +48,6 @@ class ConnectionTarget:
 
 def _env(environ: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if environ is None else environ
-
-
-def _default_ssh_config(environ: Mapping[str, str]) -> str | None:
-    if "SSH_CONFIG" in environ:
-        return environ["SSH_CONFIG"] or None
-
-    home = environ.get("HOME")
-    path = (
-        Path(home).expanduser() / ".ssh" / "config"
-        if home
-        else Path.home() / ".ssh" / "config"
-    )
-    return str(path) if path.is_file() else None
 
 
 def _direct_ssh_config(environ: Mapping[str, str]) -> str | None:
@@ -176,7 +162,7 @@ def resolve_deploy_target(
         user=user,
         address=address,
         project_dir=project_dir,
-        ssh_config=_default_ssh_config(values),
+        ssh_config=connection_target.ssh_config,
     )
 
 

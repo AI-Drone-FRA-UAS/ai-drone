@@ -72,6 +72,53 @@ def is_armed_vehicle_heartbeat(
     return heartbeat_is_armed(message)
 
 
+def require_ardupilot_heartbeat(
+    connection: Any,
+    *,
+    system_id: int,
+    component_id: int,
+    timeout: float,
+    vehicle_type: int = mavlink.MAV_TYPE_QUADROTOR,
+) -> HeartbeatMessage:
+    """Wait for the intended ArduPilot vehicle, ignoring other link traffic.
+
+    The project's controller and motor utility operate a quadrotor. A GCS,
+    peripheral, other autopilot, or another vehicle cannot select their target
+    simply by winning the first-heartbeat race.
+    """
+
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("heartbeat timeout must be finite and greater than zero")
+    for name, value in (("system_id", system_id), ("component_id", component_id)):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 1 <= value <= 255
+        ):
+            raise ValueError(f"{name} must be an explicit ID between 1 and 255")
+    deadline = time.monotonic() + timeout
+    while (remaining := deadline - time.monotonic()) > 0:
+        heartbeat = connection.recv_match(
+            type="HEARTBEAT", blocking=True, timeout=remaining
+        )
+        if heartbeat is None:
+            break
+        if not is_vehicle_message(
+            heartbeat, system_id=system_id, component_id=component_id
+        ):
+            continue
+        if (
+            heartbeat.get_type() == "HEARTBEAT"
+            and getattr(heartbeat, "autopilot", None)
+            == mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA
+            and getattr(heartbeat, "type", None) == vehicle_type
+        ):
+            return heartbeat
+    raise TimeoutError(
+        f"No ArduPilot vehicle heartbeat received from {system_id}/{component_id}"
+    )
+
+
 def require_fresh_disarmed_heartbeat(
     connection: Any,
     *,

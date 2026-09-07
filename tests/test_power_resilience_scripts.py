@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -68,12 +69,73 @@ def test_resilience_script_keeps_the_root_filesystem_writable() -> None:
     assert "remount-ro" in script  # error behaviour only, not a mount mode
 
 
-def test_resilience_script_refuses_vehicle_control_autostart() -> None:
-    # An unexpected reboot must never bring the vehicle-facing commands up.
+def _run_autostart_audit(
+    enabled_units: str, *, systemctl_status: int = 0
+) -> subprocess.CompletedProcess[str]:
+    # Execute the script's actual audit with systemctl replaced, excluding all
+    # Pi-only setup and every system mutation that precedes this section.
     script = RESILIENCE_SCRIPT.read_text()
+    start = script.index("# --- Safety verification ")
+    end = script.index('\necho\necho "Done. Verify with:"', start)
+    audit = script[start:end]
+    mock_commands = r"""
+set -euo pipefail
+die() { echo "Error: $*" >&2; exit 1; }
+note() { echo "  $*"; }
+systemctl() {
+    [[ "$*" == "list-unit-files --state=enabled --no-legend" ]] || exit 99
+    cat
+    return "$MOCK_SYSTEMCTL_STATUS"
+}
+"""
+    return subprocess.run(
+        ["bash", "-c", mock_commands + audit],
+        input=enabled_units,
+        env={**os.environ, "MOCK_SYSTEMCTL_STATUS": str(systemctl_status)},
+        capture_output=True,
+        check=False,
+        text=True,
+    )
 
-    assert "Refusing to finish" in script
-    assert "drone-(control|motor|servo|inspect|picam)" in script
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "drone-control.service",
+        "drone-motor-test.service",
+        "drone-servo.service",
+        "drone-tag-servo-record.service",
+        "drone-inspect.service",
+        "drone-picam.service",
+        "mavlink-router.service",
+    ],
+)
+def test_resilience_script_refuses_known_vehicle_autostart(unit: str) -> None:
+    completed = _run_autostart_audit(f"ssh.service enabled enabled\n{unit} enabled -\n")
+
+    assert completed.returncode == 1
+    assert "Refusing to finish" in completed.stderr
+    assert unit in completed.stderr
+    assert "ssh.service" not in completed.stderr
+
+
+def test_resilience_autostart_audit_allows_network_and_recovery_services() -> None:
+    completed = _run_autostart_audit(
+        "ssh.service enabled enabled\n"
+        "ai-drone-network.service enabled -\n"
+        "ai-drone-first-boot-recover.service enabled -\n"
+    )
+
+    assert completed.returncode == 0
+    assert "No known vehicle-facing system unit name" in completed.stdout
+
+
+def test_resilience_autostart_audit_rejects_failed_systemd_enumeration() -> None:
+    completed = _run_autostart_audit("", systemctl_status=1)
+
+    assert completed.returncode == 1
+    assert "autostart audit is incomplete" in completed.stderr
+    assert "No known vehicle-facing" not in completed.stdout
 
 
 def test_resilience_script_can_revert_every_change() -> None:

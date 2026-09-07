@@ -30,6 +30,38 @@ def _message(message_type: str, **fields):
     )
 
 
+def _battery_message(voltage: float, **overrides):
+    fields = dict.fromkeys(
+        (
+            "onboard_control_sensors_present",
+            "onboard_control_sensors_enabled",
+            "onboard_control_sensors_health",
+        ),
+        mavlink.MAV_SYS_STATUS_SENSOR_BATTERY,
+    )
+    fields.update(overrides)
+    return _message("SYS_STATUS", voltage_battery=voltage, **fields)
+
+
+def _stub_arm_preconditions(monkeypatch, controller) -> None:
+    for method in (
+        "update_telemetry",
+        "verify_firmware",
+        "verify_arming_checks",
+        "verify_nogps_loiter_parameters",
+        "verify_onboard_logging",
+        "wait_for_optical_flow",
+        "wait_for_attitude",
+        "wait_for_no_rc_input",
+        "verify_battery_before_arming",
+        "set_mode",
+        "_fresh_disarmed",
+    ):
+        monkeypatch.setattr(controller, method, lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "wait_for_altitude", lambda **_kwargs: 0.05)
+    monkeypatch.setattr(controller, "altitude_is_fresh", lambda: True)
+
+
 def test_passive_context_never_controls_an_already_armed_vehicle() -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
@@ -42,6 +74,170 @@ def test_passive_context_never_controls_an_already_armed_vehicle() -> None:
     connection.mav.set_mode_send.assert_not_called()
     connection.arducopter_disarm.assert_not_called()
     connection.close.assert_called_once()
+
+
+@pytest.mark.parametrize(("system", "component"), [(1, 1), (42, 7)])
+def test_connect_binds_to_requested_ardupilot_identity(
+    monkeypatch, system, component
+) -> None:
+    controller = DroneController(
+        device="udp:127.0.0.1:14550", target_system=system, target_component=component
+    )
+    connection = MagicMock()
+    connection.flightmode = "STABILIZE"
+    gcs = _message(
+        "HEARTBEAT",
+        base_mode=0,
+        autopilot=mavlink.MAV_AUTOPILOT_INVALID,
+        type=mavlink.MAV_TYPE_GCS,
+    )
+    gcs.get_srcSystem = lambda: 255
+    expected = _message(
+        "HEARTBEAT",
+        base_mode=0,
+        autopilot=mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+        type=mavlink.MAV_TYPE_QUADROTOR,
+    )
+    expected.get_srcSystem = lambda: system
+    expected.get_srcComponent = lambda: component
+    connection.recv_match.side_effect = [gcs, expected]
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.mavutil.mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+
+    controller.connect()
+
+    assert (controller.target_system, controller.target_component) == (
+        system,
+        component,
+    )
+    assert (connection.target_system, connection.target_component) == (
+        system,
+        component,
+    )
+    assert controller.heartbeat_is_fresh()
+    assert not controller.is_armed
+    connection.arducopter_arm.assert_not_called()
+    connection.mav.set_mode_send.assert_not_called()
+    controller.close()
+
+
+def test_connect_closes_without_commands_when_intended_vehicle_is_absent(
+    monkeypatch,
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550", target_system=42)
+    connection = MagicMock()
+    connection.recv_match.return_value = None
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.mavutil.mavlink_connection",
+        lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(TimeoutError, match="42/1"):
+        controller.connect()
+
+    assert controller.connection is None
+    connection.close.assert_called_once_with()
+    connection.mav.heartbeat_send.assert_not_called()
+    connection.mav.command_long_send.assert_not_called()
+    connection.arducopter_arm.assert_not_called()
+
+
+def test_disarmed_heartbeat_during_pending_arm_preserves_cleanup(monkeypatch) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    controller.connection = connection
+    _stub_arm_preconditions(monkeypatch, controller)
+    connection.recv_match.side_effect = [
+        _message("HEARTBEAT", base_mode=0),
+        OSError("link failed before arm confirmation"),
+        None,  # no queued heartbeats when cleanup starts
+        _message("HEARTBEAT", base_mode=0),
+    ]
+
+    with pytest.raises(OSError, match="before arm confirmation"):
+        controller.arm()
+
+    assert controller._arm_command_sent
+    controller.__exit__(OSError, OSError("link failed"), None)
+
+    connection.arducopter_arm.assert_called_once_with()
+    connection.arducopter_disarm.assert_called_once_with()
+    connection.mav.set_mode_send.assert_not_called()
+    connection.close.assert_called_once_with()
+    assert not controller._arm_command_sent
+
+
+def test_confirmed_arm_transfers_pending_ownership_until_disarmed(monkeypatch) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    controller.connection = connection
+    _stub_arm_preconditions(monkeypatch, controller)
+    connection.recv_match.side_effect = [
+        _message("HEARTBEAT", base_mode=0),
+        _message("HEARTBEAT", base_mode=mavlink.MAV_MODE_FLAG_SAFETY_ARMED),
+    ]
+
+    controller.arm()
+
+    assert controller._armed_by_controller
+    assert not controller._arm_command_sent
+    controller._process_message(_message("HEARTBEAT", base_mode=0), time.monotonic())
+    controller.__exit__(None, None, None)
+
+    connection.arducopter_disarm.assert_not_called()
+    connection.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("queued_disarmed", [False, True])
+def test_disarm_requires_new_heartbeat_not_cached_or_queued_state(
+    monkeypatch, queued_disarmed
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    controller.connection = connection
+    controller._arm_command_sent = True
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    queue = [_message("HEARTBEAT", base_mode=0)] if queued_disarmed else []
+
+    def receive(*, type, blocking, timeout=None):
+        if not blocking and queue:
+            return queue.pop()
+        if blocking:
+            clock[0] += timeout
+        return None
+
+    connection.recv_match.side_effect = receive
+
+    with pytest.raises(TimeoutError, match="did not confirm disarming"):
+        controller.disarm(timeout=0.5)
+
+    assert controller._arm_command_sent
+    connection.arducopter_disarm.assert_called_once_with()
+
+
+def test_disarm_waits_for_matching_disarmed_heartbeat() -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    controller.connection = connection
+    controller._arm_command_sent = True
+    foreign = _message("HEARTBEAT", base_mode=0)
+    foreign.get_srcSystem = lambda: 2
+    connection.recv_match.side_effect = [
+        _message("HEARTBEAT", base_mode=0),  # queued before confirmation
+        None,
+        foreign,
+        _message("HEARTBEAT", base_mode=mavlink.MAV_MODE_FLAG_SAFETY_ARMED),
+        _message("HEARTBEAT", base_mode=0),
+    ]
+
+    controller.disarm()
+
+    assert connection.recv_match.call_count == 5
+    assert not controller.is_armed
+    assert not controller._arm_command_sent
 
 
 def test_downward_live_packet_updates_altitude_and_forward_sensor_is_ignored() -> None:
@@ -376,6 +572,90 @@ def test_battery_guard_requires_fresh_voltage_before_arming(monkeypatch) -> None
 
     controller.connection.mav.set_mode_send.assert_not_called()
     controller.connection.arducopter_arm.assert_not_called()
+
+
+@pytest.mark.parametrize("voltage", [0, -1, 65_535, 65_536, math.nan, math.inf])
+def test_invalid_battery_report_immediately_invalidates_previous_reading(
+    monkeypatch, voltage
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: 100.0)
+    controller._process_message(_battery_message(16_000), 99.8)
+    assert controller.battery_voltage == 16.0
+    assert controller.battery_is_fresh()
+
+    controller._process_message(_battery_message(voltage), 99.9)
+
+    assert controller.battery_voltage is None
+    assert not controller.battery_is_fresh()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "onboard_control_sensors_present",
+        "onboard_control_sensors_enabled",
+        "onboard_control_sensors_health",
+    ],
+)
+def test_battery_status_must_confirm_present_enabled_and_healthy(
+    monkeypatch, field
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: 100.0)
+    controller._process_message(_battery_message(16_000), 99.7)
+
+    controller._process_message(_battery_message(16_000, **{field: 0}), 99.8)
+
+    assert controller.battery_voltage is None
+    assert not controller.battery_is_fresh()
+    controller._process_message(_battery_message(15_900), 99.9)
+    assert controller.battery_voltage == 15.9
+    assert controller.battery_is_fresh()
+
+
+def test_unknown_battery_stream_cannot_satisfy_prearm_guard(monkeypatch) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550", min_battery_voltage=14.4)
+    connection = MagicMock()
+    controller.connection = connection
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    monkeypatch.setattr(
+        controller,
+        "update_telemetry",
+        lambda: controller._process_message(_battery_message(65_535), clock[0]),
+    )
+
+    with pytest.raises(FlightSafetyError, match="no fresh battery voltage"):
+        controller.verify_battery_before_arming(timeout=0.1)
+
+    connection.arducopter_arm.assert_not_called()
+
+
+def test_unknown_battery_during_flight_commands_land() -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550", min_battery_voltage=14.4)
+    connection = MagicMock()
+    connection.mode_mapping.return_value = {"LAND": 9}
+    controller.connection = connection
+    controller._flight_started_by_controller = True
+    controller.is_armed = True
+    controller.rc_channel_count = 0
+    controller.last_rc_channels_time = time.monotonic()
+    controller._process_message(_battery_message(16_000), time.monotonic())
+    connection.recv_match.side_effect = [_battery_message(65_535), None]
+
+    with pytest.raises(FlightSafetyError, match="battery telemetry became stale"):
+        controller.update_telemetry()
+
+    assert controller._landing_commanded
+    connection.mav.set_mode_send.assert_called_once_with(
+        1, mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 9
+    )
+    connection.arducopter_disarm.assert_not_called()
 
 
 def test_low_battery_during_controller_flight_commands_land() -> None:
@@ -731,6 +1011,28 @@ def test_loiter_monitor_lands_if_mode_changes() -> None:
         control._monitor(drone, duration=0.1, min_battery_v=14.4)
 
     drone.emergency_stop.assert_called_once_with()
+
+
+@pytest.mark.parametrize("mode", ["ALT_HOLD", None])
+def test_public_loiter_hold_lands_if_mode_changes(monkeypatch, mode) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    connection.mode_mapping.return_value = {"LAND": 9}
+    controller.connection = connection
+    controller.flight_mode = "LOITER"
+    monkeypatch.setattr(
+        controller, "update_telemetry", lambda: setattr(controller, "flight_mode", mode)
+    )
+    monkeypatch.setattr(controller, "altitude_is_fresh", lambda: True)
+    monkeypatch.setattr(controller, "heartbeat_is_fresh", lambda: True)
+
+    with pytest.raises(FlightSafetyError, match="left LOITER mode"):
+        controller.hold_loiter(duration=0.1)
+
+    connection.mav.set_mode_send.assert_called_once_with(
+        1, mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 9
+    )
+    connection.arducopter_disarm.assert_not_called()
 
 
 def test_hover_cli_runs_guided_nogps_takeoff_loiter_hold_and_land(

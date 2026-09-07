@@ -3,9 +3,11 @@ from __future__ import annotations
 import io
 import json
 import queue
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC
 from types import SimpleNamespace
 
@@ -45,7 +47,12 @@ from ai_drone.recording import (
     video_timestamp_summary,
     write_json_line,
 )
-from ai_drone.vision.apriltags import TagDetection
+from ai_drone.vision.apriltags import (
+    CameraCalibration,
+    PoseEstimationError,
+    TagDetection,
+    TagPose,
+)
 
 
 def test_create_recording_paths_creates_expected_dataset(tmp_path) -> None:
@@ -197,6 +204,8 @@ def test_manual_flight_recording_requires_exact_acknowledgement() -> None:
     [
         ["--duration", "nan"],
         ["--timeout", "inf"],
+        ["--frame-timeout", "nan"],
+        ["--frame-timeout", "0"],
         ["--warmup", "nan"],
         ["--decimate", "inf"],
     ],
@@ -287,6 +296,178 @@ def test_detection_worker_failure_stops_capture(tmp_path) -> None:
     assert state.worker_error == "AprilTag worker: synthetic detector failure"
 
 
+def _recording_calibration() -> CameraCalibration:
+    return CameraCalibration(
+        image_width=4,
+        image_height=4,
+        camera_matrix=((2.0, 0.0, 2.0), (0.0, 2.0, 2.0), (0.0, 0.0, 1.0)),
+        distortion_coefficients=(0.0, 0.0, 0.0, 0.0),
+    )
+
+
+def _tag_detection(tag_id: int) -> TagDetection:
+    return TagDetection(
+        tag_id=tag_id,
+        corners=np.array([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]),
+        center=(2.0, 2.0),
+        hamming=0,
+        decision_margin=80.0,
+    )
+
+
+def test_detection_worker_records_pose_rejection_then_recovers(
+    tmp_path, monkeypatch
+) -> None:
+    rejected = _tag_detection(7)
+    other = _tag_detection(8)
+    detected_frames = iter([[rejected, other], [rejected]])
+    observed = []
+    calls = 0
+
+    def pose(detection, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise PoseEstimationError("no positive-depth pose for tag 7")
+        return TagPose(
+            tag_id=detection.tag_id,
+            rotation_vector=(0.0, 0.0, 0.0),
+            translation_m=(0.0, 0.0, 1.0),
+            distance_m=1.0,
+            reprojection_error_px=0.1,
+        )
+
+    class Detector:
+        backend_name = "pose-test-detector"
+
+        def detect(self, grayscale):
+            del grayscale
+            return next(detected_frames)
+
+    class Observer:
+        def observe(self, frame, detections, tag_records):
+            observed.append((frame.frame_index, [item.tag_id for item in detections]))
+            assert len(tag_records) == (2 if frame.frame_index == 0 else 1)
+
+    monkeypatch.setattr(inspect_cli, "estimate_pose", pose)
+    frames: queue.Queue[AnalysisFrame | None] = queue.Queue()
+    for item in (_analysis_frame(0), _analysis_frame(1), None):
+        frames.put(item)
+    stop = threading.Event()
+    state = CaptureState()
+    output = tmp_path / "camera.jsonl"
+    worker = DetectionWorker(
+        frames=frames,
+        output=output,
+        detector=Detector(),
+        calibration=_recording_calibration(),
+        tag_size=0.16,
+        resolution=(4, 4),
+        max_reprojection_error=2.0,
+        target_id=None,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0.0),
+        observer=Observer(),
+    )
+
+    worker.run()
+
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+    assert not stop.is_set()
+    assert state.worker_error is None
+    assert state.processed_frames == 2
+    assert state.tag_detections == 3
+    assert state.tag_ids == {7: 2, 8: 1}
+    assert frames.unfinished_tasks == 0
+    assert observed == [(0, [8]), (1, [7])]
+    failed = records[0]["tags"][0]
+    assert failed["id"] == 7
+    assert failed["pose_valid"] is False
+    assert failed["pose_error"] == "no positive-depth pose for tag 7"
+    assert "camera_xyz_m" not in failed
+    assert records[0]["tags"][1]["pose_valid"] is True
+    assert records[1]["tags"][0]["pose_valid"] is True
+    assert "pose_error" not in records[1]["tags"][0]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [
+        ("invalid_calibration", "camera focal lengths"),
+        ("aspect_ratio", "different aspect ratios"),
+        ("missing_opencv", "OpenCV is required"),
+        ("backend_failure", "synthetic OpenCV failure"),
+    ],
+)
+def test_detection_worker_keeps_pose_setup_and_backend_failures_fatal(
+    tmp_path, monkeypatch, failure, expected_error
+) -> None:
+    calibration = _recording_calibration()
+    resolution = (4, 4)
+    if failure == "invalid_calibration":
+        calibration = replace(
+            calibration,
+            camera_matrix=((-2.0, 0.0, 2.0), (0.0, 2.0, 2.0), (0.0, 0.0, 1.0)),
+        )
+    elif failure == "aspect_ratio":
+        resolution = (4, 2)
+
+    def backend_failure(*_args, **_kwargs):
+        raise RuntimeError("synthetic OpenCV failure")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cv2",
+        SimpleNamespace(solvePnPGeneric=backend_failure, SOLVEPNP_IPPE_SQUARE=7)
+        if failure == "backend_failure"
+        else None,
+    )
+    frames: queue.Queue[AnalysisFrame | None] = queue.Queue()
+    frames.put(_analysis_frame())
+    frames.put(None)
+    stop = threading.Event()
+    state = CaptureState()
+    observed = []
+
+    class Detector:
+        backend_name = "pose-test-detector"
+
+        def detect(self, grayscale):
+            del grayscale
+            return [_tag_detection(7)]
+
+    class Observer:
+        def observe(self, frame, detections, tag_records):
+            del frame, detections, tag_records
+            observed.append(True)
+
+    output = tmp_path / "camera.jsonl"
+    worker = DetectionWorker(
+        frames=frames,
+        output=output,
+        detector=Detector(),
+        calibration=calibration,
+        tag_size=0.16,
+        resolution=resolution,
+        max_reprojection_error=2.0,
+        target_id=None,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0.0),
+        observer=Observer(),
+    )
+
+    worker.run()
+
+    assert stop.is_set()
+    assert state.worker_error is not None
+    assert expected_error in state.worker_error
+    assert state.processed_frames == 0
+    assert observed == []
+    assert output.read_text() == ""
+
+
 def test_detection_worker_shutdown_is_bounded_when_queue_is_full(tmp_path) -> None:
     entered = threading.Event()
     release = threading.Event()
@@ -367,6 +548,104 @@ class _QueuedConnection:
             return self.messages.get(timeout=timeout)
         except queue.Empty:
             return None
+
+
+@pytest.mark.parametrize("foreign_source", [(2, 1), (1, 191)])
+@pytest.mark.parametrize("include_selected", [False, True])
+def test_telemetry_health_uses_selected_source_and_keeps_all_raw_messages(
+    tmp_path, foreign_source, include_selected
+) -> None:
+    def sensor_messages(system, component, *, distance_cm, quality):
+        messages = []
+        for message_type, fields in (
+            (
+                "DISTANCE_SENSOR",
+                {
+                    "orientation": 25,
+                    "current_distance": distance_cm,
+                    "min_distance": 1,
+                    "max_distance": 1000,
+                },
+            ),
+            ("RANGEFINDER", {"distance": distance_cm / 100.0}),
+            ("OPTICAL_FLOW_RAD", {"quality": quality}),
+            ("SCALED_IMU", {}),
+        ):
+            message = _TelemetryMessage(
+                message_type, system=system, component=component
+            )
+            vars(message).update(fields)
+            messages.append(message)
+        return messages
+
+    foreign = sensor_messages(*foreign_source, distance_cm=900, quality=255)
+    selected = (
+        sensor_messages(1, 1, distance_cm=35, quality=40) if include_selected else []
+    )
+    messages = iter([*foreign, *selected, *foreign])
+    stop = threading.Event()
+
+    def receive(**_kwargs):
+        message = next(messages, None)
+        if message is None:
+            stop.set()
+        return message
+
+    state = CaptureState()
+    window = CaptureWindow(duration=None)
+    window.begin()
+    output = tmp_path / "telemetry.jsonl"
+    worker = TelemetryWorker(
+        connection=SimpleNamespace(recv_match=receive),
+        output=output,
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0.0),
+    )
+
+    worker.run()
+
+    assert state.worker_error is None
+    types = ("DISTANCE_SENSOR", "RANGEFINDER", "OPTICAL_FLOW_RAD", "SCALED_IMU")
+    assert state.telemetry_counts == {
+        name: 3 if include_selected else 2 for name in types
+    }
+    assert state.vehicle_telemetry_counts == (
+        dict.fromkeys(types, 1) if include_selected else {}
+    )
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+    assert [
+        (record["source_system"], record["source_component"]) for record in records
+    ] == (
+        [foreign_source] * 4
+        + ([(1, 1)] * 4 if include_selected else [])
+        + [foreign_source] * 4
+    )
+    report = _component_report(
+        state,
+        on_pi=True,
+        flight_controller="ok",
+        camera="unavailable",
+        detector="unavailable",
+        details={},
+        duration=1.0,
+    )
+    assert report["flight_controller"]["messages"] == (4 if include_selected else 0)
+    assert report["downward_rangefinder"]["status"] == (
+        "ok" if include_selected else "no_data"
+    )
+    assert report["downward_rangefinder"]["samples"] == (1 if include_selected else 0)
+    assert report["downward_rangefinder"]["latest_m"] == (
+        0.35 if include_selected else None
+    )
+    assert state.legacy_range_samples == (1 if include_selected else 0)
+    assert state.latest_legacy_range_m == (0.35 if include_selected else None)
+    assert report["optical_flow"]["status"] == ("ok" if include_selected else "no_data")
+    assert report["optical_flow"]["samples"] == (1 if include_selected else 0)
+    assert report["optical_flow"]["quality"] == (40 if include_selected else None)
 
 
 def test_telemetry_worker_detects_arming_before_capture_epoch(tmp_path) -> None:
@@ -859,6 +1138,7 @@ def test_inspector_classifies_observed_range_and_flow_streams() -> None:
         "status": "ok",
         "samples": 1,
         "latest_m": 0.42,
+        "source": "DISTANCE_SENSOR",
         "rate_hz": 0.5,
     }
     assert components["forward_rangefinder"]["status"] == "no_data"
@@ -997,3 +1277,473 @@ def test_inspector_aborts_armed_vehicle_and_still_writes_manifest(
     assert manifest["safety"]["saw_armed"] is True
     assert manifest["safety"]["saw_disarmed_after_arm"] is False
     assert manifest["safety"]["last_vehicle_state"] == "armed"
+
+
+def test_startup_interrupt_closes_flight_controller_and_writes_failure_manifest(
+    tmp_path, monkeypatch
+):
+    class InterruptedConnection:
+        logfile = None
+        closed = False
+
+        def wait_heartbeat(self, **_kwargs):
+            raise KeyboardInterrupt
+
+        def close(self):
+            self.closed = True
+
+    connection = InterruptedConnection()
+    output = tmp_path / "startup-interrupt"
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(
+        inspect_cli, "resolve_mavlink_endpoint", lambda *_a, **_kw: "mock:fc"
+    )
+    monkeypatch.setattr(
+        inspect_cli.mavutil, "mavlink_connection", lambda *_a, **_kw: connection
+    )
+
+    assert run(["--duration", "0.01", "--output-dir", str(output)]) == 1
+    assert connection.closed
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["completed"] is False
+    assert manifest["stop_reason"] == "operator_interrupt"
+    assert "interrupted" in manifest["error"]
+
+
+def test_timestamp_parse_failure_cannot_publish_success_manifest(tmp_path, monkeypatch):
+    output = tmp_path / "bad-timestamps"
+    paths = create_recording_paths(output)
+    paths.video_timestamps.write_text("not-a-timestamp\n")
+    monkeypatch.setattr(inspect_cli, "create_recording_paths", lambda _path: paths)
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(
+        inspect_cli,
+        "resolve_mavlink_endpoint",
+        lambda *_a, **_kw: (_ for _ in ()).throw(FileNotFoundError("none")),
+    )
+
+    assert run(["--duration", "0.01", "--output-dir", str(output)]) == 1
+    manifest = json.loads(paths.manifest.read_text())
+    assert manifest["completed"] is False
+    assert "summarize H.264 timestamps" in manifest["error"]
+
+
+def test_telemetry_duration_stop_records_reason_before_setting_stop(tmp_path):
+    state = CaptureState()
+    window = CaptureWindow(1)
+    window.begin()
+    window.deadline = time.monotonic() - 1
+
+    class CheckedStop(threading.Event):
+        def set(self):
+            assert state.stop_reason == "duration_elapsed"
+            super().set()
+
+    stop = CheckedStop()
+    worker = TelemetryWorker(
+        connection=_QueuedConnection(),
+        output=tmp_path / "telemetry.jsonl",
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0),
+    )
+    worker.run()
+    assert stop.is_set()
+    assert state.worker_error is None
+
+
+def test_camera_startup_interrupt_releases_acquired_camera(tmp_path, monkeypatch):
+    import sys
+
+    class InterruptedCamera:
+        closed = False
+
+        def create_video_configuration(self, **_kwargs):
+            return {}
+
+        def configure(self, _config):
+            raise KeyboardInterrupt
+
+        def close(self):
+            self.closed = True
+
+    camera = InterruptedCamera()
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: True)
+    monkeypatch.setattr(
+        inspect_cli,
+        "resolve_mavlink_endpoint",
+        lambda *_a, **_kw: (_ for _ in ()).throw(FileNotFoundError("none")),
+    )
+    monkeypatch.setattr(
+        inspect_cli,
+        "create_detector",
+        lambda *_a, **_kw: SimpleNamespace(backend_name="mock"),
+    )
+    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules, "picamera2", SimpleNamespace(Picamera2=lambda: camera)
+    )
+    monkeypatch.setitem(
+        sys.modules, "picamera2.encoders", SimpleNamespace(H264Encoder=object)
+    )
+    monkeypatch.setitem(
+        sys.modules, "picamera2.outputs", SimpleNamespace(FileOutput=object)
+    )
+    output = tmp_path / "camera-interrupt"
+
+    assert run(["--duration", "0.01", "--output-dir", str(output)]) == 1
+    assert camera.closed
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["completed"] is False
+    assert manifest["stop_reason"] == "operator_interrupt"
+
+
+class _FrameRequest:
+    def __init__(self):
+        self.releases = 0
+
+    def release(self):
+        self.releases += 1
+
+
+class _AsyncFrameCamera:
+    def __init__(self):
+        self.now = 0.0
+        self.result = None
+        self.cancelled = False
+        self.requests = 0
+        self.cancellations = 0
+        self.waits = []
+        self.on_wait = None
+        self.on_cancel = None
+        self.signal_function = None
+
+    def capture_request(self, *, wait, signal_function):
+        assert wait is False
+        self.requests += 1
+        self.signal_function = signal_function
+        return self
+
+    def wait(self, job, *, timeout):
+        from concurrent.futures import CancelledError
+
+        assert job is self
+        self.waits.append(timeout)
+        if self.result is not None:
+            return self.result
+        if self.cancelled:
+            raise CancelledError
+        self.now += timeout
+        if self.on_wait is not None:
+            self.on_wait()
+        if self.result is not None:
+            return self.result
+        raise TimeoutError
+
+    def cancel_all_and_flush(self):
+        self.cancellations += 1
+        if self.on_cancel is not None:
+            self.on_cancel()
+        else:
+            self.cancelled = True
+
+    def complete(self, request):
+        self.result = request
+        assert self.signal_function is not None
+        self.signal_function(self)
+
+
+def _bounded_frame(camera, state, stop, *, deadline=None, frame_timeout=0.25):
+    return inspect_cli._capture_request_bounded(
+        camera,
+        stop=stop,
+        state=state,
+        deadline=deadline,
+        frame_timeout=frame_timeout,
+    )
+
+
+def test_stalled_frame_request_stops_capture_and_cancels_pending_job(monkeypatch):
+    camera = _AsyncFrameCamera()
+    state, stop = CaptureState(), threading.Event()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: camera.now)
+
+    with pytest.raises(
+        TimeoutError, match=r"camera did not deliver a frame within 0\.25 seconds"
+    ):
+        _bounded_frame(camera, state, stop)
+    assert stop.is_set()
+    assert state.stop_reason == "camera_stalled"
+    assert state.worker_error is not None
+    assert "0.25 seconds" in state.worker_error
+    assert camera.cancellations == 1
+    assert camera.now == pytest.approx(0.25)
+    assert max(camera.waits) <= 0.1
+
+
+def test_frame_wait_respects_recording_deadline_without_false_stall(monkeypatch):
+    camera = _AsyncFrameCamera()
+    state, stop = CaptureState(), threading.Event()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: camera.now)
+
+    assert _bounded_frame(camera, state, stop, deadline=0.15) is None
+    assert state.stop_reason == "duration_elapsed"
+    assert state.worker_error is None
+    assert camera.now == pytest.approx(0.15)
+    assert camera.cancellations == 1
+    assert stop.is_set()
+
+
+def test_disarm_stop_cancels_frame_wait_without_waiting_for_timeout(monkeypatch):
+    camera = _AsyncFrameCamera()
+    state, stop = CaptureState(), threading.Event()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: camera.now)
+
+    def disarm():
+        state.set_stop_reason("vehicle_disarmed")
+        stop.set()
+
+    camera.on_wait = disarm
+    assert _bounded_frame(camera, state, stop) is None
+    assert camera.now == pytest.approx(0.1)
+    assert state.stop_reason == "vehicle_disarmed"
+    assert state.worker_error is None
+    assert camera.cancellations == 1
+
+
+def test_normal_async_request_transfers_release_to_capture_loop(monkeypatch):
+    camera = _AsyncFrameCamera()
+    state, stop = CaptureState(), threading.Event()
+    request = _FrameRequest()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: camera.now)
+    camera.on_wait = lambda: camera.complete(request)
+
+    received = _bounded_frame(camera, state, stop)
+    assert received is request
+    assert request.releases == 0
+    assert camera.cancellations == 0
+    received.release()
+    assert request.releases == 1
+    assert state.worker_error is None
+
+
+@pytest.mark.parametrize("completion_time", ["during_cancel", "after_cancel"])
+def test_request_completing_during_cancellation_is_released_once(
+    monkeypatch, completion_time
+):
+    camera = _AsyncFrameCamera()
+    state, stop = CaptureState(), threading.Event()
+    request = _FrameRequest()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: camera.now)
+    camera.on_wait = stop.set
+    camera.on_cancel = (
+        (lambda: camera.complete(request))
+        if completion_time == "during_cancel"
+        else (lambda: None)
+    )
+
+    assert _bounded_frame(camera, state, stop) is None
+    if completion_time == "after_cancel":
+        camera.complete(request)
+    assert camera.signal_function is not None
+    camera.signal_function(camera)
+    assert request.releases == 1
+    assert state.worker_error is None
+
+
+def test_completed_request_at_deadline_is_released_instead_of_processed(monkeypatch):
+    camera = _AsyncFrameCamera()
+    state, stop = CaptureState(), threading.Event()
+    request = _FrameRequest()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: camera.now)
+    camera.on_wait = lambda: camera.complete(request)
+
+    assert _bounded_frame(camera, state, stop, deadline=0.1) is None
+    assert request.releases == 1
+    assert state.stop_reason == "duration_elapsed"
+
+
+def test_camera_stall_writes_failed_manifest_and_attempts_camera_cleanup(
+    tmp_path, monkeypatch
+):
+    import sys
+
+    class Camera(_AsyncFrameCamera):
+        closed = False
+        encoder_stopped = False
+        stopped = False
+
+        def create_video_configuration(self, **_kwargs):
+            return {}
+
+        def configure(self, _config):
+            pass
+
+        def start(self):
+            pass
+
+        def start_encoder(self, _encoder, output, **_kwargs):
+            output.outputframe(b"fake", keyframe=True, timestamp=0)
+
+        def stop_encoder(self, _encoder):
+            self.encoder_stopped = True
+
+        def stop(self):
+            self.stopped = True
+
+        def close(self):
+            self.closed = True
+
+        def wait(self, job, *, timeout):
+            time.sleep(timeout)
+            return super().wait(job, timeout=timeout)
+
+    class Output:
+        recording = True
+        dead = False
+
+        def __init__(self, file, *, pts):
+            from pathlib import Path
+
+            Path(file).write_bytes(b"fake")
+            Path(pts).write_text("0.0\n")
+
+        def outputframe(self, *_args):
+            pass
+
+    camera = Camera()
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: True)
+    monkeypatch.setattr(
+        inspect_cli,
+        "resolve_mavlink_endpoint",
+        lambda *_a, **_kw: (_ for _ in ()).throw(FileNotFoundError("none")),
+    )
+    monkeypatch.setattr(
+        inspect_cli,
+        "create_detector",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("no detector")),
+    )
+    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules, "picamera2", SimpleNamespace(Picamera2=lambda: camera)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "picamera2.encoders",
+        SimpleNamespace(H264Encoder=lambda **_kw: object()),
+    )
+    monkeypatch.setitem(
+        sys.modules, "picamera2.outputs", SimpleNamespace(FileOutput=Output)
+    )
+    output = tmp_path / "stalled-camera"
+
+    assert (
+        run(
+            [
+                "--duration",
+                "0.2",
+                "--warmup",
+                "0",
+                "--frame-timeout",
+                "0.01",
+                "--output-dir",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["completed"] is False
+    assert manifest["stop_reason"] == "camera_stalled"
+    assert "camera did not deliver a frame" in manifest["error"]
+    assert manifest["components"]["camera"]["status"] == "error"
+    assert camera.cancellations == 1
+    assert camera.closed and camera.stopped and camera.encoder_stopped
+
+
+def _distance_message(cm, *, orientation=25):
+    return SimpleNamespace(
+        get_type=lambda: "DISTANCE_SENSOR",
+        orientation=orientation,
+        current_distance=cm,
+        min_distance=1,
+        max_distance=1000,
+    )
+
+
+def _range_message(metres):
+    return SimpleNamespace(get_type=lambda: "RANGEFINDER", distance=metres)
+
+
+def _sensor_report(state, *, observed_at):
+    return _component_report(
+        state,
+        on_pi=True,
+        flight_controller="ok",
+        camera="ok",
+        detector="ok",
+        details={},
+        duration=1,
+        observed_at=observed_at,
+    )
+
+
+def test_downward_range_prefers_oriented_stream_without_double_counting(monkeypatch):
+    state = CaptureState()
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: 10.0)
+    _observe_sensor_message(state, _range_message(0.9))
+    for _ in range(20):
+        _observe_sensor_message(state, _distance_message(42))
+    for _ in range(9):
+        _observe_sensor_message(state, _range_message(0.9))
+
+    report = _sensor_report(state, observed_at=10)["downward_rangefinder"]
+    assert report == {
+        "status": "ok",
+        "samples": 20,
+        "latest_m": 0.42,
+        "source": "DISTANCE_SENSOR",
+        "rate_hz": 20.0,
+    }
+
+
+def test_downward_range_uses_fresh_legacy_only_when_oriented_source_is_stale(
+    monkeypatch,
+):
+    state = CaptureState()
+    now = [10.0]
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: now[0])
+    _observe_sensor_message(state, _distance_message(42))
+    now[0] = 13.0
+    _observe_sensor_message(state, _range_message(0.8))
+
+    report = _sensor_report(state, observed_at=13)["downward_rangefinder"]
+    assert report["source"] == "RANGEFINDER"
+    assert report["samples"] == 1
+    assert report["latest_m"] == 0.8
+    assert report["status"] == "ok"
+    assert (
+        _sensor_report(state, observed_at=16)["downward_rangefinder"]["status"]
+        == "stale"
+    )
+    # Final capture summaries use the capture end, not later fsync completion.
+    assert (
+        _sensor_report(state, observed_at=10)["downward_rangefinder"]["source"]
+        == "DISTANCE_SENSOR"
+    )
+
+
+@pytest.mark.parametrize(
+    ("quality", "expected"), [(0, "low_quality"), (None, "unknown_quality"), (50, "ok")]
+)
+def test_optical_flow_status_requires_positive_quality(quality, expected):
+    state = CaptureState()
+    _observe_sensor_message(
+        state, SimpleNamespace(get_type=lambda: "OPTICAL_FLOW", quality=quality)
+    )
+    report = _sensor_report(state, observed_at=time.monotonic())["optical_flow"]
+    assert report["status"] == expected
+    assert report["samples"] == 1

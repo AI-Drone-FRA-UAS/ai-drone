@@ -21,6 +21,7 @@ from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_vehicle_message,
+    require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
 )
 
@@ -206,6 +207,8 @@ def main(arguments: list[str] | None = None) -> int:
     )
     parser.add_argument("--device", default="/dev/serial0")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--target-system", type=int, default=1)
+    parser.add_argument("--target-component", type=int, default=1)
     parser.add_argument("--throttle-percent", type=float, default=7.0)
     parser.add_argument("--duration", type=float, default=0.5)
     parser.add_argument("--countdown", type=int, default=5)
@@ -215,6 +218,8 @@ def main(arguments: list[str] | None = None) -> int:
 
     if args.baud <= 0:
         parser.error("--baud must be greater than zero")
+    if not 1 <= args.target_system <= 255 or not 1 <= args.target_component <= 255:
+        parser.error("target system and component must be between 1 and 255")
     if args.confirm_props_removed != "PROPS_REMOVED":
         parser.error("--confirm-props-removed must be exactly PROPS_REMOVED")
     if args.confirm_vehicle_secured != "VEHICLE_SECURED":
@@ -240,13 +245,16 @@ def main(arguments: list[str] | None = None) -> int:
     first_motor = 1
     cleanup_confirmed = False
     try:
-        heartbeat = connection.wait_heartbeat(timeout=15)
-        if heartbeat is None:
-            raise SystemExit("No ArduPilot heartbeat received.")
+        heartbeat = require_ardupilot_heartbeat(
+            connection,
+            system_id=args.target_system,
+            component_id=args.target_component,
+            timeout=15.0,
+        )
         if heartbeat_is_armed(heartbeat):
             raise SystemExit("Vehicle is already ARMED; refusing motor test.")
-        connection.target_system = heartbeat.get_srcSystem()
-        connection.target_component = heartbeat.get_srcComponent()
+        connection.target_system = args.target_system
+        connection.target_component = args.target_component
 
         arming_skipchk = float(_request_parameter(connection, "ARMING_SKIPCHK"))
         if arming_skipchk != 0.0:

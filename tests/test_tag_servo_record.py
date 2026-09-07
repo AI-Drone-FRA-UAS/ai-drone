@@ -27,6 +27,7 @@ from ai_drone.cli.record import (
 from ai_drone.cli.servo import ServoProcessLock
 from ai_drone.cli.tag_servo_record import (
     ARMED_FLIGHT_CONFIRMATION,
+    ActuationStop,
     TagServoConfig,
     TagServoSession,
 )
@@ -276,7 +277,7 @@ def _session(
     _FakeServo.instances.clear()
     state = CaptureState()
     state.last_vehicle_heartbeat_monotonic = time.monotonic()
-    stop = threading.Event()
+    stop = ActuationStop()
     ready = threading.Event()
     ready.set()
     fake_lock = _FakeLock()
@@ -358,7 +359,7 @@ def test_pre_ready_detections_do_not_count_toward_confirmation(
     _FakeServo.instances.clear()
     state = CaptureState()
     state.last_vehicle_heartbeat_monotonic = time.monotonic()
-    stop = threading.Event()
+    stop = ActuationStop()
     ready = threading.Event()
     session = TagServoSession(
         config=_config(),
@@ -503,7 +504,7 @@ def test_session_initialization_failure_releases_gpio_and_process_lock(
             config=_config(),
             event_path=event_path,
             state=state,
-            capture_stop=threading.Event(),
+            capture_stop=ActuationStop(),
             ready=threading.Event(),
             servo_factory=_FakeServo,
             process_lock_factory=lambda: fake_lock,
@@ -648,7 +649,7 @@ def test_active_telemetry_policy_accepts_armed_and_stops_after_disarm(
     tmp_path: Path,
 ) -> None:
     connection = _HeartbeatQueueConnection()
-    stop = threading.Event()
+    stop = ActuationStop()
     state = CaptureState()
     state.observe_vehicle_state(armed=True)
     window = CaptureWindow(duration=None)
@@ -740,3 +741,299 @@ def test_active_outbound_mavlink_is_read_and_interval_requests_only() -> None:
     )
     assert all(values[3] == 0 for values in command_calls)
     assert all(values[6:] == (0, 0, 0, 0, 0) for values in command_calls)
+
+
+def test_disarm_closes_gpio_gate_before_blocking_telemetry_log(tmp_path, monkeypatch):
+
+    session, state, stop, _lock, servo = _session(tmp_path)
+    state.observe_vehicle_state(armed=True)
+    preparing = threading.Event()
+    release_preparing = threading.Event()
+    logging_disarm = threading.Event()
+    release_logging = threading.Event()
+    original_event = session._events.write
+    original_telemetry = record_cli.write_json_line
+
+    def event_write(event, **fields):
+        if event == "servo_pulse_starting":
+            preparing.set()
+            assert release_preparing.wait(2)
+        return original_event(event, **fields)
+
+    def telemetry_write(handle, record):
+        logging_disarm.set()
+        assert release_logging.wait(2)
+        return original_telemetry(handle, record)
+
+    monkeypatch.setattr(session._events, "write", event_write)
+    monkeypatch.setattr(record_cli, "write_json_line", telemetry_write)
+    connection = _HeartbeatQueueConnection()
+    window = CaptureWindow(None)
+    window.begin()
+    worker = TelemetryWorker(
+        connection=connection,
+        output=tmp_path / "telemetry.jsonl",
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0),
+        allow_armed_at_any_time=True,
+        stop_after_disarm=True,
+    )
+    try:
+        _observe(session, 7, 3)
+        assert preparing.wait(1)
+        worker.start()
+        connection.messages.put(_HeartbeatMessage(armed=False))
+        assert logging_disarm.wait(1)
+        assert state.saw_disarmed_after_arm
+        assert stop.is_set()
+        release_preparing.set()
+        _wait_for(lambda: not state.pending_servo_tag_ids)
+        assert servo.actions == []
+        assert state.stop_reason == "vehicle_disarmed"
+    finally:
+        release_preparing.set()
+        release_logging.set()
+        stop.set()
+        if worker.ident is not None:
+            worker.join(2)
+        session.close()
+
+
+def test_confirmation_intent_is_durable_before_worker_can_act(tmp_path, monkeypatch):
+    session, state, stop, _lock, servo = _session(tmp_path)
+    writing = threading.Event()
+    release = threading.Event()
+    original = session._events.write
+    failures = []
+
+    def write(event, **fields):
+        if event == "tag_confirmed_intent":
+            writing.set()
+            assert release.wait(2)
+        original(event, **fields)
+
+    def observe():
+        try:
+            _observe(session, 3, 3)
+        except BaseException as error:
+            failures.append(error)
+
+    monkeypatch.setattr(session._events, "write", write)
+    observer = threading.Thread(target=observe)
+    try:
+        observer.start()
+        assert writing.wait(1)
+        assert servo.actions == []
+        # A blocked journal must not hold the stop/GPIO lock.
+        stop.set()
+        release.set()
+        observer.join(2)
+        assert not observer.is_alive()
+        assert not failures
+        assert servo.actions == []
+        assert state.pending_servo_tag_ids == ()
+    finally:
+        release.set()
+        observer.join(2)
+        session.close()
+
+
+def test_failed_confirmation_intent_never_publishes_actuation(tmp_path, monkeypatch):
+    session, _state, stop, _lock, servo = _session(tmp_path)
+    original = session._events.write
+
+    def write(event, **fields):
+        if event == "tag_confirmed_intent":
+            raise OSError("journal unavailable")
+        original(event, **fields)
+
+    monkeypatch.setattr(session._events, "write", write)
+    try:
+        with pytest.raises(OSError, match="journal unavailable"):
+            _observe(session, 7, 3)
+        assert stop.is_set()
+        assert servo.actions == []
+        assert session._queue.empty()
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("expired", ["heartbeat", "frame"])
+def test_gpio_boundary_rechecks_freshness_after_preparation(
+    tmp_path, monkeypatch, expired
+):
+    session, state, _stop, _lock, servo = _session(tmp_path)
+    original = session._events.write
+
+    def write(event, **fields):
+        original(event, **fields)
+        if event == "servo_pulse_starting":
+            if expired == "heartbeat":
+                state.last_vehicle_heartbeat_monotonic = time.monotonic() - 100
+            else:
+                session.config = replace(session.config, maximum_detection_age_s=0)
+
+    monkeypatch.setattr(session._events, "write", write)
+    try:
+        _observe(session, 9, 3)
+        _wait_for(lambda: not state.pending_servo_tag_ids)
+        assert servo.actions == []
+        assert state.servo_pulses_completed == 0
+    finally:
+        session.close()
+
+
+def test_session_constructor_interrupt_releases_all_acquired_resources(
+    tmp_path, monkeypatch
+):
+    from ai_drone.cli.tag_servo_record import ServoEventWriter
+
+    fake_lock = _FakeLock()
+    _FakeServo.instances.clear()
+
+    def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ServoEventWriter, "write", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        TagServoSession(
+            config=_config(),
+            event_path=tmp_path / "servo.jsonl",
+            state=CaptureState(),
+            capture_stop=ActuationStop(),
+            ready=threading.Event(),
+            servo_factory=_FakeServo,
+            process_lock_factory=lambda: fake_lock,
+        )
+    assert _FakeServo.instances[0].closed
+    assert _FakeServo.instances[0].actions == [("detach", None), ("close", None)]
+    assert fake_lock.closed
+
+
+def test_shutdown_interrupt_still_detaches_closes_and_releases_lock(
+    tmp_path, monkeypatch
+):
+    import ai_drone.cli.tag_servo_record as active_cli
+
+    session, _state, _stop, lock, servo = _session(tmp_path)
+    session._ever_commanded = True
+
+    def interrupted(_duration):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(active_cli.time, "sleep", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        session.close()
+    assert servo.actions == [("value", -0.5), ("detach", None), ("close", None)]
+    assert servo.closed and lock.closed
+    session.close()
+    assert len(servo.actions) == 3
+
+
+def test_shutdown_retains_signal_handlers_through_rest_detach_and_lock_release(
+    tmp_path, monkeypatch
+):
+    import signal
+
+    import ai_drone.cli.tag_servo_record as active_cli
+
+    session, _state, _stop, lock, servo = _session(tmp_path)
+    previous = {
+        sig: signal.getsignal(sig)
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    }
+    session.install_signal_handlers()
+    session._ever_commanded = True
+    observed = []
+    original_detach = servo.detach
+    original_release = lock.close
+
+    def check():
+        observed.append(
+            all(
+                signal.getsignal(sig) == session._handle_stop_signal for sig in previous
+            )
+        )
+        session._handle_stop_signal(signal.SIGTERM, None)
+
+    def detach():
+        check()
+        original_detach()
+
+    def release():
+        check()
+        original_release()
+
+    monkeypatch.setattr(active_cli.time, "sleep", lambda _duration: check())
+    monkeypatch.setattr(servo, "detach", detach)
+    monkeypatch.setattr(lock, "close", release)
+    try:
+        session.close()
+        assert observed == [True, True, True]
+        assert all(
+            signal.getsignal(sig) == handler for sig, handler in previous.items()
+        )
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def test_failed_gpio_close_retains_exclusive_lock_and_can_retry(tmp_path, monkeypatch):
+    session, _state, _stop, lock, servo = _session(tmp_path)
+    original = servo.close
+
+    def failure():
+        raise OSError("GPIO release failed")
+
+    monkeypatch.setattr(servo, "close", failure)
+    session.close()
+    assert not lock.closed
+    assert not session._closed
+    monkeypatch.setattr(servo, "close", original)
+    session.close()
+    assert servo.closed and lock.closed and session._closed
+
+
+def test_startup_termination_is_cooperative_and_restores_original_handlers(
+    tmp_path, monkeypatch
+):
+    import signal
+
+    connection = _ArmedConnection()
+    previous = {
+        sig: signal.getsignal(sig)
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    }
+
+    def terminate(**_kwargs):
+        handler = signal.getsignal(signal.SIGTERM)
+        assert not isinstance(handler, int)
+        assert callable(handler)
+        handler(signal.SIGTERM, None)
+        return _InitialHeartbeat()
+
+    monkeypatch.setattr(connection, "wait_heartbeat", terminate)
+    monkeypatch.setattr(record_cli, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(
+        record_cli, "resolve_mavlink_endpoint", lambda *_a, **_kw: "mock:fc"
+    )
+    monkeypatch.setattr(
+        record_cli.mavutil, "mavlink_connection", lambda *_a, **_kw: connection
+    )
+    output = tmp_path / "startup-terminate"
+    try:
+        result = record_cli.run(
+            ["--output-dir", str(output), *_arguments()], operation="tag-servo"
+        )
+        assert result == 1
+        assert connection.closed
+        manifest = json.loads((output / "manifest.json").read_text())
+        assert manifest["stop_reason"] == "operator_signal_SIGTERM"
+        assert all(signal.getsignal(sig) == old for sig, old in previous.items())
+    finally:
+        for sig, old in previous.items():
+            signal.signal(sig, old)

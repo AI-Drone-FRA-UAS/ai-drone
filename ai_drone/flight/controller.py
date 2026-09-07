@@ -17,6 +17,7 @@ from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_vehicle_message,
+    require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
 )
 from ai_drone.recording import request_message_intervals
@@ -151,6 +152,8 @@ class DroneController:
         self._latest_boot_ms: int | None = None
         self._latest_boot_received = 0.0
         self._last_gcs_heartbeat_time: float | None = None
+        # An unconfirmed arm write retains cleanup ownership even if an
+        # intermediate heartbeat still describes the pre-arm disarmed state.
         self._arm_command_sent = False
         self._armed_by_controller = False
         self._flight_started_by_controller = False
@@ -208,11 +211,12 @@ class DroneController:
         )
         self.connection = connection
         try:
-            heartbeat = connection.wait_heartbeat(timeout=15)
-            if heartbeat is None:
-                raise TimeoutError("no ArduPilot heartbeat received")
-            self.target_system = int(heartbeat.get_srcSystem())
-            self.target_component = int(heartbeat.get_srcComponent())
+            heartbeat = require_ardupilot_heartbeat(
+                connection,
+                system_id=self.target_system,
+                component_id=self.target_component,
+                timeout=15.0,
+            )
             connection.target_system = self.target_system
             connection.target_component = self.target_component
             self._process_message(heartbeat, time.monotonic())
@@ -307,7 +311,6 @@ class DroneController:
                 self.flight_mode = mode
             if not self.is_armed:
                 self.is_flying = False
-                self._arm_command_sent = False
                 self._armed_by_controller = False
                 self._flight_started_by_controller = False
                 self._local_altitude_offset = None
@@ -359,16 +362,34 @@ class DroneController:
                 self.rc_channel_count = channel_count
                 self.last_rc_channels_time = now
         elif message_type == "SYS_STATUS":
-            voltage = float(message.voltage_battery) / 1_000.0
-            if math.isfinite(voltage) and voltage > 0.0:
-                self.battery_voltage = voltage
-                self.last_battery_time = now
+            self._process_battery_message(message, now)
         elif message_type == "AUTOPILOT_VERSION":
             self.flight_sw_version = int(message.flight_sw_version)
             custom = message.flight_custom_version
             self.flight_custom_version = (
                 custom if isinstance(custom, bytes) else bytes(custom)
             )
+
+    def _process_battery_message(self, message: Any, now: float) -> None:
+        millivolts = float(message.voltage_battery)
+        battery_flag = mavlink.MAV_SYS_STATUS_SENSOR_BATTERY
+        healthy = all(
+            int(getattr(message, field, 0)) & battery_flag
+            for field in (
+                "onboard_control_sensors_present",
+                "onboard_control_sensors_enabled",
+                "onboard_control_sensors_health",
+            )
+        )
+        # UINT16_MAX means voltage was not supplied. A newly reported invalid
+        # value must invalidate an earlier good sample immediately, rather than
+        # leaving the battery guard satisfied until that sample ages out.
+        if not healthy or not 0.0 < millivolts < 65_535.0:
+            self.battery_voltage = None
+            self.last_battery_time = 0.0
+            return
+        self.battery_voltage = millivolts / 1_000.0
+        self.last_battery_time = now
 
     def _process_pose_message(
         self, message: Any, message_type: str, now: float
@@ -809,6 +830,7 @@ class DroneController:
             if message is not None:
                 self._process_message(message, time.monotonic())
             if self.is_armed:
+                self._arm_command_sent = False
                 self._armed_by_controller = True
                 return
         raise TimeoutError("flight controller did not confirm arming")
@@ -878,13 +900,25 @@ class DroneController:
             raise FlightSafetyError("refusing to force-disarm a flight; use land()")
         self._request_disarm()
         deadline = time.monotonic() + timeout
+        # Discard heartbeats already queued at the request boundary. A cached
+        # disarmed state (especially after an ambiguous arm write) is not a
+        # confirmation that this cleanup request took effect.
         while time.monotonic() < deadline:
+            if self._connection().recv_match(type="HEARTBEAT", blocking=False) is None:
+                break
+        while (remaining := deadline - time.monotonic()) > 0:
             message = self._connection().recv_match(
-                type="HEARTBEAT", blocking=True, timeout=0.5
+                type="HEARTBEAT", blocking=True, timeout=min(remaining, 0.5)
             )
-            if message is not None:
-                self._process_message(message, time.monotonic())
+            if (
+                message is None
+                or message.get_type() != "HEARTBEAT"
+                or not self._matching_vehicle_message(message)
+            ):
+                continue
+            self._process_message(message, time.monotonic())
             if not self.is_armed:
+                self._arm_command_sent = False
                 return
         raise TimeoutError("flight controller did not confirm disarming")
 
@@ -1028,6 +1062,11 @@ class DroneController:
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
             self.update_telemetry()
+            if self.flight_mode != "LOITER":
+                self.emergency_stop()
+                raise FlightSafetyError(
+                    f"Loiter hold left LOITER mode for {self.flight_mode or 'unknown'}"
+                )
             if not self.altitude_is_fresh() or not self.heartbeat_is_fresh():
                 self.emergency_stop()
                 raise FlightSafetyError("telemetry became stale during Loiter")

@@ -19,6 +19,10 @@ import numpy as np
 _VALID_DISTORTION_COEFFICIENT_COUNTS = frozenset({4, 5, 8, 12, 14})
 
 
+class PoseEstimationError(RuntimeError):
+    """A decoded tag observation has no usable geometric pose solution."""
+
+
 def _json_number(value: object, *, field: str) -> float:
     """Parse one finite JSON number without accepting booleans or strings."""
     if isinstance(value, bool) or not isinstance(value, int | float):
@@ -436,7 +440,7 @@ def estimate_pose(
     )
     solved, rotation_vectors, translation_vectors = result[:3]
     if not solved:
-        raise RuntimeError(f"pose solve failed for tag {detection.tag_id}")
+        raise PoseEstimationError(f"pose solve failed for tag {detection.tag_id}")
 
     candidates: list[tuple[float, np.ndarray, np.ndarray]] = []
     for rotation, translation in zip(
@@ -464,7 +468,7 @@ def estimate_pose(
         candidates.append((error, rotation, translation))
 
     if not candidates:
-        raise RuntimeError(f"no positive-depth pose for tag {detection.tag_id}")
+        raise PoseEstimationError(f"no positive-depth pose for tag {detection.tag_id}")
     error, rotation, translation = min(candidates, key=lambda item: item[0])
     translation_values = translation.ravel()
     rotation_values = rotation.ravel()

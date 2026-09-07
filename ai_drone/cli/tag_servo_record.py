@@ -75,6 +75,18 @@ class CaptureStateLike(Protocol):
     def set_stop_reason(self, reason: str) -> None: ...
 
 
+class ActuationStop(threading.Event):
+    """Serialize stop publication with the final active GPIO assignment."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.command_lock = threading.RLock()
+
+    def set(self) -> None:
+        with self.command_lock:
+            super().set()
+
+
 @dataclass(frozen=True)
 class TagServoConfig:
     """Validated, mechanism-specific actuation and detection settings."""
@@ -328,9 +340,11 @@ class ServoEventWriter:
         with self._lock:
             if self._handle.closed:
                 return
-            self._handle.flush()
-            os.fsync(self._handle.fileno())
-            self._handle.close()
+            try:
+                self._handle.flush()
+                os.fsync(self._handle.fileno())
+            finally:
+                self._handle.close()
 
 
 class TagServoSession:
@@ -347,11 +361,13 @@ class TagServoSession:
         servo_factory: Any | None = None,
         process_lock_factory: Any = ServoProcessLock,
     ) -> None:
+        if not isinstance(capture_stop, ActuationStop):
+            raise TypeError("payload servo requires a synchronized ActuationStop")
         self.config = config
         self.state = state
         self.capture_stop = capture_stop
         self.ready = ready
-        self._lock = threading.Lock()
+        self._lock = capture_stop.command_lock
         self._queue: queue.Queue[ServoTrigger | None] = queue.Queue(maxsize=1)
         self._scheduled_ids: set[int] = set()
         self._confirmed_ids: set[int] = set()
@@ -363,6 +379,8 @@ class TagServoSession:
         self._accepting = True
         self._ever_commanded = False
         self._closed = False
+        self._gpio_closed = False
+        self._events_closed = False
         self._last_processed_monotonic: float | None = None
         self._health_started_monotonic: float | None = None
         self._signal_handlers: dict[int, Any] = {}
@@ -400,16 +418,17 @@ class TagServoSession:
                 pulse_duration_s=config.pulse_duration_s,
                 settle_duration_s=config.settle_duration_s,
             )
-        except Exception:
+        except BaseException:
             if event_writer is not None:
-                with suppress(Exception):
+                with suppress(BaseException):
                     event_writer.close()
             if servo_instance is not None:
-                with suppress(Exception):
+                with suppress(BaseException):
                     servo_instance.detach()
-                with suppress(Exception):
+                with suppress(BaseException):
                     servo_instance.close()
-            self._process_lock.close()
+            with suppress(BaseException):
+                self._process_lock.close()
             raise
 
         if event_writer is None or servo_instance is None:
@@ -423,23 +442,30 @@ class TagServoSession:
             name="apriltag-servo-actuator",
             daemon=True,
         )
-        self._worker.start()
-        self._publish_state()
+        try:
+            self._worker.start()
+            self._publish_state()
+        except BaseException:
+            self.close()
+            raise
 
     def install_signal_handlers(self) -> None:
         """Convert process termination signals into a cleanup-capable stop."""
 
         if threading.current_thread() is not threading.main_thread():
             raise RuntimeError("signal handlers must be installed from the main thread")
-        for signum in (signal.SIGTERM, signal.SIGHUP):
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            if signum in self._signal_handlers:
+                continue
             previous = signal.getsignal(signum)
             self._signal_handlers[signum] = previous
             signal.signal(signum, self._handle_stop_signal)
 
     def _handle_stop_signal(self, signum: int, _frame: FrameType | None) -> None:
-        self.state.set_stop_reason(f"operator_signal_{signal.Signals(signum).name}")
-        self.stop_accepting()
-        self.capture_stop.set()
+        with self._lock:
+            self.stop_accepting()
+            self.capture_stop.set()
+            self.state.set_stop_reason(f"operator_signal_{signal.Signals(signum).name}")
 
     def _restore_signal_handlers(self) -> None:
         if threading.current_thread() is not threading.main_thread():
@@ -585,6 +611,8 @@ class TagServoSession:
             if self._streaks[tag_id] < self.config.confirmation_frames:
                 continue
             with self._lock:
+                if not self._accepting or self.capture_stop.is_set():
+                    return
                 if tag_id in self._completed_ids or tag_id in self._scheduled_ids:
                     continue
                 if (
@@ -600,6 +628,26 @@ class TagServoSession:
                     captured_monotonic=captured,
                 )
                 self._scheduled_ids.add(tag_id)
+            # Reserve ownership before I/O, but do not expose work to the
+            # actuator until the detection intent has reached durable storage.
+            # In particular, the command gate must remain available during I/O.
+            try:
+                self._events.write(
+                    "tag_confirmed_intent",
+                    tag_id=tag_id,
+                    frame=frame.frame_index,
+                    elapsed_s=round(frame.elapsed_s, 6),
+                    confirmation_frames=self._streaks[tag_id],
+                )
+            except BaseException:
+                self.capture_stop.set()
+                self.stop_accepting()
+                self._release_scheduled(tag_id)
+                raise
+            with self._lock:
+                if not self._accepting or self.capture_stop.is_set():
+                    self._release_scheduled(tag_id)
+                    return
                 try:
                     self._queue.put_nowait(trigger)
                 except queue.Full:
@@ -684,8 +732,7 @@ class TagServoSession:
         """Command active, then always command rest, settle, and detach."""
 
         completed_hold = False
-        pulse_error: Exception | None = None
-        self._ever_commanded = True
+        pulse_error: BaseException | None = None
         active_commanded_utc: str | None = None
         active_started: float | None = None
         rest_commanded_utc: str | None = None
@@ -698,26 +745,51 @@ class TagServoSession:
             rest_us=self.config.rest_pulse_us,
             requested_active_s=self.config.pulse_duration_s,
         )
+        # This is the final command boundary. No journal/stdout I/O may separate
+        # these checks from GPIO, and every stop uses this same lock.
+        with self._lock:
+            now = time.monotonic()
+            detection_age = now - trigger.captured_monotonic
+            if (
+                not self._accepting
+                or self.capture_stop.is_set()
+                or not self.ready.is_set()
+                or trigger.tag_id not in self._scheduled_ids
+                or not 0 <= detection_age <= self.config.maximum_detection_age_s
+                or not self._selected_heartbeat_is_fresh(now)
+            ):
+                return False
+            self._ever_commanded = True
+            try:
+                active_commanded_utc = datetime.now(UTC).isoformat()
+                self._servo.value = self._active_value
+                active_started = time.monotonic()
+            except BaseException as error:
+                pulse_error = error
         try:
-            active_commanded_utc = datetime.now(UTC).isoformat()
-            self._servo.value = self._active_value
-            active_started = time.monotonic()
-            completed_hold = not self.capture_stop.wait(self.config.pulse_duration_s)
-        except Exception as error:
+            if pulse_error is None:
+                completed_hold = not self.capture_stop.wait(
+                    self.config.pulse_duration_s
+                )
+        except BaseException as error:
             pulse_error = error
         finally:
             try:
                 rest_commanded_utc = datetime.now(UTC).isoformat()
                 rest_started = time.monotonic()
-                self._servo.value = self._rest_value
+                with self._lock:
+                    if not self._gpio_closed:
+                        self._servo.value = self._rest_value
                 time.sleep(self.config.settle_duration_s)
-            except Exception as error:
+            except BaseException as error:
                 if pulse_error is None:
                     pulse_error = error
             try:
-                self._servo.detach()
+                with self._lock:
+                    if not self._gpio_closed:
+                        self._servo.detach()
                 detached_utc = datetime.now(UTC).isoformat()
-            except Exception as error:
+            except BaseException as error:
                 if pulse_error is None:
                     pulse_error = error
         if active_started is not None:
@@ -854,43 +926,67 @@ class TagServoSession:
 
         if self._closed:
             return
-        self._closed = True
-        self._restore_signal_handlers()
         self.stop_accepting()
-        self._cancel_queued_triggers()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
+        self.capture_stop.set()
+        interruption: BaseException | None = None
+
+        def cleanup(label: str, action: Any) -> bool:
+            nonlocal interruption
+            try:
+                action()
+                return True
+            except BaseException as error:
+                self.state.record_error(f"{label}: {error}")
+                if not isinstance(error, Exception) and interruption is None:
+                    interruption = error
+                return False
+
+        def stop_worker() -> None:
             self._cancel_queued_triggers()
             self._queue.put_nowait(None)
-        self._worker.join(
-            timeout=(self.config.pulse_duration_s + self.config.settle_duration_s + 2.0)
-        )
-        if self._worker.is_alive():
-            self.state.record_error("payload servo worker did not stop boundedly")
-        if self._ever_commanded:
-            try:
+            if self._worker.ident is not None:
+                self._worker.join(
+                    timeout=self.config.pulse_duration_s
+                    + self.config.settle_duration_s
+                    + 2
+                )
+            if self._worker.is_alive():
+                raise RuntimeError("payload servo worker did not stop boundedly")
+
+        def restore_rest() -> None:
+            with self._lock:
                 self._servo.value = self._rest_value
-                time.sleep(self.config.settle_duration_s)
-            except Exception as error:
-                self.state.record_error(f"restore payload servo rest position: {error}")
+            time.sleep(self.config.settle_duration_s)
+
         try:
-            self._servo.detach()
-        except Exception as error:
-            self.state.record_error(f"detach payload servo PWM: {error}")
-        try:
-            self._servo.close()
-        except Exception as error:
-            self.state.record_error(f"close payload servo GPIO: {error}")
-        try:
-            self._events.write("servo_session_closed")
-        except Exception as error:
-            self.state.record_error(f"write payload servo close event: {error}")
-        try:
-            self._events.close()
-        except Exception as error:
-            self.state.record_error(f"close payload servo event log: {error}")
-        self._process_lock.close()
+            cleanup("stop payload servo worker", stop_worker)
+            if self._ever_commanded and not self._gpio_closed:
+                cleanup("restore payload servo rest position", restore_rest)
+            with self._lock:
+                if not self._gpio_closed:
+                    cleanup("detach payload servo PWM", self._servo.detach)
+                    self._gpio_closed = cleanup(
+                        "close payload servo GPIO", self._servo.close
+                    )
+            if not self._events_closed:
+                cleanup(
+                    "write payload servo close event",
+                    lambda: self._events.write("servo_session_closed"),
+                )
+                self._events_closed = cleanup(
+                    "close payload servo event log", self._events.close
+                )
+            if self._gpio_closed:
+                released = cleanup(
+                    "release payload servo lock", self._process_lock.close
+                )
+                self._closed = released and self._events_closed
+        finally:
+            # Termination remains a cooperative stop throughout rest/detach and
+            # resource release, including repeated signals during cleanup.
+            self._restore_signal_handlers()
+        if interruption is not None:
+            raise interruption
 
     def manifest(self) -> dict[str, object]:
         return {

@@ -128,6 +128,14 @@ binds the clone to `wlan1`, and keeps the hotspot on `wlan0`. A phone-hotspot
 profile can be supplied instead. USB Ethernet or phone tethering are also
 usable uplinks.
 
+Applying this setup stops and disables the single-radio
+`ai-drone-network.service`; NetworkManager autoconnect then manages both
+interfaces across reboot. The source, cloned uplink and hotspot profiles must
+have distinct names. Do not run the single-radio `auto`/`connect` commands while
+relying on the persistent hotspot. To return to single-radio boot selection,
+run `sudo systemctl enable --now ai-drone-network.service`; this can disconnect
+hotspot SSH when a saved client network is reachable.
+
 Do not rely on virtual AP/client concurrency on the single onboard radio for a
 control network: both roles share airtime and one radio failure removes both
 paths.

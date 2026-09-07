@@ -37,6 +37,8 @@ RUNTIME_FILES = frozenset(
     {
         "README.md",  # Referenced by pyproject.toml during package builds.
         "pyproject.toml",
+        "scripts/ai-drone-network",
+        "scripts/ai-drone-network.service",
         "scripts/pi-safe-upgrade.sh",
         "scripts/setup-pi-dual-network.sh",
         "scripts/setup-pi-hotspot.sh",

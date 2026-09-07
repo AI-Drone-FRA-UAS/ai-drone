@@ -25,7 +25,7 @@
 #      next boot without an operator.
 #
 # It changes nothing about arming, flight modes, or the flight controller, and
-# it verifies that no unit auto-starts anything that talks to the vehicle.
+# it audits known vehicle-facing system unit names for boot activation.
 
 set -euo pipefail
 umask 022
@@ -267,17 +267,21 @@ run systemctl daemon-reload
 note "Recovery unit installed (left disabled; armed by pi-safe-upgrade.sh)"
 
 # --- Safety verification ----------------------------------------------------
-# The Pi must never bring up anything that commands the vehicle on boot.
-echo "Verifying no unit auto-starts vehicle control ..."
-autostart="$(systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
+# This name-based audit covers the maintained entry points and known MAVLink
+# services. Custom unit names and user units need a separate review.
+echo "Checking known vehicle-facing system units for boot activation ..."
+if ! enabled_units="$(systemctl list-unit-files --state=enabled --no-legend)"; then
+    die "Could not inspect enabled system units; autostart audit is incomplete."
+fi
+autostart="$(printf '%s\n' "$enabled_units" \
     | awk '{print $1}' \
-    | grep -Ei 'drone-(control|motor|servo|inspect|picam)|mavlink' \
+    | grep -Ei 'drone-(control|motor|servo|tag-servo-record|inspect|picam)|mavlink' \
     || true)"
 if [[ -n "$autostart" ]]; then
-    die "Refusing to finish: these units would command the vehicle on boot:
+    die "Refusing to finish: these known vehicle-facing system units are enabled at boot:
 $autostart"
 fi
-note "No vehicle-control unit is enabled at boot"
+note "No known vehicle-facing system unit name is enabled at boot"
 
 echo
 echo "Done. Verify with:"

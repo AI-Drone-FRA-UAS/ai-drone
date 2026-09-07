@@ -198,7 +198,15 @@ def publish_snapshot(paths: tuple[Path, Path], repo_root: Path) -> None:
 
     date = paths[0].stem.removeprefix("flywoo-f745-live-")
     subprocess.run(
-        ["git", "commit", "-m", f"Snapshot live drone configuration {date}"],
+        [
+            "git",
+            "commit",
+            "--only",
+            "-m",
+            f"Snapshot live drone configuration {date}",
+            "--",
+            *relative,
+        ],
         cwd=repo_root,
         check=True,
     )
