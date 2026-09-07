@@ -16,6 +16,11 @@ range/flow and relative EKF aiding, an unresolved forward-lidar receive path,
 and a compass pre-arm failure. Recheck hardware before use; a dated result is
 not a continuing health guarantee.
 
+The [consolidation report](state/2026-09-07/consolidation.md) records the shared
+`main` branch, Pi deployment, restored connectivity and remaining teammate
+access-policy change. See [CONTRIBUTING.md](CONTRIBUTING.md) before starting new
+development work.
+
 ## Start here
 
 Install [uv](https://docs.astral.sh/uv/) and create the locked environment:
@@ -41,8 +46,8 @@ For deployment, select the reachable Pi address. This example uses Tailscale;
 when joined to `AI-Drone-Zero`, use `PI_HOST=seb@192.168.4.1`:
 
 ```bash
-PI_HOST=seb@seb-is-pm uv run drone-deploy
-PI_HOST=seb@seb-is-pm uv run drone-deploy --run inspect -- --duration 15
+PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net uv run drone-deploy
+PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net uv run drone-deploy --run inspect -- --duration 15
 ```
 
 Deployment alone starts no task. The inspection requests telemetry and records

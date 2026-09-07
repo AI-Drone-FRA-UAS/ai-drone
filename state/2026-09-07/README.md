@@ -1,5 +1,13 @@
 **Code review and live bench inspection — 7 September 2026**
 
+**Consolidation update:** [repository, Pi deployment and networking cleanup](consolidation.md)
+unifies development on `main`, preserves previous branch tips under archive
+tags, and restores eduroam, USB SSH and the Pi's existing Tailscale identity.
+The revised runtime passes 541 offline tests and two isolated simulator tests;
+an 18:58 CEST disarmed Pi capture confirms camera, FC UART and downward range/flow.
+Shared teammate access still needs the central Tailscale policy addition
+documented in that report.
+
 **Repair update, 17:01 CEST:** [the MTF-01P and GPS-free EKF relative aiding are restored](indoor-repair.md). Five persistent FC settings were repaired and verified through reboot; all pre-arm checks are enabled again. The final repaired software is installed on the Pi; an 8-second disarmed recording verified camera/range/flow and battery 15.57–15.58 V. The Pi clock was corrected. The final offline suite passed 536 tests and both separate simulator tests passed. The MT-15 still has no FC receive data on normal or swapped UART3, and the compass fails its magnetic-field pre-arm check. See the repair report for code fixes, tests, firmware verification and remaining physical work.
 
 **Earlier update, 15:46 CEST:** [FC USB and Pi↔FC UART communication are confirmed](fc-pi-mt15-confirmation.md), with battery16.132 V and the FC disarmed. Despite the separate successful direct-USB MT-15 setup, FC UART3 still receives zero bytes and RNGFND2 remains disabled. The current five-port MAVLink allocation excludes downward UART5, which is emitting valid MSP range/flow packets; FC range/flow health is currently false. No persistent settings were changed in this verification.

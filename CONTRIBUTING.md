@@ -44,7 +44,7 @@ Record that commit in the deployment notes. With the Pi reachable, this command
 synchronizes the runtime and its dependencies without starting a drone task:
 
 ```bash
-PI_HOST=seb@seb-is-pm SSH_CONFIG=/dev/null uv run --locked drone-deploy
+PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net SSH_CONFIG=/dev/null uv run --locked drone-deploy
 ```
 
 Use the appropriate host from [Pi networking](docs/pi-networking.md). Keep
