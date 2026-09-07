@@ -87,7 +87,7 @@ acceptance result are in the
 the Pi. It does not send `PARAM_SET`, change mode, arm, or drive an actuator.
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-config-sync
 ```
 
@@ -103,7 +103,7 @@ parameter-file checksum. To commit exactly the generated pair from a clean
 worktree and push the current branch:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-config-sync --publish
 ```
 

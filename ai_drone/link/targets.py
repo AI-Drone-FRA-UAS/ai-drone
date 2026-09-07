@@ -9,7 +9,8 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-DEFAULT_PI_HOSTNAME = "seb-is-pm"
+# Shared Tailscale nodes require the full MagicDNS name across tailnets.
+DEFAULT_PI_HOSTNAME = "seb-is-pm.tail59e6a4.ts.net"
 DEFAULT_PI_USERNAME = "seb"
 DEFAULT_PI_USB_IP = "192.168.7.2"
 DEFAULT_PI_HOTSPOT_IP = "192.168.4.1"

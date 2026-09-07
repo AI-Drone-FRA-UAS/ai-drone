@@ -56,7 +56,7 @@ uv run drone-inspect --device /dev/ttyACM0 --duration 10
 To inspect through the Pi UART instead, deploy and run the same inspector:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run inspect -- --duration 10
 ```
 

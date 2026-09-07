@@ -49,7 +49,7 @@ neural bounding box.
 Run detection from the developer machine:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run inspect -- --backend auto --tag-size 0.160 --stream
 ```
 

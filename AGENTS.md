@@ -23,7 +23,7 @@
 - On the Pi, use `ai-drone-network status` or `ai-drone-network list`; switch
   with `sudo ai-drone-network auto`, `sudo ai-drone-network connect "PROFILE"`,
   or `sudo ai-drone-network hotspot`.
-- Prefer Tailscale access with `ssh -F /dev/null seb@seb-is-pm` when online.
+- Prefer Tailscale access with `ssh -F /dev/null seb@seb-is-pm.tail59e6a4.ts.net` when online.
 
 ## Hardware safety
 

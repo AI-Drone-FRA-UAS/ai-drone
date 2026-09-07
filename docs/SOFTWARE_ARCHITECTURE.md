@@ -52,8 +52,8 @@ virtual environment with system site packages for apt-installed Picamera2,
 libcamera, gpiozero and native AprilTag. See [the project README](../README.md).
 
 Connection defaults are implemented in `ai_drone.link.targets`: the Pi user is
-`seb`, the Tailscale name is `seb-is-pm`, and the fallback hotspot address is
-`192.168.4.1`. `PI_HOST`, `PI_USER`, `PI_DIR`, `PI_HOSTNAME`, `USB_IFACE` and
+`seb`, the Tailscale name is `seb-is-pm.tail59e6a4.ts.net`, and the fallback
+hotspot address is `192.168.4.1`. `PI_HOST`, `PI_USER`, `PI_DIR`, `PI_HOSTNAME`, `USB_IFACE` and
 `SSH_CONFIG` provide explicit overrides. A USB interface must be identified
 before the host adapter is configured. Use `SSH_CONFIG=/dev/null` for a direct
 Pi link on hosts with a broken SSH configuration. [Pi networking](pi-networking.md)

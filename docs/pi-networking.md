@@ -13,7 +13,7 @@ hotspot, and starting the hotspot disconnects the client network.
 Prefer Tailscale whenever the Pi has an internet uplink:
 
 ```bash
-ssh -F /dev/null seb@seb-is-pm
+ssh -F /dev/null seb@seb-is-pm.tail59e6a4.ts.net
 ```
 
 When the fallback hotspot is active, join `AI-Drone-Zero` and use:
@@ -43,6 +43,13 @@ names and credentials stay in NetworkManager on the Pi and must not be stored
 in this repository.
 
 ## Shared teammate SSH access
+
+Use the full hostname above, or the Pi address shown in the teammate's own
+`tailscale status`. A shared machine can have a different address in the
+recipient's tailnet; `100.84.84.2` is the address observed in the owning
+tailnet. The short name `seb-is-pm` works within the owning tailnet; shared
+teammates need the fully qualified name for MagicDNS. See
+[sharing and MagicDNS](https://tailscale.com/docs/features/sharing#sharing-and-magicdns).
 
 The Pi uses ordinary OpenSSH over Tailscale. A successful device share must
 also be allowed by the tailnet's network policy, and the teammate still needs

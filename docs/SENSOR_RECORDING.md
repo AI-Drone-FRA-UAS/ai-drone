@@ -11,12 +11,12 @@ uv run drone-inspect --duration 15
 From the developer machine:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run inspect -- --duration 15
 ```
 
 If Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, replace
-`seb-is-pm` with the hotspot fallback `192.168.4.1`.
+`seb-is-pm.tail59e6a4.ts.net` with the hotspot fallback `192.168.4.1`.
 
 Camera and MAVLink are independent: either can be unavailable without failing
 the inspection. The output directory contains the files produced by the live

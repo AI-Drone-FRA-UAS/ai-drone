@@ -20,7 +20,7 @@ laptop is joined to `AI-Drone-Zero`, use `PI_HOST=seb@192.168.4.1` instead.
 Test one motor for half a second at 7%:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run motor-test -- \
   --motor 1 \
   --duration 0.5 \
@@ -32,7 +32,7 @@ SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
 After validating motors individually, test all configured motors sequentially:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run motor-test -- \
   --all-motors \
   --duration 0.5 \

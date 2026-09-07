@@ -47,6 +47,12 @@ from ai_drone.link.targets import (
             DEFAULT_PI_HOSTNAME,
             [DEFAULT_PI_HOSTNAME, DEFAULT_PI_HOTSPOT_IP],
         ),
+        (
+            {"PI_HOSTNAME": "drone-pi"},
+            {"drone-pi", DEFAULT_PI_HOTSPOT_IP},
+            "drone-pi",
+            ["drone-pi"],
+        ),
     ],
 )
 def test_deploy_target_uses_common_safe_connection_priority(
@@ -79,6 +85,7 @@ def test_deploy_target_uses_explicit_host_user_and_dir(tmp_path: Path) -> None:
         {
             "HOME": str(tmp_path),
             "PI_HOST": "drone.local",
+            "PI_HOSTNAME": "other-pi",
             "PI_USER": "pilot",
             "PI_DIR": "/srv/ai-drone",
         },
@@ -224,6 +231,7 @@ def test_connection_target_reads_environment() -> None:
     assert target.pi_ip == "10.0.0.2"
     assert target.host_ip == "10.0.0.1"
     assert target.pi_user == "pilot"
+    assert target.pi_hostname == "drone-pi"
     assert target.usb_iface == "Ethernet 4"
     assert target.timeout_seconds == 7
     assert target.ssh_config == "/tmp/ai-drone-ssh-config"
@@ -478,14 +486,23 @@ def test_auto_dry_run_lists_transports_in_priority_order(monkeypatch, capsys) ->
     wifi_at = output.index("2. Pi Wi-Fi AP")
     usb_at = output.index("3. USB cable")
     assert tailscale_at < wifi_at < usb_at
-    assert f"ssh -F {os.devnull} -t seb@seb-is-pm" in output
+    assert f"ssh -F {os.devnull} -t seb@seb-is-pm.tail59e6a4.ts.net" in output
     assert f"ssh -F {os.devnull} -t seb@192.168.4.1" in output
     assert f"ssh -F {os.devnull} -t seb@192.168.7.2" not in output
     assert "Pass --usb-iface" in output
     assert f"nmcli con up {DEFAULT_PI_AP_SSID}" in output
 
 
-def test_auto_connects_over_tailscale_first(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("environment", "expected_host"),
+    [
+        ({}, "seb-is-pm.tail59e6a4.ts.net"),
+        ({"PI_HOSTNAME": "drone-pi"}, "drone-pi"),
+    ],
+)
+def test_auto_connects_over_tailscale_first(
+    monkeypatch, environment: dict[str, str], expected_host: str
+) -> None:
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
@@ -495,10 +512,10 @@ def test_auto_connects_over_tailscale_first(monkeypatch) -> None:
     monkeypatch.setattr(connect.platform, "system", lambda: "Linux")
     monkeypatch.setattr(connect.subprocess, "run", fake_run)
 
-    result = connect.run([], environ={"TIMEOUT_SECONDS": "1"})
+    result = connect.run([], environ={"TIMEOUT_SECONDS": "1", **environment})
 
     assert result == 0
-    assert ["ssh", "-F", os.devnull, "-t", "seb@seb-is-pm"] in calls
+    assert ["ssh", "-F", os.devnull, "-t", f"seb@{expected_host}"] in calls
     # Tailscale won, so no Wi-Fi join and no USB configuration happened.
     assert not any(cmd[:1] == ["nmcli"] for cmd in calls)
     assert not any(cmd[:2] == ["sudo", "ip"] for cmd in calls)

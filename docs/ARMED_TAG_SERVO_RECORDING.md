@@ -35,7 +35,7 @@ After substituting the measured values, this stops after three **distinct tag
 IDs have each completed** one pulse and returned to rest:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run tag-servo-record -- \
   --all-tags --stop-after 3 \
   --active-us <MEASURED_ACTIVE_US> --rest-us <MEASURED_REST_US> \
@@ -53,7 +53,7 @@ if it stays visible or disappears and reappears.
 Omit `--stop-after` and `--duration`; press Ctrl-C to stop:
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
+SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
   uv run drone-deploy --run tag-servo-record -- \
   --tag-id 0 --tag-id 1 --tag-id 2 \
   --active-us <MEASURED_ACTIVE_US> --rest-us <MEASURED_REST_US> \
