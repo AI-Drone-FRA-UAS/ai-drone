@@ -1,132 +1,105 @@
 # AI Drone
 
-Software and guarded bench tools for a Raspberry Pi Zero 2 W companion
-computer, an ArduPilot flight controller, an IMX500 camera, range/optical-flow
-sensing, motors, and a payload servo.
+Software and guarded tools for a Raspberry Pi Zero 2 W companion, a FlywooF745
+ArduPilot controller, downward MTF-01P range/optical flow, a forward MT-15 lidar,
+an IMX500 camera, and a payload servo.
 
-Keep the aircraft disarmed unless an actuator or flight test has been
-explicitly authorized and all physical prerequisites have been met. Use the
-newest capture under `state/` and parameter dump under `params/` for live
-configuration; evergreen documentation deliberately does not claim the current
-wiring, mounting, or connection state.
+The implemented flight path is a bounded GPS-free takeoff, optical-flow Loiter
+hold, and landing. Room navigation and calibrated tag approach remain planned
+work. Keep live inspection disarmed; actuator and flight commands require
+explicit authorization and their physical prerequisites.
 
-## Setup
+The latest dated result is the [7 September 2026 repair and verification
+report](state/2026-09-07/indoor-repair.md), with its [parameter
+snapshot](params/flywoo-f745-live-2026-09-07.param). It records restored downward
+range/flow and relative EKF aiding, an unresolved forward-lidar receive path,
+and a compass pre-arm failure. Recheck hardware before use; a dated result is
+not a continuing health guarantee.
+
+## Start here
 
 Install [uv](https://docs.astral.sh/uv/) and create the locked environment:
 
 ```bash
-uv sync
+uv sync --frozen
+uv run drone-connect --help
+uv run drone-inspect --help
 ```
 
-Install development tools when needed:
+Python 3.11–3.13 is supported. The Pi uses Debian Python 3.13 with apt-installed
+Picamera2/libcamera bindings; the laptop environment does not need Pi hardware
+packages.
+
+The helpers try Tailscale, hotspot, then Pi USB Ethernet:
 
 ```bash
-uv sync --group dev
+uv run drone-connect
+uv run drone-connect --transport hotspot
 ```
 
-Python 3.11–3.13 is supported. The Pi uses Debian Python 3.13 so it can share
-apt-installed Picamera2 and libcamera bindings.
+For deployment, select the reachable Pi address. This example uses Tailscale;
+when joined to `AI-Drone-Zero`, use `PI_HOST=seb@192.168.4.1`:
+
+```bash
+PI_HOST=seb@seb-is-pm uv run drone-deploy
+PI_HOST=seb@seb-is-pm uv run drone-deploy --run inspect -- --duration 15
+```
+
+Deployment alone starts no task. The inspection requests telemetry and records
+available camera/sensor data without arming or moving anything. A battery may
+be needed to power sensors. See [networking](docs/pi-networking.md) and the
+separate procedures for [Pi USB Ethernet](docs/RPI_ZERO2W_USB_SSH_SETUP.md) and
+[direct FC USB](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md).
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `drone-connect` | Open Pi SSH over Tailscale, hotspot, or USB |
+| `drone-connect` | Open Pi SSH through a selected or available transport |
 | `drone-deploy` | Synchronize the runtime and optionally run an allowlisted task |
-| `drone-inspect` | Report and save all available disarmed camera/MAVLink streams |
-| `drone-servo` | Guarded direct-BCM12 payload-servo bench test |
-| `drone-tag-servo-record` | Explicit armed-flight tag recorder and bounded BCM12 pulses |
-| `drone-motor-test` | Guarded, low-power, propeller-off ArduPilot motor check |
-| `drone-control hover` | Guarded takeoff, timed hold, and landing |
-| `drone-config-sync` | Capture the ArduPilot configuration |
+| `drone-inspect` | Record available disarmed camera and FC sensor streams |
+| `drone-config-sync` | Capture a verified disarmed FC configuration |
+| `drone-servo` | Guarded direct-BCM12 servo bench test |
+| `drone-motor-test` | Guarded low-power, propeller-off motor check |
+| `drone-control hover` | Guarded GPS-free takeoff, Loiter hold, and landing |
+| `drone-tag-servo-record` | Explicit armed-flight tag recording and bounded servo pulses |
 
-Run `uv run <command> --help` for authoritative options. Pi-only commands are
-normally started through `drone-deploy` or from a Pi shell.
+Use `uv run <command> --help` for authoritative options. Before any actuation,
+follow the relevant [operating procedure](docs/index.md#operation). In
+particular, normal arming checks must pass; simulation does not establish live
+flight readiness, mechanical servo travel, or an emergency-control arrangement.
 
-## Connect and deploy
+## Documentation and evidence
 
-Prefer Tailscale:
+[The documentation map](docs/index.md) separates maintained procedures from
+dated observations:
 
-```bash
-ssh -F /dev/null seb@seb-is-pm
-```
+- **Hardware and configuration:** [inventory](docs/drone-project.md),
+  [FC wiring and parameters](docs/DRONE_CONFIGURATION.md), [firmware](firmware/README.md).
+- **Operation:** [sensor recording](docs/SENSOR_RECORDING.md),
+  [GPS-free hover](docs/PI_MAVLINK_CONTROL.md), [planned AprilTag mission](docs/APRILTAG_MISSION.md).
+- **History:** dated captures in `state/` and `params/`,
+  [historical notes](notes/README.md), and [retired code](attic/README.md).
 
-When the Pi is serving its fallback hotspot, join `AI-Drone-Zero` and use:
-
-```bash
-ssh -F /dev/null seb@192.168.4.1
-```
-
-The connection helpers try Tailscale, hotspot, then USB:
-
-```bash
-uv run drone-connect
-uv run drone-connect --transport hotspot
-uv run drone-connect --transport usb
-```
-
-USB setup requires `USB_IFACE` to identify the adapter that appeared when the
-Pi was connected. See [USB SSH setup](docs/RPI_ZERO2W_USB_SSH_SETUP.md).
-
-Deploy without starting a task:
-
-```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm uv run drone-deploy
-```
-
-See [Pi networking](docs/pi-networking.md) for boot selection and manual
-switching commands.
-
-## Safety boundary
-
-The following commands are read-only while the vehicle remains disarmed:
-
-```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm \
-  uv run drone-deploy --run inspect -- --duration 15
-```
-
-The flight battery may be needed to power attached sensors; these commands do
-not power, arm, or move the aircraft.
-
-Before any servo or motor test, remove all propellers, secure the frame, verify
-power and wiring, and follow the command's confirmation gates. The motor
-utility also requires ArduCopter 4.7's `ARMING_SKIPCHK=0` (no checks skipped)
-and resolved pre-arm failures. Follow
-the [bench motor procedure](docs/BENCH_MOTOR_TEST.md).
-
-No live `GUIDED_NOGPS -> LOITER -> LAND` sequence has been validated. Historical
-AltHold attempts provide only brief or inconclusive lift evidence and do not
-prove Loiter or a safe autonomous flight. Flight work must progress through
-SITL, propeller-off checks, calibrated sensors, and restrained tests. See
-[MAVLink control](docs/PI_MAVLINK_CONTROL.md).
+Raw recordings and local research/build artifacts remain under ignored
+`artifacts/`; they are not automatically included in a Git checkout. Project
+drone captures must never be replaced with another aircraft's configuration.
 
 ## Development checks
 
 ```bash
-uv run --group dev ruff format --check .
-uv run --group dev ruff check .
-uv run --group dev ty check .
-uv run --group dev pytest -q
-uv run --group dev lint-imports
-uv run --group dev deptry .
+uv sync --frozen --group dev
+uv run --frozen --group dev ruff format --check .
+uv run --frozen --group dev ruff check .
+uv run --frozen --group dev ty check .
+uv run --frozen --group dev pytest -q
+uv run --frozen --group dev lint-imports
+uv run --frozen --group dev deptry .
 git diff --check
 ```
 
-## Documentation
-
-- [Hardware inventory](docs/drone-project.md)
-- [Flight-controller configuration](docs/DRONE_CONFIGURATION.md)
-- [ArduCopter 4.7 no-GPS Loiter review](docs/ARDUCOPTER_4_7_NOGPS_LOITER.md)
-- [MAVLink control and staged flight tests](docs/PI_MAVLINK_CONTROL.md)
-- [Sensor recording and wiring](docs/SENSOR_RECORDING.md)
-- [AprilTag mission architecture](docs/APRILTAG_MISSION.md)
-- [Armed AprilTag/servo recorder](docs/ARMED_TAG_SERVO_RECORDING.md)
-- [Pi networking](docs/pi-networking.md)
-- [Direct flight-controller USB connection](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md)
-- [Pi USB SSH](docs/RPI_ZERO2W_USB_SSH_SETUP.md)
-- [Pi power-loss resilience](docs/PI_POWER_RESILIENCE.md)
-- [Guarded motor test](docs/BENCH_MOTOR_TEST.md)
-
-Dated hardware observations belong under `state/`; historical bring-up notes
-belong under `notes/`; retired implementation material belongs under `attic/`.
+The two opt-in simulator tests need the exact external ArduPilot checkout and
+SITL binary; see the [pinned simulator acceptance
+gate](docs/ARDUCOPTER_4_7_NOGPS_LOITER.md#exact-pinned-sitl-acceptance-gate).
+Contributor architecture and hardware boundaries are documented in
+[CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md).

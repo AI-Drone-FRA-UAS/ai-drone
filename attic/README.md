@@ -20,8 +20,9 @@ flight mode was subsequently retired as well.
   regions.
 - `tests/test_nearest_person.py`, `tests/test_picam_cli.py` — its offline tests.
 
-These files import `ai_drone.vision.stream`, which is still present and used
-by `drone-apriltag`.
+These files import `ai_drone.vision.stream`, which remains in the maintained
+`drone-inspect` streaming path. The former `drone-apriltag` command is no longer
+an entry point.
 
 ### Person following (retired 2026-08-19)
 
@@ -40,8 +41,8 @@ the proportional follow law.
 What was deliberately **not** retired: the battery, altitude-ceiling, and
 telemetry-staleness guards that used to live on `AutonomousFollower`. They are
 generic flight safety, so they moved to `ai_drone/flight/guards.py` and are now
-applied by `drone-control hover` and `drone-control velocity-test`, which
-previously had no battery or ceiling guard at all.
+applied by the maintained `drone-control hover` path. The former
+`drone-control velocity-test` command is no longer available.
 
 Retiring this also removed the `modlib` dependency from the `raspi` group; it
 was the only importer. Restoring the capability means restoring that entry.

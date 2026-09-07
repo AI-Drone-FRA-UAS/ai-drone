@@ -34,12 +34,17 @@ Without a camera calibration, tags are decoded but no metric pose is reported.
 Supply `--calibration FILE --tag-size METRES` only after rigid mounting, focus,
 and calibration at the selected resolution.
 
-## Verified connection topology
+## Documented connections
+
+The wiring and UART allocation rules live in
+[flight-controller configuration](DRONE_CONFIGURATION.md). Confirm the current
+physical build and component health with a fresh inspection; this table is not
+a live connection result.
 
 | Device/data | Physical connection | What the Pi records |
 | --- | --- | --- |
 | IMX500 AI Camera | Directly to Pi CSI connector | H.264 video, frame metadata, and tag detections |
-| MicoAir MTF-01P | Flight controller UART5 (`SERIAL5`, MAVLink1, 115200) | Range and optical flow forwarded by ArduPilot over the companion link |
+| MicoAir MTF-01P | Flight controller UART5 (`SERIAL5`, MAVLink1, 115200) | FC-published range and optical flow over the companion link |
 | Flight-controller IMU, barometer, compass, GPS, battery, EKF and RC state | Directly to the FlywooF745 | Requested MAVLink telemetry over UART4 |
 | Raspberry Pi companion link | Pi GPIO14/15 `/dev/serial0` to FC R4/T4 (`SERIAL4`, MAVLink2, 115200) | All FC telemetry in `.tlog` and `.jsonl` |
 | Servo | Separate guarded utility targets Pi BCM12 directly | Not driven by this program; FC output telemetry may still be recorded |
@@ -50,36 +55,24 @@ the flight battery, including the MTF-01P, must already be powered.
 
 ## Forward MicoAir MT-15
 
-The MT-15 is physically connected to the flight controller but currently sends
-no confirmed telemetry. Until a forward `DISTANCE_SENSOR` stream arrives,
-`drone-inspect` reports it as `no_data` and flight logic must not depend on it.
+The MT-15 is the forward sensor. Its native ArduPilot MAVLink output was
+verified through a USB-UART adapter on September 7, but the subsequent FC
+receive path remained unverified. See the [direct sensor configuration
+record](../state/2026-09-07/mt15-direct-usb-configuration.md) and the later
+[integration repair result](../state/2026-09-07/indoor-repair.md).
 
-Proposed wiring, to be verified against the exact FC board revision before
-soldering:
+The inspector distinguishes forward `DISTANCE_SENSOR.orientation=0` from
+downward orientation25. Component health and counts require messages from the
+selected flight controller; raw telemetry retains other sources for diagnosis.
+Without a confirmed FC-published forward stream, the component is `no_data` and
+flight logic must not depend on it. Sensor ID alone cannot distinguish these
+two sensors: the tested MT-15 firmware emits MAVLink ID0 despite saving ID1.
 
-```text
-MT-15 5V  -> regulated FC 5V
-MT-15 GND -> FC GND
-MT-15 TX  -> selected FC RX
-MT-15 RX  -> selected FC TX
-```
-
-MicoAir sensors use 3.3 V UART logic. Configure the MT-15 through MicoAssistant
-for ArduPilot MAVLink at 115200, forward orientation, and a MAVLink system ID
-different from 1. After selecting the port, the likely starting point is:
-
-```text
-SERIALx_PROTOCOL = 1
-SERIALx_BAUD = 115
-SERIALx_OPTIONS = 1024
-RNGFND2_TYPE = 10
-RNGFND2_ORIENT = 0
-```
-
-Do not apply these parameters until the sensor is physically connected and its
-outgoing `DISTANCE_SENSOR.orientation` has been confirmed. ArduPilot's MAVLink
-rangefinder backend accepts a measurement only when the packet orientation
-matches `RNGFNDx_ORIENT`.
+Use the [canonical wiring and configuration guide](DRONE_CONFIGURATION.md#sensors)
+before changing parameters. It explains RX3 versus the old analog VTX cable,
+the five-channel MAVLink limit, and the need to preserve the downward sensor
+and Pi connections. UART allocation and `MAVn_OPTIONS` mapping must be reviewed
+together; a generic serial-port recipe is insufficient.
 
 For use as an avoidance source, the firmware must expose and correctly
 configure the applicable proximity parameters. Confirm firmware support before

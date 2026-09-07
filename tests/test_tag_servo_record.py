@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+import ai_drone.capture.workers as capture_workers
 import ai_drone.cli.record as record_cli
 from ai_drone.cli.record import (
     AnalysisFrame,
@@ -752,7 +753,7 @@ def test_disarm_closes_gpio_gate_before_blocking_telemetry_log(tmp_path, monkeyp
     logging_disarm = threading.Event()
     release_logging = threading.Event()
     original_event = session._events.write
-    original_telemetry = record_cli.write_json_line
+    original_telemetry = capture_workers.write_json_line
 
     def event_write(event, **fields):
         if event == "servo_pulse_starting":
@@ -766,7 +767,7 @@ def test_disarm_closes_gpio_gate_before_blocking_telemetry_log(tmp_path, monkeyp
         return original_telemetry(handle, record)
 
     monkeypatch.setattr(session._events, "write", event_write)
-    monkeypatch.setattr(record_cli, "write_json_line", telemetry_write)
+    monkeypatch.setattr(capture_workers, "write_json_line", telemetry_write)
     connection = _HeartbeatQueueConnection()
     window = CaptureWindow(None)
     window.begin()

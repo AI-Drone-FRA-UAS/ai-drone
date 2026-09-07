@@ -202,10 +202,11 @@ def test_disarm_requires_new_heartbeat_not_cached_or_queued_state(
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
     queue = [_message("HEARTBEAT", base_mode=0)] if queued_disarmed else []
 
-    def receive(*, type, blocking, timeout=None):
+    def receive(*, type, blocking, timeout: float | None = None):
         if not blocking and queue:
             return queue.pop()
         if blocking:
+            assert timeout is not None
             clock[0] += timeout
         return None
 

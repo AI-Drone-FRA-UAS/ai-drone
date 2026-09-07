@@ -18,6 +18,7 @@ name = Command adapters sit above shared MAVLink and link logic
 type = layers
 layers =
     ai_drone.cli
+    ai_drone.capture
     ai_drone.mavlink
     ai_drone.link
 
@@ -25,6 +26,7 @@ layers =
 name = Nothing outside ai_drone.cli may import from it
 type = forbidden
 source_modules =
+    ai_drone.capture
     ai_drone.config
     ai_drone.flight
     ai_drone.link
@@ -38,6 +40,14 @@ source_modules =
 forbidden_modules =
     ai_drone.cli
 
+[importlinter:contract:capture-layers]
+name = Capture workers use reporting and state without importing the command adapter
+type = layers
+layers =
+    ai_drone.capture.workers
+    ai_drone.capture.reporting
+    ai_drone.capture.state
+
 [importlinter:contract:shared-leaves]
 name = Shared leaves must not import a concern package
 type = forbidden
@@ -49,6 +59,7 @@ source_modules =
     ai_drone.validation
 forbidden_modules =
     ai_drone.cli
+    ai_drone.capture
     ai_drone.config
     ai_drone.flight
     ai_drone.link

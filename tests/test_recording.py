@@ -15,6 +15,9 @@ import numpy as np
 import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+import ai_drone.capture.reporting as capture_reporting
+import ai_drone.capture.state as capture_state
+import ai_drone.capture.workers as capture_workers
 import ai_drone.cli.record as inspect_cli
 from ai_drone.cli.record import (
     MANUAL_FLIGHT_RECORDING_CONFIRMATION,
@@ -53,6 +56,19 @@ from ai_drone.vision.apriltags import (
     TagDetection,
     TagPose,
 )
+
+
+def test_record_cli_preserves_capture_imports() -> None:
+    assert inspect_cli.CaptureState is capture_state.CaptureState
+    assert inspect_cli.CaptureWindow is capture_state.CaptureWindow
+    assert inspect_cli.AnalysisFrame is capture_state.AnalysisFrame
+    assert inspect_cli.DetectionObserver is capture_state.DetectionObserver
+    assert inspect_cli.TelemetryWorker is capture_workers.TelemetryWorker
+    assert inspect_cli.DetectionWorker is capture_workers.DetectionWorker
+    assert inspect_cli._component_report is capture_reporting._component_report
+    assert (
+        inspect_cli._observe_sensor_message is capture_reporting._observe_sensor_message
+    )
 
 
 def test_create_recording_paths_creates_expected_dataset(tmp_path) -> None:
@@ -349,7 +365,7 @@ def test_detection_worker_records_pose_rejection_then_recovers(
             observed.append((frame.frame_index, [item.tag_id for item in detections]))
             assert len(tag_records) == (2 if frame.frame_index == 0 else 1)
 
-    monkeypatch.setattr(inspect_cli, "estimate_pose", pose)
+    monkeypatch.setattr(capture_workers, "estimate_pose", pose)
     frames: queue.Queue[AnalysisFrame | None] = queue.Queue()
     for item in (_analysis_frame(0), _analysis_frame(1), None):
         frames.put(item)

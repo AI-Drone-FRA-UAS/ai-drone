@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WIFI_INTERFACE="${AI_DRONE_WIFI_INTERFACE:-wlan0}"
-PREFERRED_PROFILE="${AI_DRONE_PREFERRED_PROFILE:-Xyz}"
+PREFERRED_PROFILE="${AI_DRONE_PREFERRED_PROFILE:-eduroam}"
 HOTSPOT_PROFILE="${AI_DRONE_HOTSPOT_PROFILE:-Hotspot}"
 
 usage() {
@@ -10,7 +10,7 @@ usage() {
 Usage: ai-drone-network COMMAND [PROFILE]
 
 Commands:
-  auto                 Try Xyz, then other saved auto-connect Wi-Fi profiles,
+  auto                 Try eduroam, then other saved auto-connect Wi-Fi profiles,
                        and start AI-Drone-Zero if none can be reached.
   connect PROFILE      Connect to one specific saved Wi-Fi profile.
   hotspot              Start the AI-Drone-Zero hotspot.

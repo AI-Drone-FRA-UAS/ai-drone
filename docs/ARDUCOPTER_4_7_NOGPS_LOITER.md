@@ -8,9 +8,12 @@ aircraft and is not an upload source.
 
 The intended first live mission is deliberately small: take off to 0.5 m,
 wait for a flow-backed relative position, hold Loiter briefly, and land. The
-companion has a hard 0.8 m software ceiling. The aircraft has only a downward
-rangefinder; there is no forward-facing lidar and this design does not claim
-forward obstacle detection or avoidance.
+companion has a hard 0.8 m software ceiling. The August 24–25 capture and the
+SITL acceptance path use only the downward rangefinder. A forward MT-15 was
+configured separately on September 7, but its FC receive path remains
+unverified. See the [later repair result](../state/2026-09-07/indoor-repair.md)
+for that integration and the current sensor findings. This flight path does
+not claim forward obstacle detection or avoidance.
 
 SITL is an acceptance gate for the firmware configuration and deployable
 control path. It does not by itself authorize a propeller-on flight or validate
@@ -326,8 +329,9 @@ loaded wholesale into 4.7. The production controller now checks
 ## Exact FlywooF745 firmware build and verification gate
 
 A plain FlywooF745 build is not suitable for this aircraft's required flight
-path. The installed 4.7 image and the board's flash-constrained feature
-selection omitted EKF3 optical-flow fusion and `GUIDED_NOGPS`. Firmware version
+path. The image captured before the August 25 replacement and the board's
+flash-constrained feature selection omitted EKF3 optical-flow fusion and
+`GUIDED_NOGPS`. Firmware version
 `4.7.0` and Git identity `1511f271` alone therefore do not prove that two
 artifacts have the same capabilities.
 
@@ -348,20 +352,22 @@ only relevant external sensor paths. A comparison of the captured resolved
 ROMFS definition with the candidate's resolved `hw.dat` found only the two
 changes above.
 
-Build from the exact initialized ArduPilot checkout. The local firmware build
+Build from the exact initialized ArduPilot checkout. The examples below use
+this workstation's `/home/abaris/drone/` parent directory; adjust both checkout
+paths together on another machine. The local firmware build
 image uses the official GNU Arm Embedded
 `gcc-arm-none-eabi-10-2020-q4-major` toolchain downloaded from ArduPilot's
 `Tools/STM32-tools` firmware archive; the SITL-only image has no ARM compiler:
 
 ```bash
-cd /home/abaris/ardupilot
+cd /home/abaris/drone/ardupilot
 test "$(git rev-parse HEAD)" = \
   1511f27194f1dcc3728270883047bdf022b3fd53
 git submodule update --init --recursive
 
 podman run --rm --userns=keep-id \
-  -v /home/abaris/ardupilot:/ardupilot \
-  -v /home/abaris/ai-drone:/config:ro \
+  -v /home/abaris/drone/ardupilot:/ardupilot \
+  -v /home/abaris/drone/ai-drone:/config:ro \
   localhost/ardupilot-firmware:4.7.0 \
   bash -lc './waf configure --board FlywooF745 \
     --extra-hwdef=/config/firmware/FlywooF745-nogps-loiter-extra.hwdef && \
@@ -375,20 +381,20 @@ firmware gate then correctly refuses to fly. The deployable build must report
 `1511f271` both in APJ metadata and in `AUTOPILOT_VERSION` after flashing.
 
 The output is
-`/home/abaris/ardupilot/build/FlywooF745/bin/arducopter.apj`. Verify the linked
+`/home/abaris/drone/ardupilot/build/FlywooF745/bin/arducopter.apj`. Verify the linked
 ELF rather than trusting source defines or build output alone:
 
 ```bash
-cd /home/abaris/ai-drone
+cd /home/abaris/drone/ai-drone
 UV_CACHE_DIR=/tmp/uv-cache \
   uv run --group dev python scripts/verify_ardupilot_firmware.py \
-    --ardupilot-root /home/abaris/ardupilot --nm nm
+    --ardupilot-root /home/abaris/drone/ardupilot --nm nm
 
 sha256sum \
-  /home/abaris/ardupilot/build/FlywooF745/bin/arducopter \
-  /home/abaris/ardupilot/build/FlywooF745/bin/arducopter.bin \
-  /home/abaris/ardupilot/build/FlywooF745/bin/arducopter.apj \
-  /home/abaris/ardupilot/build/FlywooF745/hw.dat \
+  /home/abaris/drone/ardupilot/build/FlywooF745/bin/arducopter \
+  /home/abaris/drone/ardupilot/build/FlywooF745/bin/arducopter.bin \
+  /home/abaris/drone/ardupilot/build/FlywooF745/bin/arducopter.apj \
+  /home/abaris/drone/ardupilot/build/FlywooF745/hw.dat \
   firmware/FlywooF745-nogps-loiter-extra.hwdef
 ```
 
@@ -436,8 +442,8 @@ Build that simulator artifact with:
 
 ```bash
 podman run --rm --userns=keep-id \
-  -v /home/abaris/ardupilot:/ardupilot \
-  -v /home/abaris/ai-drone:/config:ro \
+  -v /home/abaris/drone/ardupilot:/ardupilot \
+  -v /home/abaris/drone/ai-drone:/config:ro \
   localhost/ardupilot-sitl:4.7.0 \
   bash -lc './waf configure --board sitl \
     --extra-hwdef=/config/firmware/sitl-nogps-loiter-extra.hwdef && \
@@ -514,8 +520,8 @@ LAND, touched down at 0.148 m/s, and disarmed.
 Run the full acceptance gate with:
 
 ```bash
-cd /home/abaris/ai-drone
-ARDUPILOT_ROOT=/home/abaris/ardupilot \
+cd /home/abaris/drone/ai-drone
+ARDUPILOT_ROOT=/home/abaris/drone/ardupilot \
   UV_CACHE_DIR=/tmp/uv-cache \
   uv run --group dev pytest -m sitl -vv -s
 ```

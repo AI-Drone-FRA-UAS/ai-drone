@@ -1,7 +1,7 @@
 # Raspberry Pi networking
 
 The Pi uses one onboard Wi-Fi interface, `wlan0`. At boot,
-`ai-drone-network.service` tries the preferred saved profile `Xyz`, then other
+`ai-drone-network.service` tries the preferred saved profile `eduroam`, then other
 saved auto-connect client profiles, and finally starts the `AI-Drone-Zero`
 fallback hotspot.
 
@@ -38,7 +38,7 @@ sudo ai-drone-network connect "PROFILE"
 sudo ai-drone-network hotspot
 ```
 
-`auto` tries `Xyz`, other saved auto-connect profiles, then `Hotspot`. Profile
+`auto` tries `eduroam`, other saved auto-connect profiles, then `Hotspot`. Profile
 names and credentials stay in NetworkManager on the Pi and must not be stored
 in this repository.
 

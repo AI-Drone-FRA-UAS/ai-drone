@@ -1,0 +1,345 @@
+{
+  "baseline": {
+    "lines": 1884,
+    "note": "Snapshot taken immediately before this extraction, including the preceding September 7 repairs.",
+    "path": "ai_drone/cli/record.py",
+    "sha256": "58e505bdc4c1cbc172f80488e420e0de04178f8312473be74e3b3aa4f8c556ac"
+  },
+  "checked_utc": "2026-09-07T15:47:06.129397+00:00",
+  "files": [
+    {
+      "lines": 1348,
+      "path": "ai_drone/cli/record.py",
+      "sha256": "daf9058ce3546a628e7e4bc1e11cbcc1835e7dcd45aeaa5be55301df8cdfbbca"
+    },
+    {
+      "lines": 1,
+      "path": "ai_drone/capture/__init__.py",
+      "sha256": "9eb34089a49ec9f9d7b762dc7956bdeb0927525d195ccf0c603a42dc4d5eb0d3"
+    },
+    {
+      "lines": 178,
+      "path": "ai_drone/capture/reporting.py",
+      "sha256": "c693a81acd6d786afd4f9a68b24bebcdcebcdb772d53b2f80c44b57e514a7ad0"
+    },
+    {
+      "lines": 142,
+      "path": "ai_drone/capture/state.py",
+      "sha256": "e45a85419d2e5ba4a79f63508ca228dda9448c251a47be845b321d7b2eef260f"
+    },
+    {
+      "lines": 281,
+      "path": "ai_drone/capture/workers.py",
+      "sha256": "d7a82ddb2f192bbf04eb1e681e6898c0cda12a3995a06554782d3872e32860d1"
+    }
+  ],
+  "function_class_comparisons": [
+    {
+      "after_line": 134,
+      "after_path": "ai_drone/capture/state.py",
+      "ast_identical": true,
+      "ast_sha256": "c3129d7aef14df525853800f282cc3eec8833a45183390a1d66fc0a44c9b428c",
+      "before_line": 67,
+      "kind": "ClassDef",
+      "name": "DetectionObserver"
+    },
+    {
+      "after_line": 79,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "1d136838a88da1a8d8e873deda00ec9141fa4397ca1d177fcbe0af72a792952b",
+      "before_line": 78,
+      "kind": "FunctionDef",
+      "name": "_parser"
+    },
+    {
+      "after_line": 171,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "7e5b58b9c7fc6c733e0055d903bdd4feb894b3dc5eab892faafbe044020d9810",
+      "before_line": 170,
+      "kind": "FunctionDef",
+      "name": "_validate_args"
+    },
+    {
+      "after_line": 18,
+      "after_path": "ai_drone/capture/state.py",
+      "ast_identical": true,
+      "ast_sha256": "55ff913c0fac1201a456a7345c1a44a5f1cb7dda610a421bd0c6cc24fe11da78",
+      "before_line": 227,
+      "kind": "ClassDef",
+      "name": "CaptureState"
+    },
+    {
+      "after_line": 89,
+      "after_path": "ai_drone/capture/state.py",
+      "ast_identical": true,
+      "ast_sha256": "8d811bc288aa3de146cff1978f11009c16475b71dab54976d2fdabc1bc49ed71",
+      "before_line": 298,
+      "kind": "ClassDef",
+      "name": "CaptureWindow"
+    },
+    {
+      "after_line": 124,
+      "after_path": "ai_drone/capture/state.py",
+      "ast_identical": true,
+      "ast_sha256": "a744eac4d4fb10cc49ee5e28faeda43bea37f94595b0eeb177ffcf5d19b04e53",
+      "before_line": 333,
+      "kind": "ClassDef",
+      "name": "AnalysisFrame"
+    },
+    {
+      "after_line": 31,
+      "after_path": "ai_drone/capture/workers.py",
+      "ast_identical": true,
+      "ast_sha256": "8a664be1315bae267f216fb42011041b696853575b77142c4ae2d4c9fae55b8b",
+      "before_line": 343,
+      "kind": "ClassDef",
+      "name": "TelemetryWorker"
+    },
+    {
+      "after_line": 157,
+      "after_path": "ai_drone/capture/workers.py",
+      "ast_identical": true,
+      "ast_sha256": "66ef93ce0118d6bb3eb41e494747b095186c799ff9277c15c71b8f3b69be32dc",
+      "before_line": 469,
+      "kind": "ClassDef",
+      "name": "DetectionWorker"
+    },
+    {
+      "after_line": 14,
+      "after_path": "ai_drone/capture/reporting.py",
+      "ast_identical": true,
+      "ast_sha256": "41971ad57015bcedec4554916de1d6caf22528d274a2473d5b7e846e0d86f193",
+      "before_line": 596,
+      "kind": "FunctionDef",
+      "name": "_observe_sensor_message"
+    },
+    {
+      "after_line": 39,
+      "after_path": "ai_drone/capture/reporting.py",
+      "ast_identical": true,
+      "ast_sha256": "899e67ce21e6a584494b570ce701eab2c60a0df430cfdd8a55e0ceeae7549ca3",
+      "before_line": 621,
+      "kind": "FunctionDef",
+      "name": "_downward_range_summary"
+    },
+    {
+      "after_line": 227,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "d67613cd9c9be8c54e374c1736f63c7a4831ef62b72ea6ec1c0e55fb3299c615",
+      "before_line": 652,
+      "kind": "FunctionDef",
+      "name": "_stop_detection_worker"
+    },
+    {
+      "after_line": 264,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "63467e37aead0d26b764d25fe2c2cf3d76111489c3ec3412596ca58fd6ded546",
+      "before_line": 689,
+      "kind": "FunctionDef",
+      "name": "_cleanup_action"
+    },
+    {
+      "after_line": 277,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "7f10920302c6d213b96199c07915bb985aa4a463589a014d1d93218a7b845248",
+      "before_line": 702,
+      "kind": "FunctionDef",
+      "name": "_cleanup_camera"
+    },
+    {
+      "after_line": 297,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "c2f0fd6d489fc1e31a9679675e9c7448de8a12991357a6bdfd5d822e5946af9a",
+      "before_line": 722,
+      "kind": "FunctionDef",
+      "name": "_join_telemetry_worker"
+    },
+    {
+      "after_line": 303,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "d69f78eb6efd27b3a236fb2ba9ba42c25ce3dc03dc87599f1f2e24333f6fb00a",
+      "before_line": 728,
+      "kind": "FunctionDef",
+      "name": "_stop_capture_workers"
+    },
+    {
+      "after_line": 323,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "4e8243748727ad83dd7d29f0b020421c47d23d1160292233297d80dea3b26281",
+      "before_line": 748,
+      "kind": "FunctionDef",
+      "name": "_write_preview_frame"
+    },
+    {
+      "after_line": 333,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "fe5130cb63ea848321aad1142e68d7cfc1bcd04e8853c42ceba43e865b252b95",
+      "before_line": 758,
+      "kind": "FunctionDef",
+      "name": "_cleanup_mavlink_connection"
+    },
+    {
+      "after_line": 357,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "3ba65ec964dd75ab22a4676bad933808ff14d6f5d9c95ad03e0df6e542b1e269",
+      "before_line": 782,
+      "kind": "FunctionDef",
+      "name": "_sync_existing_file"
+    },
+    {
+      "after_line": 366,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "2bb421e905634c506d0fc7dcd53a2620625f7180e12372dd037df261954cf444",
+      "before_line": 791,
+      "kind": "FunctionDef",
+      "name": "_cleanup_capture"
+    },
+    {
+      "after_line": 426,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "c65bbc4af4d9b19ccefd4c427a16356044ad78ac56e09fd38c32c719fe14d750",
+      "before_line": 851,
+      "kind": "FunctionDef",
+      "name": "_start_capture_epoch"
+    },
+    {
+      "after_line": 450,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "6d9d2a93e05efd966e23ac27716445ba66e94c183136358801033110379d41a4",
+      "before_line": 875,
+      "kind": "FunctionDef",
+      "name": "_raise_if_startup_stopped"
+    },
+    {
+      "after_line": 462,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "0c46db38a26e21a16ddf556e37e2b3e650066e8653dfd00e4ee90c9a64c8bf68",
+      "before_line": 887,
+      "kind": "FunctionDef",
+      "name": "_wait_for_capture_epoch"
+    },
+    {
+      "after_line": 482,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "6cfe6abf9fec70d109e063f9aae6492126bdeb3d1025bee64c0c97946d316c00",
+      "before_line": 907,
+      "kind": "FunctionDef",
+      "name": "_capture_request_bounded"
+    },
+    {
+      "after_line": 567,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "22c3f86ab847075aebaded0ca1a59f2f4c497f54722e6c6d0ce8ea2c2c926a0d",
+      "before_line": 992,
+      "kind": "FunctionDef",
+      "name": "_wait_for_fresh_disarmed_heartbeat"
+    },
+    {
+      "after_line": 585,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "6700bfc75d1acfee5a35dc2ce083437fad376f0fc0680c47730e87232a0b735e",
+      "before_line": 1010,
+      "kind": "FunctionDef",
+      "name": "_wait_for_fresh_vehicle_heartbeat"
+    },
+    {
+      "after_line": 603,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "c72e33b18e53ffb8a47ac774e12cf9b987bab905c3ca5397ab0b67f7ae5517b4",
+      "before_line": 1028,
+      "kind": "FunctionDef",
+      "name": "_safe_video_timestamp_summary"
+    },
+    {
+      "after_line": 618,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "3c056e376fda1aec290f0fe780fbfd9a1a472d72989e52233e409ef3027a8066",
+      "before_line": 1043,
+      "kind": "FunctionDef",
+      "name": "_camera_metadata"
+    },
+    {
+      "after_line": 70,
+      "after_path": "ai_drone/capture/reporting.py",
+      "ast_identical": true,
+      "ast_sha256": "b47c50e02c5652f74a94147eeb40671ff8d9032caa147092ed0aab01136bfec3",
+      "before_line": 1058,
+      "kind": "FunctionDef",
+      "name": "_component_report"
+    },
+    {
+      "after_line": 146,
+      "after_path": "ai_drone/capture/reporting.py",
+      "ast_identical": true,
+      "ast_sha256": "6127028e32c70ab2ed8768eea1698058e607120df832dbf11b9297ae9fd42900",
+      "before_line": 1134,
+      "kind": "FunctionDef",
+      "name": "_print_live_status"
+    },
+    {
+      "after_line": 633,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "0bf04af9cd791129ab8bda4365fd2af93ca3895c4c20b6678194327b0ad15afa",
+      "before_line": 1169,
+      "kind": "FunctionDef",
+      "name": "_queue_analysis_frame"
+    },
+    {
+      "after_line": 663,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "9c45f7616939e6955ec08eef223094914b0e051dbfd07ae6b0491f3571b56666",
+      "before_line": 1199,
+      "kind": "FunctionDef",
+      "name": "run"
+    },
+    {
+      "after_line": 1343,
+      "after_path": "ai_drone/cli/record.py",
+      "ast_identical": true,
+      "ast_sha256": "e2bf6fa96c0a0e729c65e1a38bc39f5aa23f9efa8ca60f55f5893848b84c5f9c",
+      "before_line": 1879,
+      "kind": "FunctionDef",
+      "name": "main"
+    }
+  ],
+  "limitations": [
+    "AST identity covers function/class definitions, not all import-time or integration behavior; offline tests and architecture checks supplement it.",
+    "SITL and physical hardware were not exercised for this extraction.",
+    "Two test monkeypatch targets were moved to the worker defining module; existing CLI class/helper imports remain aliases to the same objects."
+  ],
+  "schema": 1,
+  "scope": "Behavior-preserving capture state, workers, and reporting extraction",
+  "validation": {
+    "controller_tests_after_timeout_assertion": "61 passed",
+    "deptry": "passed",
+    "focused_capture_vision_servo_deploy": "198 passed, 1 skipped",
+    "git_diff_check": "passed",
+    "inspect_and_tag_servo_help": "passed without hardware access",
+    "lint_imports": "5 contracts kept, 0 broken",
+    "offline_pytest_excluding_sitl": "537 passed, 2 skipped, 2 deselected",
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "ty_check": "passed"
+  }
+}

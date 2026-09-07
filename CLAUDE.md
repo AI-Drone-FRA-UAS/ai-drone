@@ -35,6 +35,11 @@ names inside them do not repeat it (`link/wifi.py`, not `link/pi_wifi.py`).
 
 - `ai_drone/cli/`: thin hardware-facing command adapters. Nothing outside
   `cli/` may import from `cli/`.
+- `ai_drone/capture/`: reusable recording internals. `state.py` owns counters,
+  the shared capture epoch and frame/observer contracts; `reporting.py` owns
+  selected-vehicle sensor summaries; `workers.py` owns telemetry and AprilTag
+  analysis workers. Workers depend on reporting/state, MAVLink and vision;
+  none of these modules imports the command adapters.
 - `ai_drone/link/`: getting the development machine to the Pi.
   `connect.py` owns transport selection (Tailscale, access point, USB);
   `wifi.py` and `usb_ssh.py` implement one transport each; `targets.py` holds
@@ -44,7 +49,7 @@ names inside them do not repeat it (`link/wifi.py`, not `link/pi_wifi.py`).
 - `ai_drone/mavlink/`: everything that speaks to the flight controller but is
   not flight control. `devices.py` and `safety.py` hold the shared endpoint,
   source, and armed-state rules — do not duplicate MAVLink bit decoding in
-  CLIs. `parameters.py`, `console.py`, and `health.py` build on them.
+  CLIs. `parameters.py` builds on these rules for bounded parameter requests.
 - `ai_drone/vision/`: `apriltags.py` and `stream.py`, camera-facing logic with
   hardware imports kept lazy.
 - `ai_drone/flight/`: `controller.py` owns the MAVLink connection and the
@@ -63,9 +68,11 @@ names inside them do not repeat it (`link/wifi.py`, not `link/pi_wifi.py`).
 - `attic/`: retired code kept for reference. Not maintained, linted, type
   checked, tested, or deployed. Retire code here instead of deleting it.
 
-Dependencies run one way: `cli/` → concern packages → shared leaves. A shared
-leaf must not import a concern package, and no concern package may import
-`cli/`. There are no import cycles in `ai_drone`; keep it that way.
+Dependencies run from `cli/` into concern packages and shared leaves. Within
+recording, capture workers depend on reporting and state, which never import
+workers. A shared leaf must not import a concern package, and no concern
+package may import `cli/`. The exact contracts live in `.importlinter`; keep
+the dependency graph acyclic.
 
 There are no repo-root Python or shell compatibility wrappers. Use package
 entry points and `scripts/` directly; do not add duplicate wrappers.

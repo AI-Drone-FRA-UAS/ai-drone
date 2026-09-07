@@ -18,7 +18,7 @@
 
 ## Pi networking
 
-- `ai-drone-network.service` tries `Xyz`, other saved auto-connect profiles,
+- `ai-drone-network.service` tries `eduroam`, other saved auto-connect profiles,
   then the `AI-Drone-Zero` fallback hotspot. See `docs/pi-networking.md`.
 - On the Pi, use `ai-drone-network status` or `ai-drone-network list`; switch
   with `sudo ai-drone-network auto`, `sudo ai-drone-network connect "PROFILE"`,

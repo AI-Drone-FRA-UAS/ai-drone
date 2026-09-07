@@ -10,30 +10,48 @@ import queue
 import signal
 import threading
 import time
-from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import CancelledError
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.capture.reporting import (
+    _component_report,
+    _print_live_status,
+)
+from ai_drone.capture.reporting import (
+    _downward_range_summary as _downward_range_summary,
+)
+from ai_drone.capture.reporting import (
+    _observe_sensor_message as _observe_sensor_message,
+)
+from ai_drone.capture.state import (
+    AnalysisFrame,
+    CaptureState,
+    CaptureWindow,
+)
+from ai_drone.capture.state import (
+    DetectionObserver as DetectionObserver,
+)
+from ai_drone.capture.workers import (
+    DetectionWorker,
+    TelemetryWorker,
+)
 from ai_drone.cli_parsing import parse_even_resolution
 from ai_drone.durability import (
     DEFAULT_SYNC_INTERVAL_S,
     IntervalSync,
     atomic_write_text,
-    synced_stream,
 )
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
     is_armed_vehicle_heartbeat,
-    is_vehicle_message,
 )
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.recording import (
@@ -41,16 +59,11 @@ from ai_drone.recording import (
     create_recording_paths,
     json_safe,
     request_telemetry_messages,
-    telemetry_record,
     video_timestamp_summary,
-    write_json_line,
 )
 from ai_drone.vision.apriltags import (
     CameraCalibration,
-    Detector,
-    PoseEstimationError,
     create_detector,
-    estimate_pose,
 )
 
 if TYPE_CHECKING:
@@ -61,18 +74,6 @@ _TAG36H11_MAX_ID = 586
 MANUAL_FLIGHT_RECORDING_CONFIRMATION = "PASSIVE_MANUAL_FLIGHT_RECORDING"
 _INSPECT_OPERATION = "inspect"
 _TAG_SERVO_OPERATION = "tag-servo"
-_RANGE_FRESHNESS_S = 2.0
-
-
-class DetectionObserver(Protocol):
-    """Optional active-mode hook called for each analyzed camera frame."""
-
-    def observe(
-        self,
-        frame: AnalysisFrame,
-        detections: list[Any],
-        tag_records: list[dict[str, Any]],
-    ) -> None: ...
 
 
 def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
@@ -221,432 +222,6 @@ def _validate_args(
         from ai_drone.cli.tag_servo_record import validate_args
 
         validate_args(parser, args)
-
-
-@dataclass
-class CaptureState:
-    """Thread-safe-enough counters written by one worker per field."""
-
-    telemetry_counts: Counter[str] = field(default_factory=Counter)
-    vehicle_telemetry_counts: Counter[str] = field(default_factory=Counter)
-    camera_frames: int = 0
-    processed_frames: int = 0
-    dropped_analysis_frames: int = 0
-    tag_detections: int = 0
-    tag_ids: Counter[int] = field(default_factory=Counter)
-    distance_samples: Counter[int] = field(default_factory=Counter)
-    latest_distance_m: dict[int, float] = field(default_factory=dict)
-    distance_observed_monotonic: dict[int, float] = field(default_factory=dict)
-    legacy_range_samples: int = 0
-    latest_legacy_range_m: float | None = None
-    legacy_range_observed_monotonic: float | None = None
-    optical_flow_samples: int = 0
-    latest_flow_quality: int | None = None
-    saw_armed: bool = False
-    saw_disarmed_after_arm: bool = False
-    last_vehicle_state: str | None = None
-    last_vehicle_heartbeat_monotonic: float | None = None
-    visible_tag_ids: tuple[int, ...] = ()
-    confirmed_tag_ids: tuple[int, ...] = ()
-    pending_servo_tag_ids: tuple[int, ...] = ()
-    completed_servo_tag_ids: tuple[int, ...] = ()
-    servo_pulses_completed: int = 0
-    stop_reason: str | None = None
-    armed_abort: bool = False
-    worker_error: str | None = None
-    _error_lock: threading.RLock = field(
-        default_factory=threading.RLock,
-        repr=False,
-    )
-    disarmed_heartbeat: threading.Event = field(
-        default_factory=threading.Event,
-        repr=False,
-    )
-    vehicle_heartbeat: threading.Event = field(
-        default_factory=threading.Event,
-        repr=False,
-    )
-
-    def record_error(self, message: str) -> None:
-        """Retain the first capture or cleanup error across all worker threads."""
-
-        with self._error_lock:
-            if self.worker_error is None:
-                self.worker_error = message
-
-    def observe_vehicle_state(self, *, armed: bool) -> None:
-        """Track selected-vehicle arm transitions from the telemetry worker."""
-
-        self.last_vehicle_heartbeat_monotonic = time.monotonic()
-        self.vehicle_heartbeat.set()
-        if armed:
-            self.saw_armed = True
-            self.last_vehicle_state = "armed"
-            return
-        if self.saw_armed:
-            self.saw_disarmed_after_arm = True
-        self.last_vehicle_state = "disarmed"
-
-    def set_stop_reason(self, reason: str) -> None:
-        """Retain the first intentional or error stop reason."""
-
-        with self._error_lock:
-            if self.stop_reason is None:
-                self.stop_reason = reason
-
-
-class CaptureWindow:
-    """One synchronized video, telemetry, and analysis capture epoch."""
-
-    def __init__(self, duration: float | None) -> None:
-        self.duration = duration
-        self.started = threading.Event()
-        self.ready = threading.Event()
-        self.started_monotonic: float | None = None
-        self.started_utc: datetime | None = None
-        self.deadline: float | None = None
-        self._lock = threading.Lock()
-
-    def begin(self) -> None:
-        """Set the epoch once, immediately after the first encoded keyframe."""
-
-        with self._lock:
-            if self.started.is_set():
-                return
-            started_monotonic = time.monotonic()
-            self.started_monotonic = started_monotonic
-            self.started_utc = datetime.now(UTC)
-            self.deadline = (
-                None if self.duration is None else started_monotonic + self.duration
-            )
-            self.started.set()
-
-    def require_started(self) -> tuple[float, datetime, float | None]:
-        """Return the established epoch or fail if encoding never began."""
-
-        if self.started_monotonic is None or self.started_utc is None:
-            raise RuntimeError("capture epoch was not established")
-        return self.started_monotonic, self.started_utc, self.deadline
-
-
-@dataclass(frozen=True)
-class AnalysisFrame:
-    """One camera frame queued for asynchronous AprilTag analysis."""
-
-    frame_index: int
-    elapsed_s: float
-    grayscale: NDArray[np.uint8]
-    metadata: dict[str, object]
-    captured_monotonic: float | None = None
-
-
-class TelemetryWorker(threading.Thread):
-    """Monitor arming immediately, then record from the shared capture epoch."""
-
-    def __init__(
-        self,
-        *,
-        connection: Any,
-        output: Path,
-        vehicle_system: int,
-        vehicle_component: int,
-        window: CaptureWindow,
-        stop: threading.Event,
-        state: CaptureState,
-        sync: IntervalSync,
-        allow_armed_after_ready: bool = False,
-        allow_armed_at_any_time: bool = False,
-        stop_after_disarm: bool = False,
-    ) -> None:
-        super().__init__(name="telemetry-recorder", daemon=True)
-        self.connection = connection
-        self.output = output
-        self.vehicle_system = vehicle_system
-        self.vehicle_component = vehicle_component
-        self.window = window
-        self.stop = stop
-        self.state = state
-        self.sync = sync
-        self.allow_armed_after_ready = allow_armed_after_ready
-        self.allow_armed_at_any_time = allow_armed_at_any_time
-        self.stop_after_disarm = stop_after_disarm
-
-    def run(self) -> None:
-        try:
-            with synced_stream(self.output, self.sync) as handle:
-                while not self.stop.is_set():
-                    deadline = self.window.deadline
-                    if deadline is not None and time.monotonic() >= deadline:
-                        self.state.set_stop_reason("duration_elapsed")
-                        self.stop.set()
-                        return
-                    timeout = (
-                        min(0.1, max(0.0, deadline - time.monotonic()))
-                        if deadline is not None
-                        else 0.1
-                    )
-                    message = self.connection.recv_match(
-                        blocking=True,
-                        timeout=timeout,
-                    )
-                    if message is None:
-                        continue
-                    received_at = time.monotonic()
-                    selected_vehicle = is_vehicle_message(
-                        message,
-                        system_id=self.vehicle_system,
-                        component_id=self.vehicle_component,
-                    )
-                    is_vehicle_heartbeat = (
-                        message.get_type() == "HEARTBEAT" and selected_vehicle
-                    )
-                    if is_vehicle_heartbeat:
-                        armed = heartbeat_is_armed(message)
-                        had_seen_armed = self.state.saw_armed
-                        disarm_stop = (
-                            not armed and self.stop_after_disarm and had_seen_armed
-                        )
-                        if disarm_stop:
-                            # Close actuation before publishing a fresh disarmed
-                            # heartbeat or performing potentially blocking I/O.
-                            self.state.set_stop_reason("vehicle_disarmed")
-                            self.stop.set()
-                        self.state.observe_vehicle_state(armed=armed)
-                        if armed and (
-                            not self.allow_armed_at_any_time
-                            and (
-                                not self.allow_armed_after_ready
-                                or not self.window.ready.is_set()
-                            )
-                        ):
-                            self.state.armed_abort = True
-                            self.state.record_error(
-                                "vehicle became ARMED during camera startup or capture"
-                                if not self.allow_armed_after_ready
-                                else "vehicle became ARMED before the manual-flight "
-                                "recorder was READY"
-                            )
-                            self.stop.set()
-                            return
-                        if not armed:
-                            self.state.disarmed_heartbeat.set()
-                    else:
-                        disarm_stop = False
-                    started = self.window.started_monotonic
-                    deadline = self.window.deadline
-                    if disarm_stop and started is None:
-                        self.state.set_stop_reason("vehicle_disarmed")
-                        self.stop.set()
-                        return
-                    if started is None or received_at < started:
-                        continue
-                    if deadline is not None and received_at >= deadline:
-                        self.state.set_stop_reason("duration_elapsed")
-                        self.stop.set()
-                        return
-                    message_type = message.get_type()
-                    self.state.telemetry_counts[message_type] += 1
-                    if selected_vehicle:
-                        self.state.vehicle_telemetry_counts[message_type] += 1
-                        _observe_sensor_message(self.state, message)
-                    write_json_line(
-                        handle,
-                        telemetry_record(
-                            message,
-                            elapsed_s=received_at - started,
-                        ),
-                    )
-                    self.sync.after_record(handle)
-                    if disarm_stop:
-                        self.state.set_stop_reason("vehicle_disarmed")
-                        self.stop.set()
-                        return
-        except Exception as error:  # keep the camera cleanup path deterministic
-            self.state.record_error(f"telemetry worker: {error}")
-            self.stop.set()
-
-
-class DetectionWorker(threading.Thread):
-    """Decode tags without delaying the video encoder or telemetry reader."""
-
-    def __init__(
-        self,
-        *,
-        frames: queue.Queue[AnalysisFrame | None],
-        output: Path,
-        detector: Detector,
-        calibration: CameraCalibration | None,
-        tag_size: float,
-        resolution: tuple[int, int],
-        max_reprojection_error: float,
-        target_id: int | None,
-        stop: threading.Event,
-        state: CaptureState,
-        sync: IntervalSync,
-        observer: DetectionObserver | None = None,
-    ) -> None:
-        super().__init__(name="apriltag-recorder", daemon=True)
-        self.frames = frames
-        self.output = output
-        self.detector = detector
-        self.calibration = calibration
-        self.tag_size = tag_size
-        self.resolution = resolution
-        self.max_reprojection_error = max_reprojection_error
-        self.target_id = target_id
-        self.stop = stop
-        self.state = state
-        self.sync = sync
-        self.observer = observer
-
-    def run(self) -> None:
-        visible_ids: set[int] = set()
-        try:
-            with synced_stream(self.output, self.sync) as handle:
-                while True:
-                    item = self.frames.get()
-                    try:
-                        if item is None:
-                            return
-                        detections = self.detector.detect(item.grayscale)
-                        if self.target_id is not None:
-                            detections = [
-                                detection
-                                for detection in detections
-                                if detection.tag_id == self.target_id
-                            ]
-                        tags = []
-                        observer_detections = []
-                        for detection in detections:
-                            tag: dict[str, Any] = {
-                                "id": detection.tag_id,
-                                "center_px": list(detection.center),
-                                "corners_px": detection.corners.tolist(),
-                                "hamming": detection.hamming,
-                                "decision_margin": detection.decision_margin,
-                            }
-                            pose_rejected = False
-                            if self.calibration is not None:
-                                try:
-                                    pose = estimate_pose(
-                                        detection,
-                                        self.calibration,
-                                        tag_size_m=self.tag_size,
-                                        image_width=self.resolution[0],
-                                        image_height=self.resolution[1],
-                                    )
-                                except PoseEstimationError as error:
-                                    tag.update(pose_valid=False, pose_error=str(error))
-                                    pose_rejected = True
-                                else:
-                                    tag.update(
-                                        camera_xyz_m=list(pose.translation_m),
-                                        distance_m=pose.distance_m,
-                                        reprojection_error_px=pose.reprojection_error_px,
-                                        pose_valid=(
-                                            pose.reprojection_error_px
-                                            <= self.max_reprojection_error
-                                        ),
-                                    )
-                            if not pose_rejected:
-                                observer_detections.append(detection)
-                            tags.append(tag)
-                            self.state.tag_ids[detection.tag_id] += 1
-                        self.state.tag_detections += len(tags)
-                        self.state.processed_frames += 1
-                        current_ids = {int(tag["id"]) for tag in tags}
-                        self.state.visible_tag_ids = tuple(sorted(current_ids))
-                        if self.observer is not None:
-                            self.observer.observe(item, observer_detections, tags)
-                        for event, identifiers in (
-                            ("detected", current_ids - visible_ids),
-                            ("lost", visible_ids - current_ids),
-                        ):
-                            for identifier in sorted(identifiers):
-                                print(
-                                    json.dumps(
-                                        {
-                                            "event": f"apriltag_{event}",
-                                            "id": identifier,
-                                            "elapsed_s": round(item.elapsed_s, 6),
-                                        },
-                                        sort_keys=True,
-                                    ),
-                                    flush=True,
-                                )
-                        visible_ids = current_ids
-                        write_json_line(
-                            handle,
-                            {
-                                "timestamp_utc": datetime.now(UTC).isoformat(),
-                                "elapsed_s": round(item.elapsed_s, 6),
-                                "frame": item.frame_index,
-                                "metadata": json_safe(item.metadata),
-                                "tags": tags,
-                            },
-                        )
-                        self.sync.after_record(handle)
-                    finally:
-                        self.frames.task_done()
-        except Exception as error:
-            self.state.record_error(f"AprilTag worker: {error}")
-            self.stop.set()
-
-
-def _observe_sensor_message(state: CaptureState, message: Any) -> None:
-    """Keep the small live summary separate from the lossless JSONL record."""
-
-    message_type = message.get_type()
-    if message_type == "DISTANCE_SENSOR":
-        orientation = int(message.orientation)
-        current_cm = int(message.current_distance)
-        minimum_cm = int(message.min_distance)
-        maximum_cm = int(message.max_distance)
-        if current_cm > 0 and minimum_cm <= current_cm <= maximum_cm:
-            state.distance_samples[orientation] += 1
-            state.latest_distance_m[orientation] = current_cm / 100.0
-            state.distance_observed_monotonic[orientation] = time.monotonic()
-    elif message_type == "RANGEFINDER":
-        distance = float(message.distance)
-        if math.isfinite(distance) and distance > 0:
-            state.legacy_range_samples += 1
-            state.latest_legacy_range_m = distance
-            state.legacy_range_observed_monotonic = time.monotonic()
-    elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
-        state.optical_flow_samples += 1
-        quality = getattr(message, "quality", None)
-        state.latest_flow_quality = int(quality) if quality is not None else None
-
-
-def _downward_range_summary(
-    state: CaptureState,
-    observed_at: float,
-) -> tuple[int, float | None, str | None, bool]:
-    """Choose one range telemetry format instead of adding duplicate reports."""
-
-    oriented = state.distance_observed_monotonic.get(25)
-    legacy = state.legacy_range_observed_monotonic
-    oriented_fresh = (
-        oriented is not None and 0 <= observed_at - oriented <= _RANGE_FRESHNESS_S
-    )
-    legacy_fresh = (
-        legacy is not None and 0 <= observed_at - legacy <= _RANGE_FRESHNESS_S
-    )
-    if oriented_fresh or (oriented is not None and not legacy_fresh):
-        return (
-            state.distance_samples[25],
-            state.latest_distance_m.get(25),
-            "DISTANCE_SENSOR",
-            oriented_fresh,
-        )
-    if legacy is not None:
-        return (
-            state.legacy_range_samples,
-            state.latest_legacy_range_m,
-            "RANGEFINDER",
-            legacy_fresh,
-        )
-    return 0, None, None, False
 
 
 def _stop_detection_worker(
@@ -1053,117 +628,6 @@ def _camera_metadata(metadata: dict[str, object]) -> dict[str, object]:
         "LensPosition",
     )
     return {name: metadata[name] for name in names if name in metadata}
-
-
-def _component_report(
-    state: CaptureState,
-    *,
-    on_pi: bool,
-    flight_controller: str,
-    camera: str,
-    detector: str,
-    details: dict[str, str],
-    duration: float,
-    observed_at: float | None = None,
-) -> dict[str, dict[str, object]]:
-    def dependent(samples: int, parent: str) -> str:
-        if parent != "ok":
-            return "unavailable"
-        return "ok" if samples else "no_data"
-
-    downward, downward_m, range_source, range_fresh = _downward_range_summary(
-        state,
-        time.monotonic() if observed_at is None else observed_at,
-    )
-    downward_status = dependent(downward, flight_controller)
-    if downward_status == "ok" and not range_fresh:
-        downward_status = "stale"
-    flow_status = dependent(state.optical_flow_samples, flight_controller)
-    if flow_status == "ok":
-        if state.latest_flow_quality is None:
-            flow_status = "unknown_quality"
-        elif state.latest_flow_quality <= 0:
-            flow_status = "low_quality"
-    forward = state.distance_samples[0]
-    tag_status = dependent(state.tag_detections, camera)
-    if detector != "ok":
-        tag_status = "unavailable"
-    report: dict[str, dict[str, object]] = {
-        "pi": {"status": "ok" if on_pi else "unavailable"},
-        "flight_controller": {
-            "status": flight_controller,
-            "messages": sum(state.vehicle_telemetry_counts.values()),
-        },
-        "camera": {"status": camera, "frames": state.camera_frames},
-        "downward_rangefinder": {
-            "status": downward_status,
-            "samples": downward,
-            "latest_m": downward_m,
-            "source": range_source,
-        },
-        "forward_rangefinder": {
-            "status": dependent(forward, flight_controller),
-            "samples": forward,
-            "latest_m": state.latest_distance_m.get(0),
-        },
-        "optical_flow": {
-            "status": flow_status,
-            "samples": state.optical_flow_samples,
-            "quality": state.latest_flow_quality,
-        },
-        "apriltags": {
-            "status": tag_status,
-            "detections": state.tag_detections,
-            "ids": dict(sorted(state.tag_ids.items())),
-        },
-        "servo": {
-            "status": "not_detectable",
-            "detail": "BCM12 has no passive servo-presence feedback",
-        },
-    }
-    for name, detail in details.items():
-        report.setdefault(name, {"status": "unavailable"})["detail"] = detail
-    if duration > 0:
-        for name in ("downward_rangefinder", "forward_rangefinder", "optical_flow"):
-            samples = report[name]["samples"]
-            if isinstance(samples, int):
-                report[name]["rate_hz"] = round(samples / duration, 3)
-    return report
-
-
-def _print_live_status(
-    state: CaptureState,
-    *,
-    tag_servo: bool = False,
-    stop_after: int | None = None,
-) -> None:
-    downward = _downward_range_summary(state, time.monotonic())[1]
-    forward = state.latest_distance_m.get(0)
-    tag_status = "DETECTED" if state.visible_tag_ids else "NO_TAG"
-    progress = (
-        f"{state.servo_pulses_completed}/{stop_after}"
-        if stop_after is not None
-        else f"{state.servo_pulses_completed}/unbounded"
-    )
-    active_fields = (
-        f" apriltag={tag_status} visible_ids={list(state.visible_tag_ids)} "
-        f"servo_progress={progress} "
-        f"pending_ids={list(state.pending_servo_tag_ids)}"
-        if tag_servo
-        else ""
-    )
-    print(
-        "status "
-        f"vehicle_state={state.last_vehicle_state or 'unavailable'} "
-        f"camera_frames={state.camera_frames} "
-        f"telemetry={sum(state.telemetry_counts.values())} "
-        f"downward_m={downward if downward is not None else 'unavailable'} "
-        f"forward_m={forward if forward is not None else 'unavailable'} "
-        f"flow_quality={state.latest_flow_quality if state.latest_flow_quality is not None else 'unavailable'} "
-        f"tags={state.tag_detections}"
-        f"{active_fields}",
-        flush=True,
-    )
 
 
 def _queue_analysis_frame(
