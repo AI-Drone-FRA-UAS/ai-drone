@@ -40,6 +40,9 @@ dev = [
     "ruff>=0.15.12",
     "ty>=0.0.35",
 ]
+docs = [
+    "markdown-it-py>=3.0",
+]
 
 [tool.uv]
 # Runtime commands stay lightweight on the laptop. drone-deploy explicitly adds
@@ -63,12 +66,12 @@ exclude = ["attic"]
 
 [tool.deptry]
 # attic/ is retired reference code: excluded from ruff and ty, so exclude it here
-# too.  The raspi group ships real runtime dependencies to the Pi, so it must not
-# be treated as a development-only group.
+# too. The raspi and docs groups supply runtime imports for the Pi and site
+# renderer respectively; both remain opt-in installation groups.
 # aitrios-rpi-sample-apps/ is a vendored third-party sample tree (already in
 # deploy.EXCLUDE_NAMES); tests/ legitimately import the dev group.
 exclude = ["artifacts", "attic", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
-non_dev_dependency_groups = ["raspi"]
+non_dev_dependency_groups = ["raspi", "docs"]
 
 [tool.deptry.per_rule_ignores]
 # DEP002: declared on purpose, never imported by name.

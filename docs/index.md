@@ -36,6 +36,8 @@ Pi USB Ethernet and flight-controller USB are different devices and protocols.
 | [Hardware inventory](drone-project.md) | Project components and intended roles |
 | [FC configuration](DRONE_CONFIGURATION.md) | Canonical UART/wiring rules, MAVLink allocation, arming checks and capture |
 | [Hardware assets](../hardware/README.md) | Original 3MF projects and STL print exports |
+| [Frame and print guide](FRAME_AND_3D_PRINTS.md) | Frame construction and source files |
+| [Payload mechanism](PAYLOAD_DROP.md) | BCM12 servo, power and physical verification |
 | [Firmware artifacts](../firmware/README.md) | Reviewed overlays, manifest and post-flash gates |
 | [ArduCopter 4.7 no-GPS review](ARDUCOPTER_4_7_NOGPS_LOITER.md) | EKF rationale, exact build and SITL acceptance procedure |
 
@@ -52,6 +54,8 @@ Pi USB Ethernet and flight-controller USB are different devices and protocols.
 - [25 August firmware/flow verification](../state/2026-08-25/README.md),
   [19 August capture](../state/2026-08-19/README.md), and
   [18 August capture](../state/2026-08-18/README.md).
+- [Branch archive](../notes/archive/README.md), with original commit provenance and incident evidence.
+- [Historical poster](poster/README.md) and [project site](../site/README.md).
 - [Historical notes](../notes/README.md), including the archived August 25
   handoff formerly named `CURRENT.MD`.
 - [Retired implementation archive](../attic/README.md), excluded from runtime
@@ -64,5 +68,6 @@ Other-aircraft reference data is not a configuration source for this drone.
 ## Development
 
 [README](../README.md#development-checks) lists repository checks.
+[Software architecture](SOFTWARE_ARCHITECTURE.md) explains runtime responsibilities.
 [CLAUDE.md](../CLAUDE.md) describes architecture, dependencies and contributor
 conventions; [AGENTS.md](../AGENTS.md) records access and hardware-safety rules.

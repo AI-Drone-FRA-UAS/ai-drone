@@ -1,0 +1,37 @@
+[
+  {
+    "source_commit": "f1008308165b38fb770566b555020566d25ba183",
+    "source_path": "state/2026-08-20/README.md",
+    "archived_path": "notes/archive/preflight-and-nogps-takeoff/2026-08-20/original-report.txt",
+    "sha256": "09b517120cd0a9c277604b7451205aa95d105396b99f687df9991b06c623c989",
+    "bytes": 5304
+  },
+  {
+    "source_commit": "f1008308165b38fb770566b555020566d25ba183",
+    "source_path": "state/2026-08-21/README.md",
+    "archived_path": "notes/archive/preflight-and-nogps-takeoff/2026-08-21/original-report.txt",
+    "sha256": "0dc98387614c9e605e22d84c7916b0a203b3dc86f0518e2dd50c33624646d593",
+    "bytes": 25056
+  },
+  {
+    "source_commit": "f1008308165b38fb770566b555020566d25ba183",
+    "source_path": "state/2026-08-21/alt-hold-takeoff-no-liftoff.tlog",
+    "archived_path": "notes/archive/preflight-and-nogps-takeoff/2026-08-21/alt-hold-takeoff-no-liftoff.tlog",
+    "sha256": "c9fe37a5b2c30c8c5b4b526f4ea106c110e075792f69208b5097fdee12ec913b",
+    "bytes": 149518
+  },
+  {
+    "source_commit": "f1008308165b38fb770566b555020566d25ba183",
+    "source_path": "state/2026-08-21/alt-hold-takeoff-overshoot.tlog",
+    "archived_path": "notes/archive/preflight-and-nogps-takeoff/2026-08-21/alt-hold-takeoff-overshoot.tlog",
+    "sha256": "df8d48e4a3add3843146fff56f1c4a104414a35e1fa950e5b7b1e12d9f78fc87",
+    "bytes": 83776
+  },
+  {
+    "source_commit": "f1008308165b38fb770566b555020566d25ba183",
+    "source_path": "state/2026-08-21/dataflash-log-2.bin",
+    "archived_path": "notes/archive/preflight-and-nogps-takeoff/2026-08-21/dataflash-log-2.bin",
+    "sha256": "eb67a8cfb824edbb603e64f447841bf6b22432eade1917c8d4fbea7941555676",
+    "bytes": 1757996
+  }
+]

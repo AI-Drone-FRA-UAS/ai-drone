@@ -1,0 +1,74 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    env:
+      # Override the developer default in .python-version for every uv command.
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          enable-cache: true
+          cache-suffix: python-${{ matrix.python-version }}
+
+      - name: Install locked development and documentation dependencies
+        run: uv sync --locked --group dev --group docs
+
+      - name: Check formatting
+        run: uv run --locked --group dev --group docs ruff format --check .
+
+      - name: Lint Python
+        run: uv run --locked --group dev --group docs ruff check .
+
+      - name: Check types
+        run: uv run --locked --group dev --group docs ty check .
+
+      - name: Check import architecture
+        run: uv run --locked --group dev --group docs lint-imports
+
+      - name: Check declared dependencies
+        run: uv run --locked --group dev --group docs deptry .
+
+      - name: Run offline tests
+        run: uv run --locked --group dev --group docs pytest -q -m "not sitl"
+
+      - name: Build documentation
+        if: matrix.python-version == '3.12'
+        run: uv run --locked --group dev --group docs python site/build.py
+
+      - name: Check whitespace errors
+        run: git diff --check HEAD^ HEAD

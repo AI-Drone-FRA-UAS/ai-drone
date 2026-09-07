@@ -103,3 +103,7 @@ SITL binary; see the [pinned simulator acceptance
 gate](docs/ARDUCOPTER_4_7_NOGPS_LOITER.md#exact-pinned-sitl-acceptance-gate).
 Contributor architecture and hardware boundaries are documented in
 [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md).
+
+The [project site](site/README.md) presents the same maintained guides alongside
+the [historical project poster](docs/poster/README.md). Preview it with
+`uv run --group docs python site/build.py --serve`.

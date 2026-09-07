@@ -42,6 +42,32 @@ sudo ai-drone-network hotspot
 names and credentials stay in NetworkManager on the Pi and must not be stored
 in this repository.
 
+## Shared teammate SSH access
+
+The Pi uses ordinary OpenSSH over Tailscale. A successful device share must
+also be allowed by the tailnet's network policy, and the teammate still needs
+an accepted SSH key or the appropriate Unix-account credentials. The Pi's
+Tailscale SSH server is disabled; do not enable it without separately reviewing
+the tailnet's SSH policy, because it takes over SSH on the Tailscale address.
+
+For already accepted shares, this narrow grant allows SSH to the drone tag:
+
+```json
+{"src": ["autogroup:shared"], "dst": ["tag:pi-drone"], "ip": ["tcp:22"]}
+```
+
+Append it to the existing `grants` list in the owning tailnet's policy; it is
+not a replacement policy. Preserve existing owner access and other rules.
+Validate the full policy before saving. Editing global policy requires an
+administrator session or API credential; inspecting the Pi's delivered packet
+rules alone does not grant administrative write access. Credentials belong in
+a private local store, never this repository.
+
+See Tailscale's [sharing rules](https://tailscale.com/docs/features/sharing)
+and [Tailscale SSH distinction](https://tailscale.com/docs/features/tailscale-ssh).
+Dated maintenance records describe which paths and peer rules were actually
+verified, rather than guaranteeing every teammate has completed an SSH login.
+
 ## Configure the fallback hotspot
 
 Run on the Pi:

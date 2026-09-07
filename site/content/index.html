@@ -1,0 +1,377 @@
+<section class="hero">
+  <div class="hero-bild" style="background-image:url('assets/drohne-flug-quer.jpg')"></div>
+  <div class="hero-verlauf"></div>
+  <div class="hero-inner">
+    <p class="hero-kicker">Frankfurt UAS · Fachbereich 2 · Projektarbeit</p>
+    <h1>KI-Drohne mit AprilTag-Abwurf</h1>
+    <p class="hero-text">
+      Von der FPV-Renndrohne zur GPS-freien Indoor-Plattform: ArduPilot als Autopilot,
+      ein Raspberry Pi als Companion-Computer, AprilTag-Erkennung auf der Kamera und ein
+      servogesteuerter Lastenabwurf — mit den Flugversuchen, die dahin geführt haben.
+    </p>
+    <div class="hero-knoepfe">
+      <a class="knopf knopf-primaer" href="ziele.html">Dokumentation lesen</a>
+      <a class="knopf knopf-sekundaer" href="plakat.html">Projektplakat</a>
+      <a class="knopf knopf-sekundaer" href="https://github.com/AI-Drone-FRA-UAS/ai-drone" target="_blank" rel="noopener">Quellcode</a>
+    </div>
+    <div class="hero-meta">
+      <div><span>Team</span><b>Jannik Höhler · Julian Veerkamp · Sebastian Urmann · Serkan Savranoglu</b></div>
+      <div><span>Betreuung</span><b>Prof. Dr. Baun</b></div>
+      <div><span>Zeitraum</span><b>Sommersemester 2026</b></div>
+    </div>
+  </div>
+</section>
+
+<section class="band"><div class="band-inner"><p class="hinweis-kasten"><b>Dokumentation konsolidiert am 07.09.2026.</b> Die Betriebsanleitungen beschreiben den gepflegten Code. Fotos, Abwurf-Demonstration und Unfallberichte stammen aus August. Den aktuellen Hardwarestand und offene Prüfungen nennt die <a href="konfiguration.html">Konfigurationsseite</a>; ein autonomer Navigationsflug ist nicht nachgewiesen.</p></div>
+  <div class="band-inner">
+    <p class="augenbraue">Ausgangslage</p>
+    <h2>Eine Renndrohne, die nur der Pilot fliegen kann</h2>
+    <p class="band-lead">
+      Am Anfang steht eine flugfertige 3,5"-CineWhoop mit Betaflight, die ausschließlich
+      manuell per Fernsteuerung geflogen wird. Sie hat kein GPS-taugliches Einsatzgebiet,
+      keinen Bordrechner und keine Möglichkeit, etwas zu transportieren. Ziel der
+      Projektarbeit ist der Umbau zu einer teilautonomen Plattform: stabil fliegen ohne
+      GPS, am Boden angebrachte AprilTags erkennen und über einem Tag eine Nutzlast
+      abwerfen.
+    </p>
+    <div class="kennzahlen">
+      <div class="kennzahl"><b>29 fps</b><span>Historischer Durchsatz bei 640 × 480, August 2026</span></div>
+      <div class="kennzahl"><b>36h11</b><span>AprilTag-Familie, zwei Detektor-Backends</span></div>
+      <div class="kennzahl"><b>0×</b><span>GPS als Navigationsquelle deaktiviert</span></div>
+      <div class="kennzahl"><b>SITL</b><span>ArduPilot-Simulation und Offline-Tests</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="band band-alt">
+  <div class="band-inner">
+    <p class="augenbraue">Systemarchitektur</p>
+    <h2>Wer redet mit wem</h2>
+    <p class="band-lead">
+      Die Aufgaben sind sauber getrennt: der Flight Controller stabilisiert, der Raspberry
+      Pi erfasst Bilder und Telemetrie, die Bodenstation beobachtet. Der aktuelle
+      autonome Testpfad verlangt null RC-Kanäle; ein Funk-Not-Aus ist nicht nachgewiesen.
+    </p>
+
+    <div class="diagramm">
+      <svg viewBox="0 0 920 560" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="Signalfluss zwischen Bodenstation, Fernsteuerung, Flight Controller, Raspberry Pi, Sensorik und Abwurfmechanismus">
+        <defs>
+          <marker id="pfeil" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--linie)" />
+          </marker>
+        </defs>
+
+        <g stroke="var(--linie)" stroke-width="2" fill="none" marker-end="url(#pfeil)">
+          <path d="M165 110 V141 H380 V166" />
+          <!-- Kein belegter RC-Empfänger im aktuellen Aufbau. -->
+          <path d="M380 276 V310 H155 V338" />
+          <path d="M280 382 H341" />
+          <path d="M540 276 V310 H765 V338" />
+          <path d="M155 440 V464" />
+        </g>
+
+        <g font-family="Inter, sans-serif" font-size="11" fill="var(--text-leise)"
+           font-weight="600" letter-spacing=".04em">
+          <text x="272" y="135">USB · MAVLink</text>
+          <text x="592" y="135">kein aktiver RC-Link</text>
+          <text x="196" y="304">UART4 · MAVLink 2</text>
+          <text x="292" y="374">GPIO</text>
+          <text x="600" y="304">UART5</text>
+          <text x="165" y="457">CSI</text>
+        </g>
+
+        <!-- Bodenstation -->
+        <rect x="40" y="24" width="250" height="86" rx="10"
+              fill="var(--bg)" stroke="var(--linie)" stroke-width="1.5" />
+        <text x="60" y="52" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="var(--text)">Laptop · Bodenstation</text>
+        <text x="60" y="73" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">QGroundControl · MAVProxy</text>
+        <text x="60" y="92" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">drone-inspect · FC-USB</text>
+
+        <!-- Fernsteuerung -->
+        <rect x="630" y="24" width="250" height="86" rx="10"
+              fill="var(--bg)" stroke="var(--linie)" stroke-width="1.5" />
+        <text x="650" y="52" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="var(--text)">RC-Topologie prüfen</text>
+        <text x="650" y="73" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">Aktueller Testpfad: null RC-Kanäle</text>
+        <text x="650" y="92" font-family="Inter, sans-serif" font-size="12"
+              fill="var(--text-leise)">Kein belegter Funk-Not-Aus</text>
+
+        <!-- Flight Controller -->
+        <rect x="320" y="172" width="280" height="104" rx="10" fill="var(--blau-900)" />
+        <text x="344" y="202" font-family="Inter, sans-serif" font-size="15"
+              font-weight="700" fill="#ffffff">Flight Controller — GN745 AIO</text>
+        <text x="344" y="224" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.82)">ArduPilot Copter 4.7 · EKF3</text>
+        <text x="344" y="243" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.82)">Motorregelung · Flugmodi · Failsafe</text>
+        <text x="344" y="262" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.82)">Höhe aus dem Barometer, Lage aus der IMU</text>
+
+        <!-- Raspberry Pi -->
+        <rect x="30" y="344" width="250" height="96" rx="10" fill="var(--blau-500)" />
+        <text x="52" y="374" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">Raspberry Pi Zero 2 WH</text>
+        <text x="52" y="396" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.88)">Python · pymavlink · OpenCV</text>
+        <text x="52" y="415" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.88)">Tag-Erkennung · explizite Aktuatorfreigabe</text>
+
+        <!-- Abwurf -->
+        <rect x="345" y="344" width="230" height="76" rx="10" fill="var(--akzent)" />
+        <text x="367" y="374" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">Abwurfmechanismus</text>
+        <text x="367" y="396" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.9)">Micro-Servo · BCM12 · Endpunkte prüfen</text>
+
+        <!-- MTF-01P -->
+        <rect x="640" y="344" width="250" height="96" rx="10" fill="var(--tuerkis)" />
+        <text x="662" y="374" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">MicoAir MTF-01P</text>
+        <text x="662" y="396" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.9)">LiDAR nach unten · Bodenabstand</text>
+        <text x="662" y="415" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.9)">Optical Flow → Geschwindigkeit</text>
+
+        <!-- Kamera -->
+        <rect x="30" y="470" width="250" height="70" rx="10" fill="#33495e" />
+        <text x="52" y="500" font-family="Inter, sans-serif" font-size="14.5"
+              font-weight="700" fill="#ffffff">IMX500-Kamera (Nadir)</text>
+        <text x="52" y="521" font-family="Inter, sans-serif" font-size="12"
+              fill="rgba(255,255,255,.88)">AprilTag 3 / ArUco · tag36h11</text>
+      </svg>
+    </div>
+    <p class="bildunterschrift">
+      ArduPilot übernimmt Stabilisierung und Schätzung. Der gepflegte Pi-Code bietet
+      Erfassung und einen begrenzten GuidedNoGPS-/Loiter-Test. Autonomes Anfliegen,
+      Hindernisnavigation und ein unabhängiger Funk-Abbruch sind keine belegten Funktionen.
+    </p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="band-inner">
+    <p class="augenbraue">Die drei Kernthemen</p>
+    <h2>Was an dieser Drohne neu ist</h2>
+    <div class="karten">
+      <a class="karte" href="konfiguration.html">
+        <span class="karte-marke">Navigation</span>
+        <h3>Fliegen ohne GPS</h3>
+        <p>
+          In Innenräumen gibt es kein GPS. Der MTF-01P liefert stattdessen zwei Messgrößen,
+          die der EKF3-Zustandsschätzer direkt verarbeitet: ein nach unten gerichteter LiDAR
+          für Bodenabstand und Flussskalierung sowie optischen Fluss für horizontale
+          Geschwindigkeit. Die primäre Höhe kommt vom Barometer. Ein gesunder
+          Datenstrom allein beweist noch keinen stabilen Positionshalt.
+        </p>
+        <span class="karte-mehr">Parameter und verifizierter Stand →</span>
+      </a>
+      <a class="karte" href="apriltag.html">
+        <span class="karte-marke">Erkennung</span>
+        <h3>Tag erkannt → Last fällt</h3>
+        <p>
+          Die nach unten gerichtete Kamera erkennt <code>tag36h11</code>-Marker.
+          Servo-Pulse gehören zu einem getrennt freigegebenen Werkzeug; der normale
+          Inspektionslauf bewegt den Servo nicht.
+          Ein geometrischer Marker liefert dafür, was eine neuronale Bounding Box nicht
+          kann: eine eindeutige ID und subpixelgenaue Ecken.
+        </p>
+        <span class="karte-mehr">Backends, Durchsatz und Grenzen →</span>
+      </a>
+      <a class="karte" href="abwurf.html">
+        <span class="karte-marke">Nutzlast</span>
+        <h3>Abwurf auf Kommando</h3>
+        <p>
+          Ein 9-g-Servo öffnet einen 3D-gedruckten Haltebügel. Zwei Zahlen bestimmen das
+          Design: der am montierten Mechanismus geprüfte Stellbereich und eine
+          Versorgung, die Anlauf- und Blockierstrom ohne Pi-Neustart verkraftet.
+        </p>
+        <span class="karte-mehr">Kennwerte und offene Punkte →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="band band-alt">
+  <div class="band-inner">
+    <p class="augenbraue">Stand der Arbeit</p>
+    <h2>Was läuft und was noch offen ist</h2>
+    <p class="band-lead">
+      Messungen sind in datierten Berichten und Parameterexporten festgehalten.
+      Ein früherer Test ist kein Nachweis für unveränderte Verkabelung oder sichere
+      Flugfähigkeit des heutigen Aufbaus.
+    </p>
+    <div class="status">
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>ArduPilot statt Betaflight</b>
+          Die aktuelle Firmware und der gesicherte Parametersatz stehen in der Konfigurationsdokumentation.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>MTF-01P an UART5</b>
+          Distanz- und Flussdaten wurden erfasst; die aktuelle Integration ist im jüngsten Hardwarebericht dokumentiert.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Raspberry Pi an UART4</b>
+          Bidirektionales MAVLink 2 über <code>/dev/serial0</code>, automatisiert prüfbar
+          durch eine disarmierte Inspektion und Parameterabfrage.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>AprilTag-Erkennung</b>
+          <code>tag36h11</code> auf dem Pi, zwei Detektor-Backends, Durchsatz vermessen.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Abwurf durch die Erkennung ausgelöst</b>
+          Historische Demonstration am Boden und handgeführt. Mechanik und Freigaben
+          müssen am gegenwärtigen Aufbau erneut geprüft werden.</span>
+      </div>
+      <div class="status-zeile">
+        <span class="status-punkt">✓</span>
+        <span><b>Netzanbindung im Feld</b>
+          Tailscale bei vorhandenem Internet oder der eigene Hotspot. Erreichbarkeit
+          ist vom aktuellen Netzprofil abhängig und wird vor jedem Einsatz geprüft.</span>
+      </div>
+      <div class="status-zeile offen">
+        <span class="status-punkt">○</span>
+        <span><b>Abwurf am Flight Controller</b>
+          Der Servo hängt am Raspberry Pi; ein Ausgang des GN745 ist als zweiter Weg noch
+          nicht zugewiesen.</span>
+      </div>
+      <div class="status-zeile offen">
+        <span class="status-punkt">○</span>
+        <span><b>Rahmenerweiterung</b>
+          Druckdateien liegen unter hardware/3d-prints; Montage und Sensor-Sichtfelder
+          sind am aktuellen Aufbau zu kontrollieren.</span>
+      </div>
+      <div class="status-zeile offen">
+        <span class="status-punkt">○</span>
+        <span><b>Autonome Mission im Flug</b>
+          Nicht erreicht. Am 21.08. wurde die Drohne bei einem Startversuch zerstört; die
+          drei gemessenen Ursachen und alle Konsequenzen stehen unter
+          <a href="flugversuche.html">Flugversuche und Absturz</a>.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="band-inner">
+    <p class="augenbraue">Dokumentation</p>
+    <h2>Alle Dokumente des Projekts</h2>
+    <p class="band-lead">
+      Betriebsseiten werden aus den gepflegten Markdown-Dateien erzeugt.
+      Die ergänzenden Präsentationsseiten kennzeichnen historische Versuche separat.
+    </p>
+    <div class="karten">
+      <a class="karte" href="ziele.html">
+        <span class="karte-marke">Projekt</span>
+        <h3>Ziele und Hardware</h3>
+        <p>Die fünf Teilziele der Projektarbeit, die gestellte Ausrüstung und die vollständige Spezifikation des Drohnenaufbaus.</p>
+      </a>
+      <a class="karte" href="apriltag.html">
+        <span class="karte-marke">Projekt</span>
+        <h3>AprilTag-Erkennung und Abwurf</h3>
+        <p>Warum ein geometrischer Marker statt eines neuronalen Netzes, die zwei Backends, der gemessene Durchsatz und wie der Abwurf freigegeben wird.</p>
+      </a>
+      <a class="karte" href="flugversuche.html">
+        <span class="karte-marke">Fliegen</span>
+        <h3>Flugversuche und Absturz</h3>
+        <p>Jeder Startversuch, das Video des Absturzes, die drei gemessenen Ursachen und was daraus im Code geworden ist.</p>
+      </a>
+      <a class="karte" href="architektur.html">
+        <span class="karte-marke">Projekt</span>
+        <h3>Softwarearchitektur</h3>
+        <p>Welcher Code auf welchem Rechner läuft, jedes Kommando, die Umgebungsvariablen und die Testsuite.</p>
+      </a>
+      <a class="karte" href="konfiguration.html">
+        <span class="karte-marke">Hardware</span>
+        <h3>Drohnenkonfiguration</h3>
+        <p>Der verifizierte Stand des Flight Controllers: serielle Ports, Sensorparameter und die beiden Kamerapfade.</p>
+      </a>
+      <a class="karte" href="abwurf.html">
+        <span class="karte-marke">Hardware</span>
+        <h3>Abwurfmechanismus</h3>
+        <p>Servokennwerte, die drei Ansteuerungswege, die mechanischen Randbedingungen und die offene Parametrierung.</p>
+      </a>
+      <a class="karte" href="rahmen.html">
+        <span class="karte-marke">Hardware</span>
+        <h3>Rahmen und 3D-Druck</h3>
+        <p>Die Druckteile im Repository mit Maßen, Material und den Slicer-Einstellungen, mit denen sie gedruckt wurden.</p>
+      </a>
+      <a class="karte" href="mavlink.html">
+        <span class="karte-marke">Fliegen</span>
+        <h3>MAVLink-Steuerung</h3>
+        <p>Der <code>DroneController</code>, Geschwindigkeiten im Body-Frame, die Wächter und die Sicherheitsregeln.</p>
+      </a>
+      <a class="karte" href="verbindung.html">
+        <span class="karte-marke">Fliegen</span>
+        <h3>Laptop ↔ Drohne</h3>
+        <p>Die vollständige USB-Verbindungssequenz, stabile Gerätepfade, MAVProxy-Kommandos und das Herunterfahren.</p>
+      </a>
+      <a class="karte" href="pi-usb-ssh.html">
+        <span class="karte-marke">Raspberry Pi</span>
+        <h3>USB und SSH</h3>
+        <p>Den USB-Gadget-Link und SSH auf einem frischen Pi in Betrieb nehmen, inklusive Fehlersuche am Kabelweg.</p>
+      </a>
+      <a class="karte" href="eduroam.html">
+        <span class="karte-marke">Raspberry Pi</span>
+        <h3>eduroam und Tailscale</h3>
+        <p>Wie der Pi auf dem Campus automatisch ins Hochschulnetz kommt und von überall über Tailscale erreichbar bleibt.</p>
+      </a>
+      <a class="karte" href="hotspot.html">
+        <span class="karte-marke">Raspberry Pi</span>
+        <h3>Hotspot als Rückfallebene</h3>
+        <p>Der eigene Access Point <code>AI-Drone-Zero</code>, die Priorisierung gegenüber bekannten WLANs und die Internetfreigabe vom Mac.</p>
+      </a>
+      <a class="karte" href="session-19-06.html">
+        <span class="karte-marke">Protokolle</span>
+        <h3>Inbetriebnahme</h3>
+        <p>Das vollständige Protokoll der MAVLink- und UART-Inbetriebnahme: jedes Kommando, jeder Fehler, jede Lösung.</p>
+      </a>
+      <a class="karte" href="servo-arduino.html">
+        <span class="karte-marke">Protokolle</span>
+        <h3>Servo am Arduino</h3>
+        <p>Die arduino-cli-Sketches, mit denen Stellbereich und Drehrichtung des Servos vermessen wurden.</p>
+      </a>
+      <a class="karte" href="doku-index.html">
+        <span class="karte-marke">Übersicht</span>
+        <h3>Index aller Dokumente</h3>
+        <p>Die vollständige Landkarte der Dokumentation im Repository, nach Aufgabe gruppiert — auch für alles, was hier keine eigene Karte hat.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="band band-alt">
+  <div class="band-inner">
+    <div class="plakat-band">
+      <div>
+        <p class="augenbraue">Projektplakat</p>
+        <h2>Das Projekt auf einer A1-Seite</h2>
+        <p class="band-lead">
+          Ziele, Plattform, Architektur, die Flugversuche und der Projektstand — gesetzt
+          für den Druck in A0, A1, A2 und A3 hoch. Die Quelle ist eine einzelne HTML-Datei
+          im Repository, die PDFs werden daraus erzeugt.
+        </p>
+        <div class="hero-knoepfe" style="margin-bottom:0">
+          <a class="knopf knopf-primaer" href="assets/plakat-a1.pdf">PDF ansehen (A1)</a>
+          <a class="knopf knopf-sekundaer" href="plakat.html"
+             style="color:var(--text);border-color:var(--linie);background:var(--bg)">Details</a>
+        </div>
+      </div>
+      <div class="plakat-bild">
+        <img src="assets/plakat-vorschau.jpg" alt="Vorschau des A1-Projektplakats"
+             width="1240" height="1756" loading="lazy">
+      </div>
+    </div>
+  </div>
+</section>
