@@ -275,8 +275,8 @@ def test_config_export_certifies_a_fresh_final_disarmed_heartbeat(
         lambda *_args, **_kwargs: tmp_path / "serial",
     )
     monkeypatch.setattr(
-        config_export.mavutil,
-        "mavlink_connection",
+        config_export,
+        "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
     monkeypatch.setattr(

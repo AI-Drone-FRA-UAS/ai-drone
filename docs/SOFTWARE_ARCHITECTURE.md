@@ -10,6 +10,7 @@ not installed or deployed as operational flight tools.
 | --- | --- |
 | ArduPilot on FlywooF745 | Stabilization, EKF3 sensor fusion, flight modes and configured vehicle failsafes |
 | `ai_drone.flight.controller` | Guarded GuidedNoGPS climb, relative-position acquisition, Loiter hold and landing |
+| `ai_drone.mavlink.connection` | Shared lazy connection factory with the MAVLink 2 ArduPilot decoder; also accepts MAVLink 1 frames |
 | `ai_drone.cli.record` | Recording command options, hardware lifecycle and capture coordination |
 | `ai_drone.capture` | Capture state, telemetry/tag workers and source-filtered component reporting; independent of the CLI |
 | `ai_drone.vision.apriltags` | AprilTag IDs/corners and calibrated pose estimation on the Pi CPU |

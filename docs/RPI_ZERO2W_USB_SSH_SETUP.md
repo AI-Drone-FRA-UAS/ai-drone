@@ -112,3 +112,40 @@ hostname
 whoami
 ip -4 addr
 ```
+
+## Pi startup configuration
+
+The maintained [usb0-static.service](../scripts/usb0-static.service) loads
+`g_ether` after `systemd-modules-load.service` and `network.target`, then brings
+up `usb0` with `192.168.7.2/24` before SSH. It does not wait for Wi-Fi association
+or internet access. Deployment copies this service asset; installing it into
+`/etc/systemd/system/` is a separate image-maintenance step.
+
+For this startup arrangement, keep `dwc2` in the single-line
+`/boot/firmware/cmdline.txt` module list and remove only `g_ether` from that list:
+`modules-load=dwc2`. Preserve the other command-line settings and the existing
+`dwc2` peripheral overlay in `/boot/firmware/config.txt`. Do not also load
+`g_ether` through `/etc/modules` or another boot service.
+
+Before changing the startup files, keep root-only backups of the command line,
+the installed service, and any local gadget module options. Record when a file
+did not previously exist so rollback can remove it. Preserve the Pi's current
+device and host MAC addresses in a separate root-owned, mode-0600
+`/etc/modprobe.d/ai-drone-usb-gadget.conf` file:
+
+```text
+options g_ether dev_addr=<saved-device-MAC> host_addr=<saved-host-MAC>
+```
+
+Replace both placeholders with that Pi's verified addresses; keep them in local
+configuration. Check existing module options first and retain the distribution's
+`/usr/lib/modprobe.d/g_ether.conf`, which can supply USB vendor/product identity.
+Using a different local filename allows the address options to supplement it.
+
+This boot-order change is a workaround for a recurring host transmit stall
+after Pi reboot. An [upstream report](https://github.com/raspberrypi/linux/issues/3430#issuecomment-656128698)
+describes similar symptoms and improvement from loading `g_ether` later; it
+does not establish that every USB fault has the same cause. After maintenance,
+verify USB ping/SSH over repeated Pi reboots and independently confirm the
+normal network path. Keep the saved files available for rollback. This unit
+does not reset the gadget periodically or start any drone task.

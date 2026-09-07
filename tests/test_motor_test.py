@@ -112,7 +112,7 @@ def test_motor_test_does_not_select_a_different_vehicle(monkeypatch) -> None:
         motor_test, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "fake"
     )
     monkeypatch.setattr(
-        motor_test.mavutil, "mavlink_connection", lambda *_args, **_kwargs: connection
+        motor_test, "open_ardupilot_connection", lambda *_args, **_kwargs: connection
     )
     monkeypatch.setattr(
         motor_test,
@@ -165,8 +165,8 @@ def test_motor_test_requires_exact_all_checks_value(
         motor_test, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "fake"
     )
     monkeypatch.setattr(
-        motor_test.mavutil,
-        "mavlink_connection",
+        motor_test,
+        "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
     monkeypatch.setattr(
@@ -299,8 +299,8 @@ def test_partial_motor_command_write_still_triggers_stop_cleanup(monkeypatch) ->
         motor_test, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "fake"
     )
     monkeypatch.setattr(
-        motor_test.mavutil,
-        "mavlink_connection",
+        motor_test,
+        "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
     monkeypatch.setattr(motor_test, "_request_parameter", lambda *_args, **_kwargs: 0.0)

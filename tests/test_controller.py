@@ -102,7 +102,7 @@ def test_connect_binds_to_requested_ardupilot_identity(
     expected.get_srcComponent = lambda: component
     connection.recv_match.side_effect = [gcs, expected]
     monkeypatch.setattr(
-        "ai_drone.flight.controller.mavutil.mavlink_connection",
+        "ai_drone.flight.controller.open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
 
@@ -130,7 +130,7 @@ def test_connect_closes_without_commands_when_intended_vehicle_is_absent(
     connection = MagicMock()
     connection.recv_match.return_value = None
     monkeypatch.setattr(
-        "ai_drone.flight.controller.mavutil.mavlink_connection",
+        "ai_drone.flight.controller.open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
 

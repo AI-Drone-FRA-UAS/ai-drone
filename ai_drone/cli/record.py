@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.capture.reporting import (
@@ -47,6 +46,7 @@ from ai_drone.durability import (
     IntervalSync,
     atomic_write_text,
 )
+from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
@@ -733,7 +733,7 @@ def run(  # noqa: C901
                 include_pi_uart=True,
                 missing_message="No ArduPilot serial device found",
             )
-            candidate = mavutil.mavlink_connection(endpoint, baud=args.baud)
+            candidate = open_ardupilot_connection(endpoint, baud=args.baud)
             heartbeat = candidate.wait_heartbeat(timeout=args.timeout)
             _raise_if_startup_stopped(stop, state, "flight-controller startup")
             if heartbeat is None:

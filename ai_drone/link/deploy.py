@@ -43,6 +43,7 @@ RUNTIME_FILES = frozenset(
         "scripts/setup-pi-dual-network.sh",
         "scripts/setup-pi-hotspot.sh",
         "scripts/setup-pi-power-resilience.sh",
+        "scripts/usb0-static.service",
         "uv.lock",
     }
 )

@@ -9,9 +9,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
@@ -203,7 +203,7 @@ class DroneController:
         return self.connection
 
     def connect(self) -> None:
-        connection = mavutil.mavlink_connection(
+        connection = open_ardupilot_connection(
             self.device,
             baud=self.baud,
             source_system=255,

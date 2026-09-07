@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure Raspberry Pi USB gadget network
+After=local-fs.target systemd-modules-load.service network.target
+Before=network-online.target ssh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/sbin/modprobe g_ether
+ExecStart=/usr/sbin/ip link set usb0 up
+ExecStart=/usr/sbin/ip addr replace 192.168.7.2/24 dev usb0
+
+[Install]
+WantedBy=multi-user.target

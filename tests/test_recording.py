@@ -1270,8 +1270,8 @@ def test_inspector_aborts_armed_vehicle_and_still_writes_manifest(
         inspect_cli, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "tcp:sim"
     )
     monkeypatch.setattr(
-        inspect_cli.mavutil,
-        "mavlink_connection",
+        inspect_cli,
+        "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
 
@@ -1315,7 +1315,7 @@ def test_startup_interrupt_closes_flight_controller_and_writes_failure_manifest(
         inspect_cli, "resolve_mavlink_endpoint", lambda *_a, **_kw: "mock:fc"
     )
     monkeypatch.setattr(
-        inspect_cli.mavutil, "mavlink_connection", lambda *_a, **_kw: connection
+        inspect_cli, "open_ardupilot_connection", lambda *_a, **_kw: connection
     )
 
     assert run(["--duration", "0.01", "--output-dir", str(output)]) == 1

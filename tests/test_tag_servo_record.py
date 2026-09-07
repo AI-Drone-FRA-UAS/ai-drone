@@ -560,8 +560,8 @@ def test_active_command_accepts_matching_initial_armed_heartbeat(
         record_cli, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "tcp:sim"
     )
     monkeypatch.setattr(
-        record_cli.mavutil,
-        "mavlink_connection",
+        record_cli,
+        "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
     monkeypatch.setattr(record_cli, "request_parameter", lambda *_args, **_kwargs: 0.0)
@@ -594,8 +594,8 @@ def test_active_command_refuses_skipped_arming_checks_before_stream_requests(
         record_cli, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "tcp:sim"
     )
     monkeypatch.setattr(
-        record_cli.mavutil,
-        "mavlink_connection",
+        record_cli,
+        "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
     monkeypatch.setattr(record_cli, "request_parameter", lambda *_args, **_kwargs: 4.0)
@@ -1025,7 +1025,7 @@ def test_startup_termination_is_cooperative_and_restores_original_handlers(
         record_cli, "resolve_mavlink_endpoint", lambda *_a, **_kw: "mock:fc"
     )
     monkeypatch.setattr(
-        record_cli.mavutil, "mavlink_connection", lambda *_a, **_kw: connection
+        record_cli, "open_ardupilot_connection", lambda *_a, **_kw: connection
     )
     output = tmp_path / "startup-terminate"
     try:

@@ -13,9 +13,9 @@ import sys
 import time
 from typing import Any
 
-from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
@@ -235,7 +235,7 @@ def main(arguments: list[str] | None = None) -> int:
 
     endpoint = resolve_mavlink_endpoint(args.device, include_pi_uart=True)
     print(f"Connecting to {endpoint} at {args.baud} baud ...")
-    connection = mavutil.mavlink_connection(
+    connection = open_ardupilot_connection(
         endpoint,
         baud=args.baud,
         source_system=255,

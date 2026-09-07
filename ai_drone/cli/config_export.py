@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.config.snapshot import (
@@ -20,6 +19,7 @@ from ai_drone.config.snapshot import (
     records_to_json,
 )
 from ai_drone.durability import atomic_write_text
+from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
@@ -92,7 +92,7 @@ def main(arguments: list[str] | None = None) -> int:
     print(
         f"Connecting read-only to {endpoint} at {args.baud} baud ...", file=sys.stderr
     )
-    connection = mavutil.mavlink_connection(
+    connection = open_ardupilot_connection(
         endpoint,
         baud=args.baud,
         source_system=255,
