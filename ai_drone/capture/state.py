@@ -33,6 +33,7 @@ class CaptureState:
     legacy_range_observed_monotonic: float | None = None
     optical_flow_samples: int = 0
     latest_flow_quality: int | None = None
+    flow_observed_monotonic: float | None = None
     saw_armed: bool = False
     saw_disarmed_after_arm: bool = False
     last_vehicle_state: str | None = None

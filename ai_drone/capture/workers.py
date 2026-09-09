@@ -136,7 +136,9 @@ class TelemetryWorker(threading.Thread):
                     self.state.telemetry_counts[message_type] += 1
                     if selected_vehicle:
                         self.state.vehicle_telemetry_counts[message_type] += 1
-                        _observe_sensor_message(self.state, message)
+                        _observe_sensor_message(
+                            self.state, message, observed_at=received_at
+                        )
                     write_json_line(
                         handle,
                         telemetry_record(

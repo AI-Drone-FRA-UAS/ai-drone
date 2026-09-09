@@ -60,6 +60,9 @@ be needed to power sensors. See [networking](docs/pi-networking.md) and the
 separate procedures for [Pi USB Ethernet](docs/RPI_ZERO2W_USB_SSH_SETUP.md) and
 [direct FC USB](docs/DEVELOPER_MACHINE_DRONE_CONNECTION.md).
 
+For a timed, hand-carried recording with detached capture, CSV exports and an
+offline browser report, follow the [room walkthrough procedure](docs/SENSOR_RECORDING.md#timed-room-walkthrough).
+
 ## Commands
 
 | Command | Purpose |
@@ -67,6 +70,8 @@ separate procedures for [Pi USB Ethernet](docs/RPI_ZERO2W_USB_SSH_SETUP.md) and
 | `drone-connect` | Open Pi SSH through a selected or available transport |
 | `drone-deploy` | Synchronize the runtime and optionally run an allowlisted task |
 | `drone-inspect` | Record available disarmed camera and FC sensor streams |
+| `drone-walk` | Start a timed, detached disarmed Pi recording and report |
+| `drone-report` | Export an existing dataset to CSVs and an offline browser report |
 | `drone-config-sync` | Capture a verified disarmed FC configuration |
 | `drone-servo` | Guarded direct-BCM12 servo bench test |
 | `drone-motor-test` | Guarded low-power, propeller-off motor check |

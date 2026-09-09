@@ -8,12 +8,29 @@ from typing import Any
 
 from ai_drone.capture.state import CaptureState
 
-_RANGE_FRESHNESS_S = 2.0
+_OBSERVATION_FRESHNESS_S = 2.0
 
 
-def _observe_sensor_message(state: CaptureState, message: Any) -> None:
+def _observation_is_fresh(observed: float | None, now: float) -> bool:
+    return observed is not None and 0 <= now - observed <= _OBSERVATION_FRESHNESS_S
+
+
+def _heartbeat_status(state: CaptureState, observed_at: float) -> str:
+    if state.last_vehicle_heartbeat_monotonic is None:
+        return "no_data"
+    return (
+        "ok"
+        if _observation_is_fresh(state.last_vehicle_heartbeat_monotonic, observed_at)
+        else "stale"
+    )
+
+
+def _observe_sensor_message(
+    state: CaptureState, message: Any, *, observed_at: float | None = None
+) -> None:
     """Keep the small live summary separate from the lossless JSONL record."""
 
+    observed_at = time.monotonic() if observed_at is None else observed_at
     message_type = message.get_type()
     if message_type == "DISTANCE_SENSOR":
         orientation = int(message.orientation)
@@ -29,17 +46,18 @@ def _observe_sensor_message(state: CaptureState, message: Any) -> None:
         ):
             state.distance_samples[orientation] += 1
             state.latest_distance_m[orientation] = current_cm / 100.0
-            state.distance_observed_monotonic[orientation] = time.monotonic()
+            state.distance_observed_monotonic[orientation] = observed_at
     elif message_type == "RANGEFINDER":
         distance = float(message.distance)
         if math.isfinite(distance) and distance > 0:
             state.legacy_range_samples += 1
             state.latest_legacy_range_m = distance
-            state.legacy_range_observed_monotonic = time.monotonic()
+            state.legacy_range_observed_monotonic = observed_at
     elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
         state.optical_flow_samples += 1
         quality = getattr(message, "quality", None)
         state.latest_flow_quality = int(quality) if quality is not None else None
+        state.flow_observed_monotonic = observed_at
 
 
 def _downward_range_summary(
@@ -50,12 +68,8 @@ def _downward_range_summary(
 
     oriented = state.distance_observed_monotonic.get(25)
     legacy = state.legacy_range_observed_monotonic
-    oriented_fresh = (
-        oriented is not None and 0 <= observed_at - oriented <= _RANGE_FRESHNESS_S
-    )
-    legacy_fresh = (
-        legacy is not None and 0 <= observed_at - legacy <= _RANGE_FRESHNESS_S
-    )
+    oriented_fresh = _observation_is_fresh(oriented, observed_at)
+    legacy_fresh = _observation_is_fresh(legacy, observed_at)
     if oriented_fresh or (oriented is not None and not legacy_fresh):
         return (
             state.distance_samples[25],
@@ -98,16 +112,17 @@ def _component_report(
         downward_status = "stale"
     flow_status = dependent(state.optical_flow_samples, flight_controller)
     if flow_status == "ok":
-        if state.latest_flow_quality is None:
+        if not _observation_is_fresh(state.flow_observed_monotonic, observed_at):
+            flow_status = "stale"
+        elif state.latest_flow_quality is None:
             flow_status = "unknown_quality"
         elif state.latest_flow_quality <= 0:
             flow_status = "low_quality"
     forward = state.distance_samples[0]
     forward_status = dependent(forward, flight_controller)
     forward_observed = state.distance_observed_monotonic.get(0)
-    if forward_status == "ok" and (
-        forward_observed is None
-        or not 0 <= observed_at - forward_observed <= _RANGE_FRESHNESS_S
+    if forward_status == "ok" and not _observation_is_fresh(
+        forward_observed, observed_at
     ):
         forward_status = "stale"
     tag_status = dependent(state.tag_detections, camera)
@@ -116,7 +131,11 @@ def _component_report(
     report: dict[str, dict[str, object]] = {
         "pi": {"status": "ok" if on_pi else "unavailable"},
         "flight_controller": {
-            "status": flight_controller,
+            "status": (
+                _heartbeat_status(state, observed_at)
+                if flight_controller == "ok"
+                else flight_controller
+            ),
             "messages": sum(state.vehicle_telemetry_counts.values()),
         },
         "camera": {"status": camera, "frames": state.camera_frames},
@@ -162,8 +181,34 @@ def _print_live_status(
     tag_servo: bool = False,
     stop_after: int | None = None,
 ) -> None:
-    downward = _downward_range_summary(state, time.monotonic())[1]
-    forward = state.latest_distance_m.get(0)
+    def live_sample(value: float | int | None, count: int, *, fresh: bool) -> str:
+        if not count:
+            return "unavailable"
+        if not fresh:
+            return "stale"
+        return str(value) if value is not None else "unavailable"
+
+    observed_at = time.monotonic()
+    down_count, downward, _, down_fresh = _downward_range_summary(state, observed_at)
+    down_display = live_sample(downward, down_count, fresh=down_fresh)
+    forward_display = live_sample(
+        state.latest_distance_m.get(0),
+        state.distance_samples[0],
+        fresh=_observation_is_fresh(
+            state.distance_observed_monotonic.get(0), observed_at
+        ),
+    )
+    flow_display = live_sample(
+        state.latest_flow_quality,
+        state.optical_flow_samples,
+        fresh=_observation_is_fresh(state.flow_observed_monotonic, observed_at),
+    )
+    heartbeat_status = _heartbeat_status(state, observed_at)
+    vehicle_state = (
+        state.last_vehicle_state
+        if heartbeat_status == "ok" and state.last_vehicle_state is not None
+        else "unknown"
+    )
     tag_status = "DETECTED" if state.visible_tag_ids else "NO_TAG"
     progress = (
         f"{state.servo_pulses_completed}/{stop_after}"
@@ -179,12 +224,12 @@ def _print_live_status(
     )
     print(
         "status "
-        f"vehicle_state={state.last_vehicle_state or 'unavailable'} "
+        f"vehicle_state={vehicle_state} heartbeat_status={heartbeat_status} "
         f"camera_frames={state.camera_frames} "
         f"telemetry={sum(state.telemetry_counts.values())} "
-        f"downward_m={downward if downward is not None else 'unavailable'} "
-        f"forward_m={forward if forward is not None else 'unavailable'} "
-        f"flow_quality={state.latest_flow_quality if state.latest_flow_quality is not None else 'unavailable'} "
+        f"downward_m={down_display} "
+        f"forward_m={forward_display} "
+        f"flow_quality={flow_display} "
         f"tags={state.tag_detections}"
         f"{active_fields}",
         flush=True,

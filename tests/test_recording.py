@@ -668,6 +668,7 @@ def test_telemetry_health_uses_selected_source_and_keeps_all_raw_messages(
     )
     assert state.legacy_range_samples == (1 if include_selected else 0)
     assert state.latest_legacy_range_m == (0.35 if include_selected else None)
+    assert (state.flow_observed_monotonic is not None) is include_selected
     assert report["optical_flow"]["status"] == ("ok" if include_selected else "no_data")
     assert report["optical_flow"]["samples"] == (1 if include_selected else 0)
     assert report["optical_flow"]["quality"] == (40 if include_selected else None)
@@ -1715,6 +1716,147 @@ def _sensor_report(state, *, observed_at):
         duration=1,
         observed_at=observed_at,
     )
+
+
+@pytest.mark.parametrize("flow_type", ["OPTICAL_FLOW", "OPTICAL_FLOW_RAD"])
+def test_live_and_manifest_samples_expire_during_silence_and_recover(
+    monkeypatch, capsys, flow_type
+):
+    state = CaptureState()
+    now = [10.0]
+    monkeypatch.setattr(capture_reporting.time, "monotonic", lambda: now[0])
+
+    def observe(downward, forward, quality):
+        state.observe_vehicle_state(armed=False)
+        _observe_sensor_message(state, _distance_message(downward))
+        _observe_sensor_message(state, _distance_message(forward, orientation=0))
+        _observe_sensor_message(
+            state, SimpleNamespace(get_type=lambda: flow_type, quality=quality)
+        )
+
+    observe(42, 155, 255)
+    for observed_at in (10.0, 12.0):
+        now[0] = observed_at
+        report = _sensor_report(state, observed_at=now[0])
+        assert all(
+            report[name]["status"] == "ok"
+            for name in (
+                "flight_controller",
+                "downward_rangefinder",
+                "forward_rangefinder",
+                "optical_flow",
+            )
+        )
+        capture_reporting._print_live_status(state)
+        line = capsys.readouterr().out
+        assert "vehicle_state=disarmed heartbeat_status=ok" in line
+        assert "downward_m=0.42 forward_m=1.55 flow_quality=255" in line
+
+    now[0] = 12.01
+    report = _sensor_report(state, observed_at=now[0])
+    assert all(
+        report[name]["status"] == "stale"
+        for name in (
+            "flight_controller",
+            "downward_rangefinder",
+            "forward_rangefinder",
+            "optical_flow",
+        )
+    )
+    assert report["downward_rangefinder"]["latest_m"] == 0.42
+    assert report["forward_rangefinder"]["latest_m"] == 1.55
+    assert report["optical_flow"]["quality"] == 255
+    assert state.last_vehicle_state == "disarmed"
+    capture_reporting._print_live_status(state)
+    line = capsys.readouterr().out
+    assert "vehicle_state=unknown heartbeat_status=stale" in line
+    assert "downward_m=stale forward_m=stale flow_quality=stale" in line
+    assert "0.42" not in line and "1.55" not in line and "255" not in line
+
+    now[0] = 13.0
+    observe(45, 160, 180)
+    recovered = _sensor_report(state, observed_at=now[0])
+    assert recovered["flight_controller"]["status"] == "ok"
+    assert recovered["optical_flow"]["status"] == "ok"
+    assert recovered["optical_flow"]["samples"] == 2
+    capture_reporting._print_live_status(state)
+    line = capsys.readouterr().out
+    assert "vehicle_state=disarmed heartbeat_status=ok" in line
+    assert "downward_m=0.45 forward_m=1.6 flow_quality=180" in line
+    assert state.worker_error is None and state.stop_reason is None
+
+
+@pytest.mark.parametrize(
+    ("quality", "status"), [(None, "unknown_quality"), (0, "low_quality")]
+)
+def test_flow_freshness_is_independent_of_quality_and_heartbeat(
+    monkeypatch, quality, status
+):
+    state = CaptureState()
+    now = [10.0]
+    monkeypatch.setattr(capture_reporting.time, "monotonic", lambda: now[0])
+    state.observe_vehicle_state(armed=False)
+    message = SimpleNamespace(get_type=lambda: "OPTICAL_FLOW", quality=quality)
+    _observe_sensor_message(state, message)
+    assert _sensor_report(state, observed_at=10)["optical_flow"]["status"] == status
+    assert _sensor_report(state, observed_at=9)["optical_flow"]["status"] == "stale"
+
+    now[0] = 13.0
+    assert _sensor_report(state, observed_at=13)["optical_flow"]["status"] == "stale"
+    _observe_sensor_message(state, message)
+    report = _sensor_report(state, observed_at=13)
+    assert report["optical_flow"]["status"] == status
+    assert report["flight_controller"]["status"] == "stale"
+    assert (
+        _sensor_report(state, observed_at=9)["flight_controller"]["status"] == "stale"
+    )
+
+
+def test_silent_telemetry_stays_running_until_duration_and_keeps_received_records(
+    tmp_path, monkeypatch
+):
+    now = [10.0]
+    monkeypatch.setattr(capture_workers.time, "monotonic", lambda: now[0])
+    state = CaptureState()
+    stop = threading.Event()
+    window = CaptureWindow(5.0)
+    window.begin()
+    flow = _TelemetryMessage("OPTICAL_FLOW")
+    vars(flow)["quality"] = 180
+    messages = iter([_TelemetryMessage("HEARTBEAT"), flow])
+    stale_checks = []
+
+    def receive(*, blocking, timeout):
+        assert blocking and not stop.is_set()
+        now[0] = min(15.0, round(now[0] + timeout, 6))
+        message = next(messages, None)
+        if message is None and now[0] > 12.2:
+            report = _sensor_report(state, observed_at=now[0])
+            stale_checks.append(report["flight_controller"]["status"])
+            assert report["optical_flow"]["status"] == "stale"
+        return message
+
+    output = tmp_path / "telemetry.jsonl"
+    worker = TelemetryWorker(
+        connection=SimpleNamespace(recv_match=receive),
+        output=output,
+        vehicle_system=1,
+        vehicle_component=1,
+        window=window,
+        stop=stop,
+        state=state,
+        sync=IntervalSync(0),
+    )
+    worker.run()
+
+    assert stale_checks and set(stale_checks) == {"stale"}
+    assert now[0] == 15.0
+    assert stop.is_set() and state.stop_reason == "duration_elapsed"
+    assert state.worker_error is None and not state.armed_abort
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+    assert [record["message"] for record in records] == ["HEARTBEAT", "OPTICAL_FLOW"]
+    assert state.latest_flow_quality == 180
+    assert state.flow_observed_monotonic == pytest.approx(10.2)
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,140 @@ Without a camera calibration, tags are decoded but no metric pose is reported.
 Supply `--calibration FILE --tag-size METRES` only after rigid mounting, focus,
 and calibration at the selected resolution.
 
+## Timed room walkthrough
+
+Physically remove the propellers, keep the drone disarmed, and carry it by
+hand. Power the flight controller, sensors and Pi throughout the recording.
+Close other camera and flight-controller tools before starting. This workflow
+records observations; it does not command the motors or servo.
+
+On the laptop, connect with the [configured SSH alias](pi-networking.md#shared-teammate-ssh-access).
+Then use the installed Pi environment:
+
+```bash
+ssh seb@seb-is-pm
+cd ~/ai-drone
+.venv/bin/drone-walk --duration 300 --dry-run
+.venv/bin/drone-walk --duration 300
+```
+
+The preview starts nothing. The second command starts a detached recording for
+300 seconds, also the default when `--duration` is omitted. Capture starts after
+initialization and camera warmup; there is no preparation countdown. The
+command prints a unique dataset directory under `~/ai-drone/artifacts/`.
+An optional `--output-dir PATH` must name a directory that does not already
+exist. Keep the final `Dataset:` path from the journal if the recorder reports
+a different suffix.
+
+Run the launcher as `seb`, without putting `sudo` before `drone-walk`. It uses
+the Pi's existing noninteractive sudo permission to start the temporary
+`ai-drone-walk.service` as that user. The job survives SSH disconnects and Wi-Fi
+roaming, and is not enabled at boot. An existing walkthrough unit is never
+stopped or replaced by another launch.
+
+Monitor progress after launch or after reconnecting:
+
+```bash
+systemctl status ai-drone-walk.service
+journalctl -u ai-drone-walk.service -f
+```
+
+Successful service startup is not a sensor health result. Check the journal for
+camera and FC data, and inspect the final manifest's component results. Camera
+or FC unavailability can still produce a partial dataset. Ctrl+C while following
+the journal only closes the log viewer; recording continues. To finish early:
+
+```bash
+sudo systemctl stop ai-drone-walk.service
+```
+
+The stop signal is forwarded as SIGINT so the recorder can close its files and
+generate the report. Normal completion also generates the report automatically.
+Wait for the final `Report: .../review/index.html` journal line and review any
+errors before copying the dataset or shutting down. Completed transient units
+can disappear from `systemctl`; their journal and dataset remain. A crash or
+forced termination can leave raw files without a finished report, which can be
+rebuilt offline as described below.
+
+Keep the Pi powered through recording, report generation and file transfer.
+Afterward, run `sudo poweroff`, allow shutdown to finish, and then remove power.
+If the battery powers the Pi, leave it connected until shutdown completes.
+File syncing reduces loss but does not make an abrupt power cut safe; see
+[recording durability](PI_POWER_RESILIENCE.md#recording-durability).
+
+## Review and export a recording
+
+`drone-report` reads an existing dataset without contacting the drone. It
+preserves the raw files and writes CSV exports, `summary.json`, and an offline
+browser report to `DATASET/review/`. Rebuild on either the Pi or a laptop with
+the installed project environment:
+
+```bash
+.venv/bin/drone-report artifacts/WALK_DIRECTORY
+.venv/bin/drone-report artifacts/WALK_DIRECTORY --no-video
+```
+
+Replace `WALK_DIRECTORY` with the recorded directory name. The second command
+skips browser video creation while retaining charts, exports and camera
+previews. By default, available `ffmpeg` copies the H.264 video into
+`review/camera.mp4` without re-encoding. Missing `ffmpeg` or invalid timestamps
+leave the original video available and produce an explanatory report note.
+You can copy the recording to a laptop with `ffmpeg` and rebuild there.
+
+From the laptop, copy the **whole dataset directory**, including the raw files
+that the report links to:
+
+```bash
+mkdir -p artifacts/walkthroughs
+scp -r seb@seb-is-pm:/home/seb/ai-drone/artifacts/WALK_DIRECTORY artifacts/walkthroughs/
+```
+
+Open `artifacts/walkthroughs/WALK_DIRECTORY/review/index.html` in a browser.
+The report works offline. Its charts share an elapsed-time cursor; the camera
+video has independent playback controls. Use `--output-dir PATH` to select a
+different report directory, or `--system ID --component ID` to select a
+different FC source. The project FC defaults are system 1, component 1; other
+sources remain in the raw logs and are excluded from the derived FC charts.
+
+CSV units and unavailable-value handling follow the
+[MAVLink message definitions](https://mavlink.io/en/messages/common.html).
+`RAW_IMU` fields remain labelled as raw values; the report does not infer
+calibration scales or compass accuracy from their presence.
+
+| Export | Contents |
+| --- | --- |
+| `ranges.csv` | Forward and downward distances, sensor ID/orientation, configured limits, signal quality, `valid` and `invalid_reason` |
+| `optical_flow.csv` | Separate MAVLink flow formats, quality and validity, compensated velocity, angular rates or integrated flow where provided |
+| `imu.csv` | Acceleration, angular velocity, magnetic measurements and available raw fields/temperature |
+| `motion.csv` | Attitude and EKF local NED position/velocity |
+| `environment.csv` | Pressure, temperature and FC system battery readings |
+| `battery.csv` | Available per-battery readings, consumption and status |
+| `events.csv` | Armed state, mode number, EKF flags, sensor health bits and status text |
+| `camera.csv` | Analyzed-frame timing, exposure metadata and detected tag IDs |
+
+Only messages and fields actually received can be exported. Unsupported or
+unavailable channels are not filled with zero. The raw telemetry retains all
+decoded messages for later analysis; the charts use a bounded sample envelope
+while the CSVs retain the selected recording's rows.
+
+Range validity follows the FC-reported limits. The project's downward range is
+currently configured for a maximum of **1 metre**: readings above it during
+hand carrying are retained with `outside_configured_range` and excluded from
+healthy distance values. This does not change the FC parameters or clamp the
+readings. Range signal quality 1 is invalid; 0 means unknown. Optical-flow
+quality 0 is invalid. `OPTICAL_FLOW` and `OPTICAL_FLOW_RAD` have different fields
+and units, so the exports keep their message types separate. EKF local position
+is an estimate, not a ground-truth room map or measured walking route.
+
+`elapsed_s` uses the capture's monotonic start time. Telemetry timestamps mark
+receipt at the Pi; analyzed camera frames mark request retrieval, with the
+camera's sensor timestamp retained separately. These are not precisely aligned
+exposure and sensor measurements. The MP4 uses an approximate constant frame
+rate from the median interval in `camera.pts`; it does not reproduce every
+variable frame interval. Keep `camera.h264`, `camera.pts` and `camera.jsonl` for
+more detailed timing work, and do not treat the report's video and chart cursor
+as synchronized measurements.
+
 ## Documented connections
 
 The wiring and UART allocation rules live in
