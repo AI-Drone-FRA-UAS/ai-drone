@@ -1,14 +1,17 @@
 # FlywooF745 no-GPS firmware artifacts
 
-These files describe the reviewed ArduCopter 4.7.0 build for the project's
+These files describe the reviewed ArduCopter 4.7.1 build for the project's
 FlywooF745 controller, pinned to commit
-`1511f27194f1dcc3728270883047bdf022b3fd53`. They are not defaults for another
+`dbe792162d06cab66c3475fd5556bf7a120f119e`. They are not defaults for another
 aircraft.
 
 The August 24 installed image omitted EKF3 optical-flow fusion and
-`GUIDED_NOGPS`. The reviewed replacement was installed on August 25; its
+`GUIDED_NOGPS`. The reviewed 4.7.0 replacement was installed on August 25; its
 effective ROMFS definition matched again in the [September 7
 verification](../state/2026-09-07/indoor-repair.md).
+The 4.7.1 artifact preserves all 410 extracted feature states from that
+working 4.7.0 build. Its [installation and post-flash checks](../state/2026-09-09/firmware-and-power.md)
+are recorded separately; the manifest alone does not establish installation.
 Version and Git identity alone do not establish an image's compiled features.
 
 ## Files and canonical instructions
@@ -34,8 +37,8 @@ explains the accompanying EKF/failsafe changes; use a fresh project capture
 before deciding any live delta.
 
 The verifier checks the linked ELF, exact manifest hashes, APJ board ID 1027,
-`APJFWv1`, runtime identity 1511f271, decoded BIN equivalence and image limits.
-The reviewed image occupies 865,792 of 950,272 bytes. It requires EKF3, MAVLink
+`APJFWv1`, runtime identity dbe79216, decoded BIN equivalence and image limits.
+The reviewed image occupies 865,632 of 950,272 bytes. It requires EKF3, MAVLink
 range/flow, flow fusion and GUIDED_NOGPS, and rejects linked optical-flow SRTM.
 
 Do not use `--consistent-builds`: at this revision it changes the runtime
@@ -54,13 +57,16 @@ with propellers removed.
 After flashing, complete all of these without arm, throttle, RC override,
 mode selection, mission-start, motor or servo commands:
 
-1. Verify ArduCopter 4.7.0, Git identity 1511f271 and FlywooF745 identity.
+1. Verify ArduCopter 4.7.1, Git identity dbe79216 and FlywooF745 identity.
    Download ROMFS `hwdef.dat` twice with an authorized reboot/reconnect
    between reads. Require identical effective features, including flow fusion
    and GUIDED_NOGPS enabled.
 2. Request `AVAILABLE_MODES` and require advertised custom mode 20
    (`GUIDED_NOGPS`) without selecting it.
 3. Compare complete parameter captures before/after flashing and after reboot.
+   In 4.7.1, `PSC_JERK_NE` becomes `PSC_NE_JERK` and `PSC_JERK_D` becomes
+   `PSC_D_JERK`; their stored values should carry over (both were 5 in the
+   project capture). Verify the renamed values without a blanket restore.
    Preserve persistent settings and investigate every difference except
    documented advancing counters. Do not restore another aircraft's data.
 4. Run normal pre-arm checks without arming. Require `ARMING_SKIPCHK=0`

@@ -25,7 +25,7 @@ from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import heartbeat_is_armed
 from ai_drone.recording import request_message_intervals
 
-ARDUPILOT_COMMIT = "1511f27194f1dcc3728270883047bdf022b3fd53"
+ARDUPILOT_COMMIT = "dbe792162d06cab66c3475fd5556bf7a120f119e"
 PARAMETERS = Path(__file__).parent / "sitl" / "copter.parm"
 TARGET_ALTITUDE_M = 0.5
 SENSOR_MAVLINK_PORT = 5762

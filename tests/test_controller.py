@@ -432,7 +432,7 @@ def test_forward_mt15_cannot_relax_reviewed_rangefinder_configuration(
     controller.connection.mav.param_set_send.assert_not_called()
 
 
-def test_firmware_gate_requests_and_accepts_exact_copter_470(monkeypatch) -> None:
+def test_firmware_gate_requests_and_accepts_exact_copter_471(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
     sent = []
@@ -440,7 +440,7 @@ def test_firmware_gate_requests_and_accepts_exact_copter_470(monkeypatch) -> Non
 
     def send(command, parameters, *, timeout):
         sent.append((command, parameters, timeout))
-        controller.flight_sw_version = (4 << 24) | (7 << 16)
+        controller.flight_sw_version = (4 << 24) | (7 << 16) | (1 << 8)
         controller.flight_custom_version = EXPECTED_FIRMWARE_COMMIT
 
     monkeypatch.setattr(controller, "_send_command_long_and_wait_ack", send)
@@ -468,7 +468,9 @@ def test_firmware_gate_requests_and_accepts_exact_copter_470(monkeypatch) -> Non
     ("packed", "commit", "expected"),
     [
         ((4 << 24) | (6 << 16) | (3 << 8), EXPECTED_FIRMWARE_COMMIT, "4.6.3"),
-        ((4 << 24) | (7 << 16), b"deadbeef", "deadbeef"),
+        ((4 << 24) | (7 << 16), EXPECTED_FIRMWARE_COMMIT, "4.7.0"),
+        ((4 << 24) | (7 << 16) | (1 << 8), b"1511f271", "1511f271"),
+        ((4 << 24) | (7 << 16) | (1 << 8), b"deadbeef", "deadbeef"),
     ],
 )
 def test_firmware_gate_rejects_wrong_version_or_commit(

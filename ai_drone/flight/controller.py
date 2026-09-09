@@ -92,8 +92,8 @@ FORWARD_RANGEFINDER_PARAMETERS: Mapping[str, float] = {
     "RNGFND2_MAX": 15.0,
 }
 
-EXPECTED_FIRMWARE_VERSION = (4, 7, 0)
-EXPECTED_FIRMWARE_COMMIT = b"1511f271"
+EXPECTED_FIRMWARE_VERSION = (4, 7, 1)
+EXPECTED_FIRMWARE_COMMIT = b"dbe79216"
 
 
 class FlightSafetyError(RuntimeError):
@@ -736,7 +736,7 @@ class DroneController:
                 )
 
     def verify_firmware(self, timeout: float = 3.0) -> None:
-        """Require official ArduCopter 4.7.0 at the captured project commit."""
+        """Require official ArduCopter 4.7.1 at the captured project commit."""
 
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=15.0)
         self.flight_sw_version = None
@@ -769,14 +769,14 @@ class DroneController:
         if version != EXPECTED_FIRMWARE_VERSION:
             rendered = ".".join(str(part) for part in version)
             raise FlightSafetyError(
-                f"ArduCopter {rendered}; flight requires exact version 4.7.0"
+                f"ArduCopter {rendered}; flight requires exact version 4.7.1"
             )
         if self.flight_custom_version != EXPECTED_FIRMWARE_COMMIT:
             actual = (self.flight_custom_version or b"").decode(
                 "ascii", errors="replace"
             )
             raise FlightSafetyError(
-                f"firmware commit {actual!r}; flight requires '1511f271'"
+                f"firmware commit {actual!r}; flight requires 'dbe79216'"
             )
 
     def verify_onboard_logging(self) -> None:

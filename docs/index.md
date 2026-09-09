@@ -9,6 +9,7 @@ observed. Check the current aircraft before acting on either.
 | Guide | Scope |
 | --- | --- |
 | [Sensor inspection and recording](SENSOR_RECORDING.md) | Disarmed camera/MAVLink recording, outputs and component health |
+| [FC checks](DRONE_CHECK.md) | Read-only firmware, configuration and live sensor checks |
 | [GPS-free hover](PI_MAVLINK_CONTROL.md) | Guarded takeoff, optical-flow Loiter, landing and required validation |
 | [Bench motor test](BENCH_MOTOR_TEST.md) | Explicit propeller-off motor/ESC checks |
 | [Armed tag/servo recording](ARMED_TAG_SERVO_RECORDING.md) | Separate actuator workflow and mechanism calibration |
@@ -25,6 +26,7 @@ not mean its live hardware prerequisites or flight validation are complete.
 | [Pi USB Ethernet/SSH](RPI_ZERO2W_USB_SSH_SETUP.md) | Developer-host gadget networking on Linux, Windows and macOS |
 | [Direct FC USB](DEVELOPER_MACHINE_DRONE_CONNECTION.md) | Controller serial access and passive inspection without the Pi |
 | [Pi power resilience](PI_POWER_RESILIENCE.md) | Controlled upgrades, recording durability and boot-service checks |
+| [Connection and shutdown status](POWER_CONTROL.md) | Check connections and prepare battery or USB removal |
 
 Deployment commands are introduced in [the root overview](../README.md#start-here).
 Pi USB Ethernet and flight-controller USB are different devices and protocols.
@@ -43,9 +45,13 @@ Pi USB Ethernet and flight-controller USB are different devices and protocols.
 
 ## Dated evidence and history
 
+- [9 September firmware and power update](../state/2026-09-09/firmware-and-power.md):
+  installed custom ArduCopter 4.7.1, matched simulation and connection/shutdown checks.
+- [9 September startup melody](../state/2026-09-09/startup-tone.md):
+  WAV 34 adapted and verified on all four AM32 ESCs.
 - [9 September MT-15 integration](../state/2026-09-09/mt15-integration.md):
   verified forward range through FC and Pi after UART3 pin swapping, with
-  [current parameters](../params/flywoo-f745-live-2026-09-09.param).
+  [parameters captured at integration](../params/flywoo-f745-live-2026-09-09.param).
 - [7 September 2026 repair result](../state/2026-09-07/indoor-repair.md):
   completed software/FC repairs, verification and remaining physical work.
 - [7 September initial analysis](../state/2026-09-07/README.md): earlier findings

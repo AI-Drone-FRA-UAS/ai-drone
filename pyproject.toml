@@ -14,6 +14,8 @@ dependencies = [
 
 [project.scripts]
 drone-connect = "ai_drone.link.connect:main"
+drone-power = "ai_drone.cli.power:main"
+drone-check = "ai_drone.cli.check:main"
 drone-config-sync = "ai_drone.config.sync:main"
 drone-control = "ai_drone.cli.control:main"
 drone-deploy = "ai_drone.link.deploy:main"

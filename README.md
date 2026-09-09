@@ -9,10 +9,11 @@ hold, and landing. Room navigation and calibrated tag approach remain planned
 work. Keep live inspection disarmed; actuator and flight commands require
 explicit authorization and their physical prerequisites.
 
-The latest dated result is the [9 September 2026 MT-15 integration
-report](state/2026-09-09/mt15-integration.md), with its [parameter
-snapshot](params/flywoo-f745-live-2026-09-09.param). Forward lidar now reaches the
-FC and Pi alongside downward range/flow. The earlier
+The [9 September firmware and power update](state/2026-09-09/firmware-and-power.md)
+records the installed custom ArduCopter 4.7.1 build, connection/shutdown helpers
+and live checks. All four ESCs have the [WAV 34 startup melody](state/2026-09-09/startup-tone.md).
+The [MT-15 integration report](state/2026-09-09/mt15-integration.md)
+records forward lidar reaching the FC and Pi alongside downward range/flow. The earlier
 [repair report](state/2026-09-07/indoor-repair.md) records relative EKF aiding
 and the unresolved compass pre-arm issue. Recheck hardware before use; sensing
 and simulation results do not establish flight readiness.
@@ -78,6 +79,9 @@ offline browser report, follow the [room walkthrough procedure](docs/SENSOR_RECO
 | `drone-deploy` | Synchronize the runtime and optionally run an allowlisted task |
 | `drone-inspect` | Record available disarmed camera and FC sensor streams |
 | `drone-walk` | Start a timed, detached disarmed Pi recording and report |
+| `drone-power status` | Check connections and show how to prepare each power/cable removal |
+| `drone-power prepare` | Finalize the recorder and prepare a selected disconnection |
+| `drone-check` | Read-only FC firmware, configuration and sensor checks |
 | `drone-report` | Export an existing dataset to CSVs and an offline browser report |
 | `drone-config-sync` | Capture a verified disarmed FC configuration |
 | `drone-servo` | Guarded direct-BCM12 servo bench test |
@@ -98,6 +102,7 @@ dated observations:
 - **Hardware and configuration:** [inventory](docs/drone-project.md),
   [FC wiring and parameters](docs/DRONE_CONFIGURATION.md), [firmware](firmware/README.md).
 - **Operation:** [sensor recording](docs/SENSOR_RECORDING.md),
+  [connection and shutdown status](docs/POWER_CONTROL.md), [FC checks](docs/DRONE_CHECK.md),
   [GPS-free hover](docs/PI_MAVLINK_CONTROL.md), [planned AprilTag mission](docs/APRILTAG_MISSION.md).
 - **History:** dated captures in `state/` and `params/`,
   [historical notes](notes/README.md), and [retired code](attic/README.md).

@@ -1,8 +1,9 @@
 # ArduCopter 4.7 no-GPS Loiter review
 
-This review applies only to the project aircraft captured on 2026-08-24 and to
-official ArduCopter 4.7.0 commit
-`1511f27194f1dcc3728270883047bdf022b3fd53`. The
+This review applies only to the project aircraft. The maintained build and
+companion gate target official ArduCopter 4.7.1 commit
+`dbe792162d06cab66c3475fd5556bf7a120f119e`. Historical August and September
+4.7.0 evidence below retains its original version and source identity. The
 `syeed-drone-2026-08-24/` capture is comparison material from a different
 aircraft and is not an upload source.
 
@@ -250,7 +251,7 @@ old AltHold/RC workaround.
 
 Before arming, the controller requires:
 
-- exact official firmware version 4.7.0 and custom-version bytes `1511f271`;
+- exact official firmware version 4.7.1 and custom-version bytes `dbe79216`;
 - exact `ARMING_SKIPCHK=0` and every reviewed no-GPS invariant above;
 - onboard DataFlash logging enabled;
 - fresh disarmed heartbeat, downward range, nonzero-quality flow, attitude,
@@ -341,7 +342,7 @@ A plain FlywooF745 build is not suitable for this aircraft's required flight
 path. The image captured before the August 25 replacement and the board's
 flash-constrained feature selection omitted EKF3 optical-flow fusion and
 `GUIDED_NOGPS`. Firmware version
-`4.7.0` and Git identity `1511f271` alone therefore do not prove that two
+`4.7.1` and Git identity `dbe79216` alone therefore do not prove that two
 artifacts have the same capabilities.
 
 [`firmware/FlywooF745-nogps-loiter-extra.hwdef`](../firmware/FlywooF745-nogps-loiter-extra.hwdef)
@@ -366,15 +367,16 @@ this workstation's `/home/abaris/drone/` parent directory; adjust both checkout
 paths together on another machine. The local firmware build
 image uses the official GNU Arm Embedded
 `gcc-arm-none-eabi-10-2020-q4-major` toolchain downloaded from ArduPilot's
-`Tools/STM32-tools` firmware archive; the SITL-only image has no ARM compiler:
+`Tools/STM32-tools` firmware archive; the SITL-only image has no ARM compiler. Their existing `:4.7.0` tags name
+toolchain images; the checked-out source commit selects ArduCopter 4.7.1:
 
 ```bash
 cd /home/abaris/drone/ardupilot
 test "$(git rev-parse HEAD)" = \
-  1511f27194f1dcc3728270883047bdf022b3fd53
+  dbe792162d06cab66c3475fd5556bf7a120f119e
 git submodule update --init --recursive
 
-podman run --rm --userns=keep-id \
+podman run --rm --network=none --userns=keep-id \
   -v /home/abaris/drone/ardupilot:/ardupilot \
   -v /home/abaris/drone/ai-drone:/config:ro \
   localhost/ardupilot-firmware:4.7.0 \
@@ -385,9 +387,9 @@ podman run --rm --userns=keep-id \
 
 Do not use `--consistent-builds` for the deployable artifact. At this pinned
 revision it intentionally replaces the runtime MAVLink custom-version value
-with `abcdef`, while leaving the APJ Git identity as `1511f271`. The companion
+with `abcdef`, while leaving the APJ Git identity as `dbe79216`. The companion
 firmware gate then correctly refuses to fly. The deployable build must report
-`1511f271` both in APJ metadata and in `AUTOPILOT_VERSION` after flashing.
+`dbe79216` both in APJ metadata and in `AUTOPILOT_VERSION` after flashing.
 
 The output is
 `/home/abaris/drone/ardupilot/build/FlywooF745/bin/arducopter.apj`. Verify the linked
@@ -409,7 +411,7 @@ sha256sum \
 
 The verifier requires the reviewed hashes in
 [`firmware/FlywooF745-nogps-loiter.manifest.json`](../firmware/FlywooF745-nogps-loiter.manifest.json),
-board ID 1027, APJ magic `APJFWv1`, Git identity `1511f271`, an image no larger
+board ID 1027, APJ magic `APJFWv1`, Git identity `dbe79216`, an image no larger
 than 950,272 bytes, and matching APJ metadata and flash limits. It strictly
 decodes the APJ image and requires it to be byte-identical to `arducopter.bin`.
 It also verifies EKF3, MAVLink optical-flow and rangefinder support, linked
@@ -420,13 +422,13 @@ The reviewed runtime-identity-preserving artifact has:
 | Item | Reviewed value |
 | --- | --- |
 | APJ board ID | `1027` |
-| Git identity | `1511f271` |
-| APJ image size | `865792` bytes |
+| Git identity | `dbe79216` |
+| APJ image size | `865632` bytes |
 | image limit / flash total | `950272` bytes |
-| free space | `84480` bytes |
-| ELF SHA-256 | `498186052d8fa6bd78f047b3c48eff2e47c33ccf50922e91d62fc37339c21d36` |
-| BIN SHA-256 | `3a410c8142f0ce91ca8f509634f264411b027399bb5bebf0d95234b32929adee` |
-| APJ SHA-256 | `d8ab397bd41093a0669e36b0faf06af1845ad60b7280846e92a54be535400a04` |
+| free space | `84640` bytes |
+| ELF SHA-256 | `f7b5ba6c9e29572d9e349d1f36550982316120355556b60ae4bed17b36bc171d` |
+| BIN SHA-256 | `ce0463f2801e3582ddc0595ffac84c7b8671b093e02b09f512f6a433efc20b1e` |
+| APJ SHA-256 | `f1f96750a8ee1d5c5a0db00ec0dc7951591b1fa370601c8dc8aea02fd1688603` |
 | resolved `hw.dat` SHA-256 | `d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe` |
 | overlay SHA-256 | `21d270a4f0f0da12c8c5cfa5d14c4b305e03d72741736c4a47aa10363529d7ae` |
 
@@ -450,7 +452,7 @@ therefore preserves the standard SITL board and simulator hardware defaults.
 Build that simulator artifact with:
 
 ```bash
-podman run --rm --userns=keep-id \
+podman run --rm --network=none --userns=keep-id \
   -v /home/abaris/drone/ardupilot:/ardupilot \
   -v /home/abaris/drone/ai-drone:/config:ro \
   localhost/ardupilot-sitl:4.7.0 \
@@ -461,7 +463,7 @@ podman run --rm --userns=keep-id \
 
 The opt-in tests in [`tests/test_sitl.py`](../tests/test_sitl.py) refuse an
 ArduPilot checkout whose `HEAD` is not
-`1511f27194f1dcc3728270883047bdf022b3fd53`. They launch the built `arducopter`
+`dbe792162d06cab66c3475fd5556bf7a120f119e`. They launch the built `arducopter`
 binary with clean storage, ArduPilot's standard quad-X `x` physics model, its
 standard Copter defaults, and only the targeted overlay in
 [`tests/sitl/copter.parm`](../tests/sitl/copter.parm).
@@ -509,7 +511,8 @@ its cleanup cannot run. It then requires ArduCopter's system-255 heartbeat
 failsafe (`FS_GCS_ENABLE=5`, `FS_GCS_TIMEOUT=5`, `FS_OPTIONS=8`) to select LAND
 and finish disarmed.
 
-Three complete final executions against the exact checkout passed both tests:
+The original 4.7.0 acceptance at `1511f271` passed the two historical
+cases in three complete executions:
 
 | Execution | Clean-flight XY drift | Clean Loiter minimum | Maximum altitude | Forced-loss result |
 | --- | ---: | ---: | ---: | --- |
@@ -531,13 +534,18 @@ channels, 962 externally injected MAVLink 2 flow/range samples, and final
 disarm. The forced companion-loss flight observed the GCS failsafe, selected
 LAND, touched down at 0.148 m/s, and disarmed.
 
+The 4.7.1 candidate passed all three current cases on September 9, using
+the updated Python dependencies: downward-only hover, forward-range hover,
+and forced GCS-loss landing. Those results are simulator evidence; consult
+the dated state record for physical installation and acceptance.
+
 Run the full acceptance gate with:
 
 ```bash
 cd /home/abaris/drone/ai-drone
 ARDUPILOT_ROOT=/home/abaris/drone/ardupilot \
   UV_CACHE_DIR=/tmp/uv-cache \
-  uv run --group dev pytest -m sitl -vv -s
+  uv run --locked --group dev pytest -m sitl -vv -s
 ```
 
 Higher-fidelity physics still requires measured total mass, dimensions,

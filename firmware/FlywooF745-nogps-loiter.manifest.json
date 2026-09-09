@@ -1,22 +1,22 @@
 {
-  "ardupilot_commit": "1511f27194f1dcc3728270883047bdf022b3fd53",
+  "ardupilot_commit": "dbe792162d06cab66c3475fd5556bf7a120f119e",
   "board": "FlywooF745",
   "board_id": 1027,
   "build": {
     "consistent_builds": false,
     "image_max_size": 950272,
-    "image_size": 865792,
-    "runtime_custom_version": "1511f271"
+    "image_size": 865632,
+    "runtime_custom_version": "dbe79216"
   },
   "files": {
     "arducopter": {
-      "sha256": "498186052d8fa6bd78f047b3c48eff2e47c33ccf50922e91d62fc37339c21d36"
-    },
-    "arducopter.apj": {
-      "sha256": "d8ab397bd41093a0669e36b0faf06af1845ad60b7280846e92a54be535400a04"
+      "sha256": "f7b5ba6c9e29572d9e349d1f36550982316120355556b60ae4bed17b36bc171d"
     },
     "arducopter.bin": {
-      "sha256": "3a410c8142f0ce91ca8f509634f264411b027399bb5bebf0d95234b32929adee"
+      "sha256": "ce0463f2801e3582ddc0595ffac84c7b8671b093e02b09f512f6a433efc20b1e"
+    },
+    "arducopter.apj": {
+      "sha256": "f1f96750a8ee1d5c5a0db00ec0dc7951591b1fa370601c8dc8aea02fd1688603"
     },
     "build/FlywooF745/hw.dat": {
       "sha256": "d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe"

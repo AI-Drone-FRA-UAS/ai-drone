@@ -378,7 +378,7 @@ def test_fails_closed_when_feature_is_not_reported() -> None:
     ("overrides", "message"),
     [
         ({"board_id": 999}, "expected FlywooF745 id 1027"),
-        ({"git_identity": "deadbeef"}, "expected '1511f271'"),
+        ({"git_identity": "deadbeef"}, "expected 'dbe79216'"),
         ({"image_maxsize": 950_271}, "image_maxsize is 950271, expected 950272"),
         ({"flash_total": 950_273}, "flash_total is 950273, expected 950272"),
         ({"summary": "OtherBoard"}, "summary is 'OtherBoard', expected 'FlywooF745'"),
