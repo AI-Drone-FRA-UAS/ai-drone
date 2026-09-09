@@ -46,7 +46,7 @@ from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import RectangleObject
 
 MM = 72 / 25.4
-QUELLE = (594.0, 841.0)                    # das Layout ist in A1 gesetzt
+QUELLE = (594.0, 841.0)  # das Layout ist in A1 gesetzt
 ZIELE = {"a0": (841.0, 1189.0), "a2": (420.0, 594.0), "a3": (297.0, 420.0)}
 
 for name, (breite, hoehe) in ZIELE.items():

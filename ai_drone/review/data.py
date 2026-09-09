@@ -571,8 +571,12 @@ def _battery(export: Export, base: dict[str, Any], f: dict[str, Any]) -> None:
         if all(value is not None for value in values + extensions):
             # Cell 0 can instead contain the complete pack voltage. Both
             # forms sum correctly; the two arrays use different sentinels.
-            measured = [value for value in values if value != 65535]
-            measured += [value for value in extensions if value != 0]
+            measured = [
+                value for value in values if value is not None and value != 65535
+            ]
+            measured += [
+                value for value in extensions if value is not None and value != 0
+            ]
             if measured:
                 total = sum(measured) / 1000
     current = number(f.get("current_battery"))

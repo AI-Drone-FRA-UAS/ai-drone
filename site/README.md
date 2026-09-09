@@ -64,14 +64,16 @@ a Markdown file gets a `source`; a hand-written page leaves it out and gets a
 `content/<slug>.html` instead:
 
 ```python
-Page(
-    slug="ausblick",                 # becomes ausblick.html
-    title="Ausblick",                # the <h1> and the browser title
-    source="docs/OUTLOOK.md",        # path from the repository root
-    group="Projekt",                 # the sidebar group it joins
-    nav_title="Ausblick",            # shorter label for the sidebar
-    lead="Ein Satz, der die Seite einordnet.",
-),
+(
+    Page(
+        slug="ausblick",  # becomes ausblick.html
+        title="Ausblick",  # the <h1> and the browser title
+        source="docs/OUTLOOK.md",  # path from the repository root
+        group="Projekt",  # the sidebar group it joins
+        nav_title="Ausblick",  # shorter label for the sidebar
+        lead="Ein Satz, der die Seite einordnet.",
+    ),
+)
 ```
 
 The order of `PAGES` is the order of the sidebar and of the previous/next

@@ -9,3 +9,7 @@ The complete [parameter snapshot](../../params/flywoo-f745-live-2026-09-09.param
 contains 1,187 parameters; [metadata](drone-config.json) records its time,
 source and checksum. The drone remained disarmed throughout live maintenance.
 No firmware flash or actuator test was performed.
+
+The [walkthrough recorder](walkthrough-recorder.md) captures timed sensor and
+camera datasets. The later [software update](software-update.md) records Pi
+package and uv upgrades, live checks, and the unflashed firmware candidate.

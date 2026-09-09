@@ -31,27 +31,34 @@ Install [uv](https://docs.astral.sh/uv/) and create the locked environment:
 
 ```bash
 uv sync --frozen
-uv run drone-connect --help
-uv run drone-inspect --help
+uv run --locked drone-connect --help
+uv run --locked drone-inspect --help
 ```
 
 Python 3.11–3.13 is supported. The Pi uses Debian Python 3.13 with apt-installed
 Picamera2/libcamera bindings; the laptop environment does not need Pi hardware
 packages.
 
+Use `uv run --locked <command>` for project commands; uv manages `.venv`
+without requiring activation. On the deployed Pi, include `--group raspi`
+to retain its vision dependencies, for example
+`uv run --locked --group raspi drone-walk --duration 30`.
+The detached worker keeps the selected interpreter for the whole recording;
+finish the job before syncing or updating its environment.
+
 The helpers try Tailscale, hotspot, then Pi USB Ethernet:
 
 ```bash
-uv run drone-connect
-uv run drone-connect --transport hotspot
+uv run --locked drone-connect
+uv run --locked drone-connect --transport hotspot
 ```
 
 For deployment, select the reachable Pi address. This example uses Tailscale;
 when joined to `AI-Drone-Zero`, use `PI_HOST=seb@192.168.4.1`:
 
 ```bash
-PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net uv run drone-deploy
-PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net uv run drone-deploy --run inspect -- --duration 15
+PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net uv run --locked drone-deploy
+PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net uv run --locked drone-deploy --run inspect -- --duration 30
 ```
 
 Deployment alone starts no task. The inspection requests telemetry and records
@@ -78,7 +85,7 @@ offline browser report, follow the [room walkthrough procedure](docs/SENSOR_RECO
 | `drone-control hover` | Guarded GPS-free takeoff, Loiter hold, and landing |
 | `drone-tag-servo-record` | Explicit armed-flight tag recording and bounded servo pulses |
 
-Use `uv run <command> --help` for authoritative options. Before any actuation,
+Use `uv run --locked <command> --help` for authoritative options. Before any actuation,
 follow the relevant [operating procedure](docs/index.md#operation). In
 particular, normal arming checks must pass; simulation does not establish live
 flight readiness, mechanical servo travel, or an emergency-control arrangement.

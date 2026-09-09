@@ -5,14 +5,14 @@ without arming the vehicle or commanding any actuator:
 
 ```bash
 cd ~/ai-drone
-uv run drone-inspect --duration 15
+uv run --locked --group raspi drone-inspect --duration 30
 ```
 
 From the developer machine:
 
 ```bash
 SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
-  uv run drone-deploy --run inspect -- --duration 15
+  uv run --locked drone-deploy --run inspect -- --duration 30
 ```
 
 If Tailscale is offline and the laptop is joined to `AI-Drone-Zero`, replace
@@ -47,19 +47,41 @@ Then use the installed Pi environment:
 ```bash
 ssh seb@seb-is-pm
 cd ~/ai-drone
-.venv/bin/drone-walk --duration 300 --dry-run
-.venv/bin/drone-walk --duration 300
+uv run --locked --group raspi drone-walk --duration 30 --dry-run
+uv run --locked --group raspi drone-walk --duration 30
 ```
 
 The preview starts nothing. The second command starts a detached recording for
-300 seconds, also the default when `--duration` is omitted. Capture starts after
+30 seconds. For a five-minute walkthrough, use this command after the short
+recording and its report have finished:
+
+```bash
+uv run --locked --group raspi drone-walk --duration 300
+```
+
+The default is 300 seconds when `--duration` is omitted. Capture starts after
 initialization and camera warmup; there is no preparation countdown. The
-command prints a unique dataset directory under `~/ai-drone/artifacts/`.
+recorder retries the Pi GPIO serial connection once if its initial heartbeat
+wait times out, logging receive counters and the retry outcome. Each wait uses
+`drone-inspect --timeout` (10 seconds by default). If both attempts fail, the
+dataset records the FC as unavailable and can still contain camera data;
+check the component statuses before relying on a walkthrough.
+
+The command prints a unique dataset directory under `~/ai-drone/artifacts/`.
 An optional `--output-dir PATH` must name a directory that does not already
 exist. Keep the final `Dataset:` path from the journal if the recorder reports
 a different suffix.
 
-Run the launcher as `seb`, without putting `sudo` before `drone-walk`. It uses
+`uv` manages the project's `.venv`; no activation or direct `.venv/bin`
+commands are needed. The deployed Pi environment uses Debian Python 3.13 with
+system packages enabled for Picamera2/libcamera. `--group raspi` includes the
+Pi vision dependencies, and `--locked` refuses to change the reviewed lockfile.
+uv checks the environment before launch. The detached worker then reuses that
+exact interpreter for recording and reporting, so it performs no second
+dependency sync during capture. Do not update or sync the project while a job
+is active. See uv's [locking and syncing behavior](https://docs.astral.sh/uv/concepts/projects/sync/).
+
+Run the launcher as `seb`, without putting `sudo` before `uv run`. It uses
 the Pi's existing noninteractive sudo permission to start the temporary
 `ai-drone-walk.service` as that user. The job survives SSH disconnects and Wi-Fi
 roaming, and is not enabled at boot. An existing walkthrough unit is never
@@ -99,15 +121,20 @@ File syncing reduces loss but does not make an abrupt power cut safe; see
 
 `drone-report` reads an existing dataset without contacting the drone. It
 preserves the raw files and writes CSV exports, `summary.json`, and an offline
-browser report to `DATASET/review/`. Rebuild on either the Pi or a laptop with
-the installed project environment:
+browser report to `DATASET/review/`. Rebuild in the laptop's project directory:
 
 ```bash
-.venv/bin/drone-report artifacts/WALK_DIRECTORY
-.venv/bin/drone-report artifacts/WALK_DIRECTORY --no-video
+uv run --locked drone-report artifacts/WALK_DIRECTORY
+uv run --locked drone-report artifacts/WALK_DIRECTORY --no-video
 ```
 
-Replace `WALK_DIRECTORY` with the recorded directory name. The second command
+On the Pi, include its dependency group:
+
+```bash
+uv run --locked --group raspi drone-report artifacts/WALK_DIRECTORY
+```
+
+Replace `WALK_DIRECTORY` with the recorded directory name. Adding `--no-video`
 skips browser video creation while retaining charts, exports and camera
 previews. By default, available `ffmpeg` copies the H.264 video into
 `review/camera.mp4` without re-encoding. Missing `ffmpeg` or invalid timestamps

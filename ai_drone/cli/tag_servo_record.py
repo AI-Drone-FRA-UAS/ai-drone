@@ -46,17 +46,27 @@ MAX_HEARTBEAT_AGE_S = 5.0
 class AnalysisFrameLike(Protocol):
     """Capture fields needed to qualify an actuation request."""
 
-    frame_index: int
-    elapsed_s: float
-    captured_monotonic: float | None
+    @property
+    def frame_index(self) -> int: ...
+
+    @property
+    def elapsed_s(self) -> float: ...
+
+    @property
+    def captured_monotonic(self) -> float | None: ...
 
 
 class DetectionLike(Protocol):
     """AprilTag quality fields required by the active command."""
 
-    tag_id: int
-    hamming: int | None
-    decision_margin: float | None
+    @property
+    def tag_id(self) -> int: ...
+
+    @property
+    def hamming(self) -> int | None: ...
+
+    @property
+    def decision_margin(self) -> float | None: ...
 
 
 class CaptureStateLike(Protocol):

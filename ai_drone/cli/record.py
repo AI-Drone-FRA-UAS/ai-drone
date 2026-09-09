@@ -459,6 +459,49 @@ def _raise_if_startup_stopped(
     raise RuntimeError(state.worker_error or f"capture stopped during {stage}")
 
 
+def _retry_pi_uart_heartbeat(
+    connection: Any, *, endpoint: str, baud: int, timeout: float
+) -> Any:
+    """Retry one timed-out GPIO UART startup without sending MAVLink traffic."""
+
+    def counters() -> str:
+        parser = getattr(connection, "mav", None)
+        return " ".join(
+            f"{label}={getattr(parser, attribute, 'unknown')}"
+            for label, attribute in (
+                ("bytes", "total_bytes_received"),
+                ("packets", "total_packets_received"),
+                ("parse_errors", "total_receive_errors"),
+            )
+        )
+
+    print(
+        f"Pi UART heartbeat timeout: endpoint={endpoint} baud={baud} {counters()}; "
+        "reopening the local serial connection once",
+        flush=True,
+    )
+    started = time.monotonic()
+    # mavserial.reset is a local descriptor reopen at the requested baud. It
+    # does not reset the FC or transmit packets. Keep its public transport API
+    # and the existing robust MAVLink 2 decoder instead of editing parser state.
+    if not connection.reset():
+        print(
+            f"Pi UART retry: reopen failed after {time.monotonic() - started:.3f}s",
+            flush=True,
+        )
+        raise OSError("Pi UART reopen failed after the initial heartbeat timeout")
+    heartbeat = connection.wait_heartbeat(timeout=timeout)
+    outcome = "recovered" if heartbeat is not None else "no heartbeat"
+    print(
+        f"Pi UART retry: {outcome} after {time.monotonic() - started:.3f}s "
+        f"{counters()}",
+        flush=True,
+    )
+    if heartbeat is None:
+        raise TimeoutError("no ArduPilot heartbeat received after one Pi UART retry")
+    return heartbeat
+
+
 def _wait_for_capture_epoch(
     first_frame: threading.Event,
     window: CaptureWindow,
@@ -736,6 +779,15 @@ def run(  # noqa: C901
             candidate = open_ardupilot_connection(endpoint, baud=args.baud)
             heartbeat = candidate.wait_heartbeat(timeout=args.timeout)
             _raise_if_startup_stopped(stop, state, "flight-controller startup")
+            if (
+                heartbeat is None
+                and on_pi
+                and endpoint in ("/dev/serial0", "/dev/ttyAMA0")
+            ):
+                heartbeat = _retry_pi_uart_heartbeat(
+                    candidate, endpoint=endpoint, baud=args.baud, timeout=args.timeout
+                )
+                _raise_if_startup_stopped(stop, state, "flight-controller startup")
             if heartbeat is None:
                 raise TimeoutError("no ArduPilot heartbeat received")
             if tag_servo:

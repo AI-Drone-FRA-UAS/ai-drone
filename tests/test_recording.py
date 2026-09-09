@@ -1336,6 +1336,119 @@ def test_startup_interrupt_closes_flight_controller_and_writes_failure_manifest(
     assert "interrupted" in manifest["error"]
 
 
+@pytest.mark.parametrize(
+    (
+        "on_pi",
+        "endpoint",
+        "retry_result",
+        "reopen_ok",
+        "expected_waits",
+        "expected_code",
+    ),
+    [
+        (True, "/dev/serial0", "disarmed", True, 2, 0),
+        (True, "/dev/ttyAMA0", "disarmed", True, 2, 0),
+        (True, "/dev/serial0", "armed", True, 2, 3),
+        (True, "/dev/serial0", None, True, 2, 0),
+        (True, "/dev/serial0", None, False, 1, 0),
+        (False, "/dev/serial0", None, True, 1, 0),
+        (True, "/dev/ttyACM0", None, True, 1, 0),
+        (True, "tcp:127.0.0.1:5760", None, True, 1, 0),
+    ],
+)
+def test_initial_uart_timeout_retries_once_only_on_pi_and_preserves_safety(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    on_pi,
+    endpoint,
+    retry_result,
+    reopen_ok,
+    expected_waits,
+    expected_code,
+) -> None:
+    output = tmp_path / "uart-retry"
+    events = []
+    sent = []
+
+    class Connection:
+        target_system = target_component = 1
+        logfile = None
+        mav = SimpleNamespace(
+            total_bytes_received=1564,
+            total_packets_received=118,
+            total_receive_errors=117,
+            command_long_send=lambda *values: sent.append(values),
+        )
+
+        def wait_heartbeat(self, *, timeout):
+            events.append(("wait", timeout))
+            if len([event for event in events if event[0] == "wait"]) == 1:
+                return None
+            assert events[-2] == ("reset",)
+            if retry_result:
+                return _Heartbeat(system=1, armed=retry_result == "armed")
+            return None
+
+        def reset(self):
+            events.append(("reset",))
+            assert not sent
+            return reopen_ok
+
+        def setup_logfile(self, path):
+            pass
+
+        def recv_match(self, *, blocking, timeout):
+            time.sleep(min(timeout, 0.002))
+            return _TelemetryMessage("HEARTBEAT", armed=False)
+
+        def close(self):
+            events.append(("close",))
+
+    connection = Connection()
+    monkeypatch.setattr(inspect_cli, "is_raspberry_pi", lambda: on_pi)
+    monkeypatch.setattr(
+        inspect_cli, "resolve_mavlink_endpoint", lambda *_a, **_kw: endpoint
+    )
+    monkeypatch.setattr(
+        inspect_cli, "open_ardupilot_connection", lambda *_a, **_kw: connection
+    )
+    monkeypatch.setitem(sys.modules, "cv2", None)
+
+    assert (
+        run(["--duration", "0.03", "--timeout", "0.5", "--output-dir", str(output)])
+        == expected_code
+    )
+
+    assert events.count(("wait", 0.5)) == expected_waits
+    should_retry = on_pi and endpoint in ("/dev/serial0", "/dev/ttyAMA0")
+    assert events.count(("reset",)) == int(should_retry)
+    assert events.count(("close",)) == 1
+    manifest = json.loads((output / "manifest.json").read_text())
+    log = capsys.readouterr().out
+    if should_retry:
+        assert "bytes=1564 packets=118 parse_errors=117" in log
+        outcome = (
+            "reopen failed"
+            if not reopen_ok
+            else ("recovered" if retry_result else "no heartbeat")
+        )
+        assert f"Pi UART retry: {outcome} after" in log
+    else:
+        assert "Pi UART retry:" not in log
+    if should_retry and retry_result == "disarmed":
+        assert manifest["components"]["flight_controller"]["status"] == "ok"
+        assert sent and all(
+            values[2] == mavlink.MAV_CMD_SET_MESSAGE_INTERVAL for values in sent
+        )
+    else:
+        assert sent == []
+    assert manifest["armed_abort"] is (should_retry and retry_result == "armed")
+    if should_retry and retry_result is None:
+        assert manifest["components"]["flight_controller"]["status"] == "unavailable"
+        assert "Pi UART" in manifest["components"]["flight_controller"]["detail"]
+
+
 def test_timestamp_parse_failure_cannot_publish_success_manifest(tmp_path, monkeypatch):
     output = tmp_path / "bad-timestamps"
     paths = create_recording_paths(output)
