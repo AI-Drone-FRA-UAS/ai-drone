@@ -9,12 +9,13 @@ hold, and landing. Room navigation and calibrated tag approach remain planned
 work. Keep live inspection disarmed; actuator and flight commands require
 explicit authorization and their physical prerequisites.
 
-The latest dated result is the [7 September 2026 repair and verification
-report](state/2026-09-07/indoor-repair.md), with its [parameter
-snapshot](params/flywoo-f745-live-2026-09-07.param). It records restored downward
-range/flow and relative EKF aiding, an unresolved forward-lidar receive path,
-and a compass pre-arm failure. Recheck hardware before use; a dated result is
-not a continuing health guarantee.
+The latest dated result is the [9 September 2026 MT-15 integration
+report](state/2026-09-09/mt15-integration.md), with its [parameter
+snapshot](params/flywoo-f745-live-2026-09-09.param). Forward lidar now reaches the
+FC and Pi alongside downward range/flow. The earlier
+[repair report](state/2026-09-07/indoor-repair.md) records relative EKF aiding
+and the unresolved compass pre-arm issue. Recheck hardware before use; sensing
+and simulation results do not establish flight readiness.
 
 The [consolidation report](state/2026-09-07/consolidation.md) records the shared
 `main` branch, Pi deployment and restored connectivity. The
@@ -106,7 +107,7 @@ uv run --frozen --group dev deptry .
 git diff --check
 ```
 
-The two opt-in simulator tests need the exact external ArduPilot checkout and
+The three opt-in simulator cases need the exact external ArduPilot checkout and
 SITL binary; see the [pinned simulator acceptance
 gate](docs/ARDUCOPTER_4_7_NOGPS_LOITER.md#exact-pinned-sitl-acceptance-gate).
 Contributor architecture and hardware boundaries are documented in

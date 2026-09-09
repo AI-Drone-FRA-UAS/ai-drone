@@ -80,9 +80,16 @@ REQUIRED_NOGPS_LOITER_PARAMETERS: Mapping[str, float] = {
     "RNGFND1_MAX": 1.0,
     "RNGFND1_ORIENT": float(DOWNWARD_ORIENTATION),
     "RNGFND1_TYPE": 10.0,
-    "RNGFND2_TYPE": 0.0,
     # Fractional Guided climb setpoints are scaled by this value in 4.7.
     "WP_SPD_UP": 0.25,
+}
+
+# The optional forward MT-15 is independent of the downward altitude source.
+# Preserve its reviewed conservative floor rather than its advertised wire minimum.
+FORWARD_RANGEFINDER_PARAMETERS: Mapping[str, float] = {
+    "RNGFND2_ORIENT": float(mavlink.MAV_SENSOR_ROTATION_NONE),
+    "RNGFND2_MIN": 0.1,
+    "RNGFND2_MAX": 15.0,
 }
 
 EXPECTED_FIRMWARE_VERSION = (4, 7, 0)
@@ -704,7 +711,18 @@ class DroneController:
     def verify_nogps_loiter_parameters(self) -> None:
         """Require the reviewed ArduCopter 4.7 no-GPS flight invariants."""
 
-        for name, expected in REQUIRED_NOGPS_LOITER_PARAMETERS.items():
+        expected_parameters = dict(REQUIRED_NOGPS_LOITER_PARAMETERS)
+        self._pump_gcs_heartbeat()
+        forward_type = request_parameter(self._connection(), "RNGFND2_TYPE")
+        if forward_type == 10.0:
+            expected_parameters.update(FORWARD_RANGEFINDER_PARAMETERS)
+        elif forward_type != 0.0:
+            raise FlightSafetyError(
+                f"RNGFND2_TYPE={forward_type:g}; no-GPS Loiter requires disabled "
+                "(0) or the reviewed forward MAVLink rangefinder (10)"
+            )
+
+        for name, expected in expected_parameters.items():
             self._pump_gcs_heartbeat()
             actual = request_parameter(self._connection(), name)
             if not math.isclose(

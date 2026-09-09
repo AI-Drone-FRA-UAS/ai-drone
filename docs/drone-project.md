@@ -43,7 +43,7 @@ Radio binding credentials are intentionally not stored in the repository.
 | Raspberry Pi Zero 2 WH | MAVLink companion computer |
 | Raspberry Pi IMX500 AI Camera | AprilTag detection and recording |
 | MicoAir MTF-01P | Downward range and optical flow |
-| MicoAir MT-15 | Forward lidar, configured for ArduPilot MAVLink at 115200 baud; its FC receive wiring still requires verification |
+| MicoAir MT-15 | Forward lidar, ArduPilot MAVLink at 115200 baud; verified on FC T3 with UART3 RX/TX swap, rangefinder instance 2 |
 | MacroSilicon MS210x USB grabber | Optional analog FPV capture |
 | CP2102 USB-UART adapter | Sensor configuration |
 

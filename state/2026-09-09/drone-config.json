@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-09-09T10:26:19.407256+00:00",
+  "parameter_count": 1187,
+  "parameter_file": "params/flywoo-f745-live-2026-09-09.param",
+  "parameter_sha256": "b0d603be51c08229d606b17749f1f2a59d144cde9a4c53616ef0e5aeb4dc316f",
+  "schema_version": 1,
+  "source": {
+    "baud": 115200,
+    "endpoint": "/dev/serial/by-id/usb-ArduPilot_FlywooF745_200023000451333436353531-if00",
+    "target_component": 1,
+    "target_system": 1
+  },
+  "vehicle": {
+    "armed": false,
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "system_status": 3,
+    "type": 2
+  }
+}

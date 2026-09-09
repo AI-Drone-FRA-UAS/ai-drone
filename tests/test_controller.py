@@ -324,16 +324,15 @@ def test_nogps_loiter_parameters_must_match_reviewed_47_values(monkeypatch) -> N
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
     requested = []
+    parameters = {**REQUIRED_NOGPS_LOITER_PARAMETERS, "RNGFND2_TYPE": 0.0}
     monkeypatch.setattr(
         "ai_drone.flight.controller.request_parameter",
-        lambda _connection, name: (
-            requested.append(name) or REQUIRED_NOGPS_LOITER_PARAMETERS[name]
-        ),
+        lambda _connection, name: requested.append(name) or parameters[name],
     )
 
     controller.verify_nogps_loiter_parameters()
 
-    assert requested == list(REQUIRED_NOGPS_LOITER_PARAMETERS)
+    assert requested == ["RNGFND2_TYPE", *REQUIRED_NOGPS_LOITER_PARAMETERS]
     assert REQUIRED_NOGPS_LOITER_PARAMETERS["EK3_SRC1_POSXY"] == 0.0
     assert REQUIRED_NOGPS_LOITER_PARAMETERS["EK3_SRC1_POSZ"] == 1.0
     assert REQUIRED_NOGPS_LOITER_PARAMETERS["FS_OPTIONS"] == 8.0
@@ -344,18 +343,93 @@ def test_nogps_loiter_parameters_must_match_reviewed_47_values(monkeypatch) -> N
     assert REQUIRED_NOGPS_LOITER_PARAMETERS["MAV_GCS_SYSID"] == 255.0
 
 
-def test_wrong_nogps_parameter_blocks_flight(monkeypatch) -> None:
+@pytest.mark.parametrize("forward_type", [0.0, 10.0])
+def test_wrong_nogps_parameter_blocks_flight(monkeypatch, forward_type) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
+    parameters = {
+        **REQUIRED_NOGPS_LOITER_PARAMETERS,
+        "RNGFND2_TYPE": forward_type,
+        "RNGFND2_ORIENT": 0.0,
+        "RNGFND2_MIN": 0.1,
+        "RNGFND2_MAX": 15.0,
+        "FS_OPTIONS": 16.0,
+    }
     monkeypatch.setattr(
         "ai_drone.flight.controller.request_parameter",
-        lambda _connection, name: (
-            16.0 if name == "FS_OPTIONS" else REQUIRED_NOGPS_LOITER_PARAMETERS[name]
-        ),
+        lambda _connection, name: parameters[name],
     )
 
     with pytest.raises(FlightSafetyError, match=r"FS_OPTIONS=16.*exact value 8"):
         controller.verify_nogps_loiter_parameters()
+
+
+@pytest.mark.parametrize("minimum", [0.1, 0.10000000149011612])
+def test_reviewed_forward_mt15_configuration_is_accepted(monkeypatch, minimum) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    controller.connection = MagicMock()
+    parameters = {
+        **REQUIRED_NOGPS_LOITER_PARAMETERS,
+        "RNGFND2_TYPE": 10.0,
+        "RNGFND2_ORIENT": 0.0,
+        "RNGFND2_MIN": minimum,
+        "RNGFND2_MAX": 15.0,
+    }
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.request_parameter",
+        lambda _connection, name: parameters[name],
+    )
+
+    controller.verify_nogps_loiter_parameters()
+
+    controller.connection.arducopter_arm.assert_not_called()
+    controller.connection.mav.param_set_send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("RNGFND2_TYPE", 1.0),
+        ("RNGFND2_TYPE", 9.0),
+        ("RNGFND2_TYPE", 10.1),
+        ("RNGFND2_ORIENT", 25.0),
+        ("RNGFND2_ORIENT", 2.0),
+        ("RNGFND2_MIN", 0.0),
+        ("RNGFND2_MIN", 0.02),
+        ("RNGFND2_MIN", 0.2),
+        ("RNGFND2_MAX", 0.0),
+        ("RNGFND2_MAX", 10.0),
+        ("RNGFND2_MAX", 16.0),
+        ("RNGFND2_MAX", float("inf")),
+        ("RNGFND2_MIN", float("nan")),
+        ("RNGFND1_TYPE", 0.0),
+        ("RNGFND1_ORIENT", 0.0),
+        ("RNGFND1_MAX", 15.0),
+    ],
+)
+def test_forward_mt15_cannot_relax_reviewed_rangefinder_configuration(
+    monkeypatch, name, value
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    controller.connection = MagicMock()
+    parameters = {
+        **REQUIRED_NOGPS_LOITER_PARAMETERS,
+        "RNGFND2_TYPE": 10.0,
+        "RNGFND2_ORIENT": 0.0,
+        "RNGFND2_MIN": 0.1,
+        "RNGFND2_MAX": 15.0,
+        name: value,
+    }
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.request_parameter",
+        lambda _connection, requested: parameters[requested],
+    )
+
+    with pytest.raises(FlightSafetyError, match=name):
+        controller.verify_nogps_loiter_parameters()
+
+    controller.connection.arducopter_arm.assert_not_called()
+    controller.connection.mav.param_set_send.assert_not_called()
 
 
 def test_firmware_gate_requests_and_accepts_exact_copter_470(monkeypatch) -> None:

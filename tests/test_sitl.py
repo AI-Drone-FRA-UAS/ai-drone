@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from contextlib import closing, contextmanager, suppress
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,13 @@ SENSOR_RATE_HZ = 20.0
 RANGE_MIN_CM = 2
 RANGE_MAX_CM = 800
 FLOW_QUALITY = 60
+FORWARD_RANGE_CM = 150
+FORWARD_RANGE_PARAMETERS = {
+    "RNGFND2_TYPE": 10.0,
+    "RNGFND2_ORIENT": 0.0,
+    "RNGFND2_MIN": 0.1,
+    "RNGFND2_MAX": 15.0,
+}
 
 pytestmark = pytest.mark.sitl
 
@@ -96,7 +104,8 @@ def _connect() -> Any:
 class _ExternalMavlinkSensors:
     """Inject project-style MAVLink range and flow from SITL ground truth."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, forward_range_enabled: bool = False) -> None:
+        self.forward_range_enabled = forward_range_enabled
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -118,6 +127,7 @@ class _ExternalMavlinkSensors:
         self.rc_channel_counts: list[int] = []
         self.status_texts: list[str] = []
         self.status_by_mode: list[tuple[str | None, str]] = []
+        self.range_observations: list[dict[str, Any]] = []
         self._current_mode: str | None = None
         self._current_armed: bool | None = None
 
@@ -159,6 +169,7 @@ class _ExternalMavlinkSensors:
             self.rc_channel_counts.clear()
             self.status_texts.clear()
             self.status_by_mode.clear()
+            self.range_observations.clear()
 
     def wait_for_mode(
         self,
@@ -346,6 +357,25 @@ class _ExternalMavlinkSensors:
             (0.0, 0.0, 0.0, 0.0),
             0,
         )
+        if self.forward_range_enabled:
+            # Match the MT-15's native ID 0 even though the downward sensor also
+            # uses ID 0. ArduPilot must separate backends by orientation and
+            # republish the forward reading as instance 1. Its 1.5 m reading
+            # deliberately exceeds the production hover's 0.8 m ceiling.
+            sender.distance_sensor_send(
+                (now_us // 1_000) & 0xFFFFFFFF,
+                RANGE_MIN_CM,
+                1500,
+                FORWARD_RANGE_CM,
+                mavlink2.MAV_DISTANCE_SENSOR_LASER,
+                0,
+                mavlink2.MAV_SENSOR_ROTATION_NONE,
+                0,
+                0.0,
+                0.0,
+                (0.0, 0.0, 0.0, 0.0),
+                0,
+            )
 
         # A non-zero extension in the first packet selects ArduPilot 4.7's
         # high-precision rad/s path even when the simulated vehicle is still.
@@ -389,6 +419,22 @@ class _ExternalMavlinkSensors:
                 )
             elif message_type == "RC_CHANNELS":
                 self.rc_channel_counts.append(int(message.chancount))
+            elif message_type == "DISTANCE_SENSOR":
+                if (message.get_srcSystem(), message.get_srcComponent()) != (1, 1):
+                    return
+                self.range_observations.append(
+                    {
+                        "observed_monotonic": time.monotonic(),
+                        "mode": self._current_mode,
+                        "source_system": message.get_srcSystem(),
+                        "source_component": message.get_srcComponent(),
+                        "id": int(message.id),
+                        "orientation": int(message.orientation),
+                        "distance_cm": int(message.current_distance),
+                        "min_cm": int(message.min_distance),
+                        "max_cm": int(message.max_distance),
+                    }
+                )
             elif message_type == "STATUSTEXT":
                 text = str(message.text)
                 self.status_texts.append(text)
@@ -409,16 +455,16 @@ class _ExternalMavlinkSensors:
                 )
             connection.target_system = heartbeat.get_srcSystem()
             connection.target_component = heartbeat.get_srcComponent()
-            request_message_intervals(
-                connection,
-                {
-                    mavlink2.MAVLINK_MSG_ID_SIM_STATE: SENSOR_RATE_HZ,
-                    mavlink2.MAVLINK_MSG_ID_HEARTBEAT: 10.0,
-                    mavlink2.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
-                    mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
-                    mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
-                },
-            )
+            intervals = {
+                mavlink2.MAVLINK_MSG_ID_SIM_STATE: SENSOR_RATE_HZ,
+                mavlink2.MAVLINK_MSG_ID_HEARTBEAT: 10.0,
+                mavlink2.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
+                mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
+                mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
+            }
+            if self.forward_range_enabled:
+                intervals[mavlink2.MAVLINK_MSG_ID_DISTANCE_SENSOR] = SENSOR_RATE_HZ
+            request_message_intervals(connection, intervals)
             sender = mavlink2.MAVLink(
                 connection,
                 srcSystem=254,
@@ -469,7 +515,9 @@ def _assert_subsequence(actual: list[str], expected: list[str]) -> None:
     assert next_index == len(expected), f"expected {expected} in mode history {actual}"
 
 
-def _assert_sitl_parameters(connection: Any) -> None:
+def _assert_sitl_parameters(
+    connection: Any, *, forward_range_enabled: bool = False
+) -> None:
     expected = {
         "AHRS_EKF_TYPE": 3.0,
         "AHRS_OPTIONS": 16.0,
@@ -512,6 +560,8 @@ def _assert_sitl_parameters(connection: Any) -> None:
         "SIM_RC_FAIL": 1.0,
         "WP_SPD_UP": 0.25,
     }
+    if forward_range_enabled:
+        expected.update(FORWARD_RANGE_PARAMETERS)
     actual = {
         name: request_parameter(connection, name, timeout=5.0) for name in expected
     }
@@ -524,7 +574,7 @@ def _assert_sitl_parameters(connection: Any) -> None:
 
 
 @contextmanager
-def _running_sitl(root: Path, tmp_path: Path):
+def _running_sitl(root: Path, tmp_path: Path, *, forward_range_enabled: bool = False):
     with closing(socket.socket()) as probe:
         if probe.connect_ex(("127.0.0.1", 5760)) == 0:
             pytest.skip("TCP port 5760 is already in use")
@@ -532,6 +582,16 @@ def _running_sitl(root: Path, tmp_path: Path):
     log_path = tmp_path / "sitl.log"
     binary = root / "build" / "sitl" / "bin" / "arducopter"
     defaults = root / "Tools" / "autotest" / "default_params" / "copter.parm"
+    defaults_paths = [str(defaults), str(PARAMETERS.resolve())]
+    if forward_range_enabled:
+        forward_defaults = tmp_path / "forward-rangefinder.parm"
+        forward_defaults.write_text(
+            "".join(
+                f"{name},{value:g}\n"
+                for name, value in FORWARD_RANGE_PARAMETERS.items()
+            )
+        )
+        defaults_paths.append(str(forward_defaults))
     command = [
         str(binary),
         "-S",
@@ -544,9 +604,9 @@ def _running_sitl(root: Path, tmp_path: Path):
         "--speedup",
         "1",
         "--defaults",
-        f"{defaults},{PARAMETERS.resolve()}",
+        ",".join(defaults_paths),
     ]
-    sensors = _ExternalMavlinkSensors()
+    sensors = _ExternalMavlinkSensors(forward_range_enabled=forward_range_enabled)
     sensors_started = False
     with log_path.open("wb") as log:
         process = subprocess.Popen(
@@ -576,7 +636,9 @@ def _running_sitl(root: Path, tmp_path: Path):
 def _assert_running_sitl_configuration(sensors: _ExternalMavlinkSensors) -> None:
     connection = _connect()
     try:
-        _assert_sitl_parameters(connection)
+        _assert_sitl_parameters(
+            connection, forward_range_enabled=sensors.forward_range_enabled
+        )
         sensors.assert_healthy()
         request_message_intervals(
             connection,
@@ -662,12 +724,57 @@ def _assert_no_navigation_rejections(sensors: _ExternalMavlinkSensors) -> None:
     assert not rejected, rejected
 
 
+def _assert_forward_range_coexists(
+    sensors: _ExternalMavlinkSensors, tmp_path: Path
+) -> None:
+    with sensors._condition:
+        observations = list(sensors.range_observations)
+    (tmp_path / "fc-range-observations.json").write_text(
+        json.dumps(observations, indent=2) + "\n"
+    )
+    assert observations, "no FC-republished range observations"
+    assert {
+        (sample["source_system"], sample["source_component"]) for sample in observations
+    } == {(1, 1)}
+    loiter = [sample for sample in observations if sample["mode"] == "LOITER"]
+    forward = [sample for sample in loiter if sample["orientation"] == 0]
+    downward = [sample for sample in loiter if sample["orientation"] == 25]
+    assert forward and downward, "both FC range backends must report during Loiter"
+    assert {sample["id"] for sample in forward} == {1}
+    assert {sample["id"] for sample in downward} == {0}
+    assert {sample["distance_cm"] for sample in forward} == {FORWARD_RANGE_CM}
+    assert {sample["min_cm"] for sample in forward} == {10}
+    assert {sample["max_cm"] for sample in forward} == {1500}
+    assert all(0 < sample["distance_cm"] < 80 for sample in downward)
+
+    # A few startup packets are insufficient: require both FC streams across
+    # the five-second Loiter hold, including its beginning and end. This fails
+    # if the forward backend stops reporting while the downward-only flight
+    # controller continues its otherwise successful hover.
+    for samples in (forward, downward):
+        times = [sample["observed_monotonic"] for sample in samples]
+        assert times[-1] - times[0] >= 3.0, times
+        assert max(later - earlier for earlier, later in pairwise(times)) < 1.0
+    assert (
+        abs(forward[0]["observed_monotonic"] - downward[0]["observed_monotonic"]) < 1.0
+    )
+    assert (
+        abs(forward[-1]["observed_monotonic"] - downward[-1]["observed_monotonic"])
+        < 1.0
+    )
+
+
+@pytest.mark.parametrize(
+    "forward_range_enabled", [False, True], ids=["downward-only", "with-forward"]
+)
 def test_production_hover_no_gps_loiter_in_pinned_sitl(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, forward_range_enabled: bool
 ) -> None:
     root = _ardupilot_root()
     monkeypatch.chdir(tmp_path)
-    with _running_sitl(root, tmp_path) as sensors:
+    with _running_sitl(
+        root, tmp_path, forward_range_enabled=forward_range_enabled
+    ) as sensors:
         # Prove that the same sensor streams consumed by production code remain
         # available through the read-only inspection command before flight.
         inspection = tmp_path / "inspection"
@@ -694,6 +801,10 @@ def test_production_hover_no_gps_loiter_in_pinned_sitl(
         assert (
             inspection_manifest["components"]["optical_flow"]["quality"] == FLOW_QUALITY
         )
+        if forward_range_enabled:
+            forward_report = inspection_manifest["components"]["forward_rangefinder"]
+            assert forward_report["status"] == "ok"
+            assert forward_report["latest_m"] == FORWARD_RANGE_CM / 100.0
 
         _assert_running_sitl_configuration(sensors)
         sensors.reset_observations()
@@ -706,6 +817,8 @@ def test_production_hover_no_gps_loiter_in_pinned_sitl(
         result = sensors.assert_flight_result()
         _assert_no_navigation_rejections(sensors)
         assert result["max_horizontal_drift_m"] <= 0.5, result
+        if forward_range_enabled:
+            _assert_forward_range_coexists(sensors, tmp_path)
 
         flight_manifests = list(
             (tmp_path / "artifacts" / "flights").glob("*/manifest.json")
@@ -721,6 +834,7 @@ def test_production_hover_no_gps_loiter_in_pinned_sitl(
             f"Loiter min={result['minimum_loiter_altitude_m']:.3f} m, "
             f"max altitude={result['maximum_altitude_m']:.3f} m, "
             f"RC chancount={sorted(set(sensors.rc_channel_counts))}, "
+            f"forward range enabled={forward_range_enabled}, "
             f"external MAVLink {sensors.wire_protocol} "
             f"sensor samples={sensors.sample_count}"
         )

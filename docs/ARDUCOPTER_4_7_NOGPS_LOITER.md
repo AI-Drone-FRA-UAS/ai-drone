@@ -9,11 +9,13 @@ aircraft and is not an upload source.
 The intended first live mission is deliberately small: take off to 0.5 m,
 wait for a flow-backed relative position, hold Loiter briefly, and land. The
 companion has a hard 0.8 m software ceiling. The August 24–25 capture and the
-SITL acceptance path use only the downward rangefinder. A forward MT-15 was
-configured separately on September 7, but its FC receive path remains
-unverified. See the [later repair result](../state/2026-09-07/indoor-repair.md)
-for that integration and the current sensor findings. This flight path does
-not claim forward obstacle detection or avoidance.
+original SITL acceptance path use only the downward rangefinder. The forward
+MT-15 was integrated on September 9 with UART3 pin swapping and a separate
+MAVLink rangefinder instance. An additional simulator case checks that forward
+data coexists with the same hover sequence. See the
+[integration result](../state/2026-09-09/mt15-integration.md). The flight path
+continues to use downward range for altitude and does not implement obstacle
+avoidance.
 
 SITL is an acceptance gate for the firmware configuration and deployable
 control path. It does not by itself authorize a propeller-on flight or validate
@@ -177,8 +179,9 @@ rangefinder limit when deciding where optical-flow navigation is usable; the
 companion independently commands LAND if either fresh downward range or its
 range-aligned local altitude exceeds 0.8 m. The 0.2 m margin is intentional.
 `AVOID_ENABLE=2` remains unchanged because ArduPilot's flow height limiting is
-gated by nonzero avoidance configuration. It does not create forward obstacle
-detection, and no forward distance stream is configured or simulated.
+gated by nonzero avoidance configuration. It does not provide forward obstacle
+avoidance. Forward range is now recorded and simulated, but this flight path
+has no obstacle response controller.
 
 These captured or migrated values are required invariants, not additional
 blind writes:
@@ -212,9 +215,15 @@ LAND_SPD_MS,0.15
 MAV_GCS_SYSID,255
 RNGFND1_ORIENT,25
 RNGFND1_TYPE,10
-RNGFND2_TYPE,0
 WP_SPD_UP,0.25
 ```
+
+The optional second rangefinder must either be disabled (`RNGFND2_TYPE=0`) or
+match the reviewed MT-15 configuration exactly: type 10, orientation 0,
+minimum 0.1 m and maximum 15 m. These checks permit the additional sensing
+configuration; they do not make forward range an altitude source or implement
+braking. Physical UART3 pin swapping belongs to this airframe's wiring setup
+and is not copied into the simulator.
 
 `ARMING_SKIPCHK=0` is exact and means no pre-arm category is skipped.
 `FS_THR_ENABLE=0` is also an exact invariant for the captured, receiver-free
@@ -462,7 +471,12 @@ The test setup keeps GPS disabled (`GPS1_TYPE=0`, `GPS2_TYPE=0`, and
 `RNGFND1_TYPE=10`), disables SITL's internal flow backend, and supplies 20 Hz
 MAVLink 2 `OPTICAL_FLOW` and downward `DISTANCE_SENSOR` messages on an
 independent companion link. The injected samples are derived from `SIM_STATE`
-truth with ArduPilot's flow geometry. No forward lidar is injected.
+truth with ArduPilot's flow geometry. The normal-hover test also runs with a
+temporary forward-rangefinder overlay (type 10, orientation 0, 0.1–15 m) and
+20 Hz native ID 0 forward packets fixed at 1.5 m. It requires separate FC-origin
+ID 1/forward and ID 0/downward reports throughout Loiter. The 1.5 m forward
+reading exceeds the 0.8 m flight ceiling, helping detect accidental use as
+altitude. The baseline and GCS-loss tests retain the downward-only setup.
 
 An early test appeared to complete but was not a valid airborne hold: standard
 SITL synthesized an RC receiver at minimum throttle even though the project

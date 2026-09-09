@@ -45,6 +45,7 @@ a live connection result.
 | --- | --- | --- |
 | IMX500 AI Camera | Directly to Pi CSI connector | H.264 video, frame metadata, and tag detections |
 | MicoAir MTF-01P | Flight controller UART5 (`SERIAL5`, MAVLink1, 115200) | FC-published range and optical flow over the companion link |
+| MicoAir MT-15 | FC physical T3 with `SERIAL3_OPTIONS=8`, MAVLink1, 115200 | FC-published forward rangefinder instance 2 over the companion link |
 | Flight-controller IMU, barometer, compass, GPS, battery, EKF and RC state | Directly to the FlywooF745 | Requested MAVLink telemetry over UART4 |
 | Raspberry Pi companion link | Pi GPIO14/15 `/dev/serial0` to FC R4/T4 (`SERIAL4`, MAVLink2, 115200) | All FC telemetry in `.tlog` and `.jsonl` |
 | Servo | Separate guarded utility targets Pi BCM12 directly | Not driven by this program; FC output telemetry may still be recorded |
@@ -55,11 +56,11 @@ the flight battery, including the MTF-01P, must already be powered.
 
 ## Forward MicoAir MT-15
 
-The MT-15 is the forward sensor. Its native ArduPilot MAVLink output was
-verified through a USB-UART adapter on September 7, but the subsequent FC
-receive path remained unverified. See the [direct sensor configuration
-record](../state/2026-09-07/mt15-direct-usb-configuration.md) and the later
-[integration repair result](../state/2026-09-07/indoor-repair.md).
+The MT-15 is the forward sensor. Its FC receive path was restored on September
+9 by enabling UART3 RX/TX swapping after a physical data-wire change, then
+enabling the second MAVLink rangefinder. See the
+[integration verification](../state/2026-09-09/mt15-integration.md) and the
+earlier [direct sensor configuration](../state/2026-09-07/mt15-direct-usb-configuration.md).
 
 The inspector distinguishes forward `DISTANCE_SENSOR.orientation=0` from
 downward orientation25. Component health and counts require messages from the
@@ -67,6 +68,9 @@ selected flight controller; raw telemetry retains other sources for diagnosis.
 Without a confirmed FC-published forward stream, the component is `no_data` and
 flight logic must not depend on it. Sensor ID alone cannot distinguish these
 two sensors: the tested MT-15 firmware emits MAVLink ID0 despite saving ID1.
+The FC republishes it as instance ID1. Both forward and downward health expire
+after two seconds without a valid sample. MAVLink signal quality1 means an
+invalid reading and cannot refresh health; quality0 is accepted as unknown.
 
 Use the [canonical wiring and configuration guide](DRONE_CONFIGURATION.md#sensors)
 before changing parameters. It explains RX3 versus the old analog VTX cable,

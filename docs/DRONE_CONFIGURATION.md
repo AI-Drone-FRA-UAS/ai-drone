@@ -12,7 +12,7 @@ inspect the newest file under `params/` and its matching capture under
 | Flywoo GOKU GN745 AIO | Developer USB | MAVLink, usually `/dev/serial/by-id/...` |
 | Raspberry Pi companion | FC UART4 ↔ Pi `/dev/serial0` | MAVLink2, 115200 baud |
 | MicoAir MTF-01P | FC UART5 | MAVLink1, 115200 baud |
-| Forward MicoAir MT-15 | FC UART3 assigned; physical receive path unverified | Sensor configured for MAVLink/APM, 115200 baud, forward orientation |
+| Forward MicoAir MT-15 | FC UART3, physical T3 used as RX with `SERIAL3_OPTIONS=8` | MAVLink/APM, 115200 baud, forward rangefinder instance 2 |
 | IMX500 camera | Pi CSI | Picamera2/libcamera |
 | Payload servo | Pi BCM12 | Direct GPIO; not a flight-controller servo output |
 
@@ -70,11 +70,27 @@ its physical UART, regulated power, outgoing MAVLink sensor ID/orientation, and
 firmware support before writing `SERIALx`, `RNGFND2`, proximity, or avoidance
 parameters. One forward beam is not full obstacle avoidance.
 
-The old analog VTX connector has TX3 and video connections but no RX3. MT-15 TX
-must reach RX3 on the separate DJI connector; MT-15 RX connects to TX3. Verify
-common ground and regulated 5 V rather than relying on old wire colours. The
-MT-15 firmware tested on 2026-09-07 saves sensor ID1 but emits MAVLink ID0;
-the pinned ArduPilot rangefinder backend separates readings by orientation.
+The old analog VTX connector has TX3 and video connections but no RX3. After
+the user's data-wire swap on 9 September, the MT-15 signal was verified on
+physical **T3**: `SERIAL3_OPTIONS=8` swaps USART3's RX/TX pin functions so T3
+receives it. Normal options 0 received no bytes. Keep the software pin mapping
+consistent with the actual wiring; the ordinary unswapped topology would put
+MT-15 TX on RX3 and MT-15 RX on TX3. Video pins are not UART pins.
+
+The verified receive configuration is `SERIAL3_PROTOCOL=1`,
+`SERIAL3_BAUD=115`, `SERIAL3_OPTIONS=8`, `RNGFND2_TYPE=10`,
+`RNGFND2_ORIENT=0`, `RNGFND2_MIN=0.1`, and `RNGFND2_MAX=15` (metres).
+Keep the existing five-channel allocation and private sensor channel. The
+FC publishes forward readings as instance ID1, orientation0, separately from
+downward ID0, orientation25. See the
+[integration and persistence verification](../state/2026-09-09/mt15-integration.md).
+
+Sensor-to-FC data reception is verified; the sensor's command-receive wire was
+not traced or tested. Verify common ground and regulated 5 V rather than relying
+on old wire colours. The MT-15 firmware tested on 2026-09-07 saves sensor ID1
+but emits native MAVLink ID0; the pinned ArduPilot backend separates incoming
+readings by orientation. The configured 0.1 m minimum remains conservative;
+native packets advertising 2 cm are not an accuracy or blind-zone calibration.
 
 See [sensor recording and wiring](SENSOR_RECORDING.md).
 The reviewed ArduCopter 4.7 EKF correction, comparison evidence, and SITL

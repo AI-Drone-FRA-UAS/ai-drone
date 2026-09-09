@@ -568,8 +568,9 @@ class _QueuedConnection:
 
 @pytest.mark.parametrize("foreign_source", [(2, 1), (1, 191)])
 @pytest.mark.parametrize("include_selected", [False, True])
+@pytest.mark.parametrize("orientation", [0, 25])
 def test_telemetry_health_uses_selected_source_and_keeps_all_raw_messages(
-    tmp_path, foreign_source, include_selected
+    tmp_path, foreign_source, include_selected, orientation
 ) -> None:
     def sensor_messages(system, component, *, distance_cm, quality):
         messages = []
@@ -577,7 +578,7 @@ def test_telemetry_health_uses_selected_source_and_keeps_all_raw_messages(
             (
                 "DISTANCE_SENSOR",
                 {
-                    "orientation": 25,
+                    "orientation": orientation,
                     "current_distance": distance_cm,
                     "min_distance": 1,
                     "max_distance": 1000,
@@ -656,6 +657,14 @@ def test_telemetry_health_uses_selected_source_and_keeps_all_raw_messages(
     assert report["downward_rangefinder"]["samples"] == (1 if include_selected else 0)
     assert report["downward_rangefinder"]["latest_m"] == (
         0.35 if include_selected else None
+    )
+    forward_selected = include_selected and orientation == 0
+    assert report["forward_rangefinder"]["status"] == (
+        "ok" if forward_selected else "no_data"
+    )
+    assert report["forward_rangefinder"]["samples"] == (1 if forward_selected else 0)
+    assert report["forward_rangefinder"]["latest_m"] == (
+        0.35 if forward_selected else None
     )
     assert state.legacy_range_samples == (1 if include_selected else 0)
     assert state.latest_legacy_range_m == (0.35 if include_selected else None)
@@ -1680,13 +1689,14 @@ def test_camera_stall_writes_failed_manifest_and_attempts_camera_cleanup(
     assert camera.closed and camera.stopped and camera.encoder_stopped
 
 
-def _distance_message(cm, *, orientation=25):
+def _distance_message(cm, *, orientation=25, signal_quality=0):
     return SimpleNamespace(
         get_type=lambda: "DISTANCE_SENSOR",
         orientation=orientation,
         current_distance=cm,
         min_distance=1,
         max_distance=1000,
+        signal_quality=signal_quality,
     )
 
 
@@ -1705,6 +1715,96 @@ def _sensor_report(state, *, observed_at):
         duration=1,
         observed_at=observed_at,
     )
+
+
+@pytest.mark.parametrize(
+    ("orientation", "component"),
+    [(0, "forward_rangefinder"), (25, "downward_rangefinder")],
+)
+@pytest.mark.parametrize("signal_quality", [0, 1, 73])
+def test_range_health_excludes_explicitly_invalid_signal_quality(
+    monkeypatch, orientation, component, signal_quality
+):
+    state = CaptureState()
+    monkeypatch.setattr(capture_reporting.time, "monotonic", lambda: 10.0)
+    _observe_sensor_message(
+        state,
+        _distance_message(150, orientation=orientation, signal_quality=signal_quality),
+    )
+
+    report = _sensor_report(state, observed_at=10)[component]
+    valid = signal_quality != 1
+    assert report["status"] == ("ok" if valid else "no_data")
+    assert report["samples"] == (1 if valid else 0)
+    assert report["latest_m"] == (1.5 if valid else None)
+    assert state.distance_observed_monotonic.get(orientation) == (
+        10.0 if valid else None
+    )
+
+
+@pytest.mark.parametrize(
+    ("orientation", "component"),
+    [(0, "forward_rangefinder"), (25, "downward_rangefinder")],
+)
+def test_invalid_range_does_not_replace_or_refresh_last_valid_sample(
+    monkeypatch, orientation, component
+):
+    state = CaptureState()
+    now = [10.0]
+    monkeypatch.setattr(capture_reporting.time, "monotonic", lambda: now[0])
+    _observe_sensor_message(state, _distance_message(150, orientation=orientation))
+    now[0] = 11.5
+    _observe_sensor_message(
+        state, _distance_message(900, orientation=orientation, signal_quality=1)
+    )
+
+    assert _sensor_report(state, observed_at=12)[component]["status"] == "ok"
+    report = _sensor_report(state, observed_at=12.01)[component]
+    assert report["status"] == "stale"
+    assert report["samples"] == 1
+    assert report["latest_m"] == 1.5
+    assert state.distance_observed_monotonic[orientation] == 10.0
+
+
+def test_forward_and_downward_ranges_keep_independent_values_and_freshness(
+    monkeypatch,
+):
+    state = CaptureState()
+    now = [10.0]
+    monkeypatch.setattr(capture_reporting.time, "monotonic", lambda: now[0])
+    _observe_sensor_message(state, _distance_message(155, orientation=0))
+    _observe_sensor_message(state, _distance_message(42))
+    now[0] = 13.0
+    _observe_sensor_message(state, _distance_message(47))
+    _observe_sensor_message(state, _range_message(0.47))
+
+    report = _sensor_report(state, observed_at=13)
+    assert report["forward_rangefinder"] == {
+        "status": "stale",
+        "samples": 1,
+        "latest_m": 1.55,
+        "rate_hz": 1.0,
+    }
+    assert report["downward_rangefinder"] == {
+        "status": "ok",
+        "samples": 2,
+        "latest_m": 0.47,
+        "source": "DISTANCE_SENSOR",
+        "rate_hz": 2.0,
+    }
+    # Cleanup after a recording must not age a sample past its capture end.
+    assert (
+        _sensor_report(state, observed_at=11)["forward_rangefinder"]["status"] == "ok"
+    )
+    # Future-dated observations cannot establish current health.
+    assert (
+        _sensor_report(state, observed_at=9)["forward_rangefinder"]["status"] == "stale"
+    )
+    _observe_sensor_message(state, _distance_message(160, orientation=0))
+    recovered = _sensor_report(state, observed_at=13)["forward_rangefinder"]
+    assert recovered["status"] == "ok"
+    assert recovered["samples"] == 2
+    assert recovered["latest_m"] == 1.6
 
 
 def test_downward_range_prefers_oriented_stream_without_double_counting(monkeypatch):

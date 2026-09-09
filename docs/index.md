@@ -43,6 +43,9 @@ Pi USB Ethernet and flight-controller USB are different devices and protocols.
 
 ## Dated evidence and history
 
+- [9 September MT-15 integration](../state/2026-09-09/mt15-integration.md):
+  verified forward range through FC and Pi after UART3 pin swapping, with
+  [current parameters](../params/flywoo-f745-live-2026-09-09.param).
 - [7 September 2026 repair result](../state/2026-09-07/indoor-repair.md):
   completed software/FC repairs, verification and remaining physical work.
 - [7 September initial analysis](../state/2026-09-07/README.md): earlier findings

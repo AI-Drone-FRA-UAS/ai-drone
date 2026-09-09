@@ -20,7 +20,13 @@ def _observe_sensor_message(state: CaptureState, message: Any) -> None:
         current_cm = int(message.current_distance)
         minimum_cm = int(message.min_distance)
         maximum_cm = int(message.max_distance)
-        if current_cm > 0 and minimum_cm <= current_cm <= maximum_cm:
+        # MAVLink defines 0 as unknown/not supplied and 1 as invalid.
+        signal_quality = int(getattr(message, "signal_quality", 0))
+        if (
+            current_cm > 0
+            and minimum_cm <= current_cm <= maximum_cm
+            and signal_quality != 1
+        ):
             state.distance_samples[orientation] += 1
             state.latest_distance_m[orientation] = current_cm / 100.0
             state.distance_observed_monotonic[orientation] = time.monotonic()
@@ -83,9 +89,9 @@ def _component_report(
             return "unavailable"
         return "ok" if samples else "no_data"
 
+    observed_at = time.monotonic() if observed_at is None else observed_at
     downward, downward_m, range_source, range_fresh = _downward_range_summary(
-        state,
-        time.monotonic() if observed_at is None else observed_at,
+        state, observed_at
     )
     downward_status = dependent(downward, flight_controller)
     if downward_status == "ok" and not range_fresh:
@@ -97,6 +103,13 @@ def _component_report(
         elif state.latest_flow_quality <= 0:
             flow_status = "low_quality"
     forward = state.distance_samples[0]
+    forward_status = dependent(forward, flight_controller)
+    forward_observed = state.distance_observed_monotonic.get(0)
+    if forward_status == "ok" and (
+        forward_observed is None
+        or not 0 <= observed_at - forward_observed <= _RANGE_FRESHNESS_S
+    ):
+        forward_status = "stale"
     tag_status = dependent(state.tag_detections, camera)
     if detector != "ok":
         tag_status = "unavailable"
@@ -114,7 +127,7 @@ def _component_report(
             "source": range_source,
         },
         "forward_rangefinder": {
-            "status": dependent(forward, flight_controller),
+            "status": forward_status,
             "samples": forward,
             "latest_m": state.latest_distance_m.get(0),
         },
