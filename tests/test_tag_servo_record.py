@@ -34,6 +34,7 @@ from ai_drone.cli.tag_servo_record import (
 )
 from ai_drone.durability import IntervalSync
 from ai_drone.mavlink.parameters import request_parameter
+from ai_drone.mount import DEFAULT_SETTLE_S, MOUNT_OPEN_VALUE
 from ai_drone.recording import request_telemetry_messages
 from ai_drone.vision.apriltags import TagDetection
 
@@ -62,6 +63,15 @@ def _parse(*extra: str):
     args = parser.parse_args(_arguments(*extra))
     _validate_args(parser, args, operation="tag-servo")
     return args
+
+
+def _mount_config() -> TagServoConfig:
+    parser = _parser(operation="tag-mount")
+    args = parser.parse_args([])
+    _validate_args(parser, args, operation="tag-mount")
+    assert args.duration is None
+    assert args.backend == "native"
+    return TagServoConfig.from_args(args)
 
 
 def test_active_parser_accepts_optional_count_or_unbounded_runtime() -> None:
@@ -298,6 +308,80 @@ def _observe(session: TagServoSession, tag_id: int, count: int = 1) -> None:
     for index in range(count):
         detection = _detection(tag_id)
         session.observe(_frame(index), [detection], _records(detection))
+
+
+@pytest.mark.parametrize("armed", [False, True])
+def test_mount_opens_once_on_tag_three_and_keeps_recording(tmp_path, armed):
+    config = _mount_config()
+    assert config.pulse_duration_s == DEFAULT_SETTLE_S
+    session, state, stop, lock, servo = _session(tmp_path, config=config)
+    state.observe_vehicle_state(armed=armed)
+    try:
+        assert servo.actions == []  # Starting a capture does not move the mount.
+        _observe(session, 2, 3)
+        _observe(session, 3, 2)
+        assert servo.actions == []
+        _observe(session, 3)
+        _wait_for(lambda: state.servo_pulses_completed == 1, timeout=2)
+        assert not stop.is_set()
+        assert servo.actions == [("value", MOUNT_OPEN_VALUE), ("detach", None)]
+        assert state.completed_servo_tag_ids == (3,)
+        _observe(session, 3, 5)
+        _observe(session, 4, 3)
+        assert state.pending_servo_tag_ids == ()
+    finally:
+        session.close()
+    assert [value for action, value in servo.actions if action == "value"] == [
+        MOUNT_OPEN_VALUE
+    ]
+    assert servo.closed and lock.closed
+    events = [
+        json.loads(line) for line in (tmp_path / "servo.jsonl").read_text().splitlines()
+    ]
+    assert "mount_open_commanded" in {event["event"] for event in events}
+    assert "servo_rest_commanded" not in {event["event"] for event in events}
+    assert session.manifest()["open_mount"] is True
+
+
+@pytest.mark.parametrize(
+    "reason", ["stale", "wrong_id", "hamming", "low_margin", "missing_margin"]
+)
+def test_mount_rejects_unqualified_tag_detections(tmp_path, reason):
+    session, state, _stop, _lock, servo = _session(tmp_path, config=_mount_config())
+    detection = _detection(
+        2 if reason == "wrong_id" else 3,
+        hamming=1 if reason == "hamming" else 0,
+        margin={"low_margin": 29, "missing_margin": None}.get(reason, 60),
+    )
+    try:
+        for index in range(4):
+            captured = time.monotonic() - (1 if reason == "stale" else 0)
+            session.observe(
+                _frame(index, captured=captured), [detection], _records(detection)
+            )
+        assert state.pending_servo_tag_ids == ()
+        assert state.servo_pulses_completed == 0
+        assert servo.actions == []
+    finally:
+        session.close()
+
+
+def test_stop_during_mount_open_detaches_without_reclosing(tmp_path):
+    session, state, stop, lock, servo = _session(tmp_path, config=_mount_config())
+    try:
+        _observe(session, 3, 3)
+        _wait_for(lambda: bool(servo.actions))
+        stop.set()
+    finally:
+        session.close()
+    assert state.servo_pulses_completed == 0
+    assert servo.actions == [
+        ("value", MOUNT_OPEN_VALUE),
+        ("detach", None),
+        ("detach", None),
+        ("close", None),
+    ]
+    assert servo.closed and lock.closed
 
 
 def test_three_consecutive_frames_command_one_bounded_pulse(tmp_path: Path) -> None:
@@ -550,11 +634,22 @@ class _ArmedConnection:
         self.closed = True
 
 
-def test_active_command_accepts_matching_initial_armed_heartbeat(
-    tmp_path: Path, monkeypatch, capsys
+@pytest.mark.parametrize("operation", ["tag-servo", "tag-mount"])
+@pytest.mark.parametrize("armed", [False, True])
+def test_active_command_accepts_matching_initial_heartbeat(
+    tmp_path: Path, monkeypatch, capsys, operation, armed
 ) -> None:
     output = tmp_path / "armed-no-pi"
     connection = _ArmedConnection()
+    monkeypatch.setattr(_InitialHeartbeat, "base_mode", 128 if armed else 0)
+    workers = []
+
+    def telemetry_worker(**kwargs):
+        worker = TelemetryWorker(**kwargs)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr(record_cli, "TelemetryWorker", telemetry_worker)
     monkeypatch.setattr(record_cli, "is_raspberry_pi", lambda: False)
     monkeypatch.setattr(
         record_cli, "resolve_mavlink_endpoint", lambda *_args, **_kwargs: "tcp:sim"
@@ -568,8 +663,12 @@ def test_active_command_accepts_matching_initial_armed_heartbeat(
     monkeypatch.setattr(record_cli, "request_telemetry_messages", lambda *_args: [])
 
     result = record_cli.run(
-        ["--output-dir", str(output), *_arguments()],
-        operation="tag-servo",
+        [
+            "--output-dir",
+            str(output),
+            *(_arguments() if operation == "tag-servo" else []),
+        ],
+        operation=operation,
     )
 
     assert result == 1
@@ -577,10 +676,15 @@ def test_active_command_accepts_matching_initial_armed_heartbeat(
     assert connection.closed
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["armed_abort"] is False
-    assert manifest["safety"]["initial_vehicle_state"] == "armed"
-    assert manifest["safety"]["saw_armed"] is True
+    assert manifest["safety"]["initial_vehicle_state"] == (
+        "armed" if armed else "disarmed"
+    )
+    assert manifest["safety"]["saw_armed"] is armed
     assert manifest["safety"]["arming_skipchk"] == 0.0
     assert manifest["stop_reason"] == "startup_failed"
+    assert len(workers) == 1
+    assert workers[0].allow_armed_at_any_time
+    assert workers[0].stop_after_disarm is (operation == "tag-servo")
 
 
 def test_active_command_refuses_skipped_arming_checks_before_stream_requests(
@@ -648,8 +752,10 @@ class _HeartbeatQueueConnection:
             return None
 
 
-def test_active_telemetry_policy_accepts_armed_and_stops_after_disarm(
+@pytest.mark.parametrize("stop_after_disarm", [False, True])
+def test_active_telemetry_policy_accepts_armed_and_respects_disarm_policy(
     tmp_path: Path,
+    stop_after_disarm: bool,
 ) -> None:
     connection = _HeartbeatQueueConnection()
     stop = ActuationStop()
@@ -667,7 +773,7 @@ def test_active_telemetry_policy_accepts_armed_and_stops_after_disarm(
         state=state,
         sync=IntervalSync(0.0),
         allow_armed_at_any_time=True,
-        stop_after_disarm=True,
+        stop_after_disarm=stop_after_disarm,
     )
     worker.start()
     connection.messages.put(_HeartbeatMessage(armed=True))
@@ -676,11 +782,16 @@ def test_active_telemetry_policy_accepts_armed_and_stops_after_disarm(
     assert not state.armed_abort
 
     connection.messages.put(_HeartbeatMessage(armed=False))
-    _wait_for(stop.is_set)
+    _wait_for(lambda: state.telemetry_counts["HEARTBEAT"] == 2)
+    if stop_after_disarm:
+        _wait_for(stop.is_set)
+    else:
+        assert not stop.is_set()
+        stop.set()
     worker.join(timeout=1.0)
 
     assert not worker.is_alive()
-    assert state.stop_reason == "vehicle_disarmed"
+    assert state.stop_reason == ("vehicle_disarmed" if stop_after_disarm else None)
     assert state.saw_disarmed_after_arm
     records = [
         json.loads(line)
@@ -866,10 +977,13 @@ def test_failed_confirmation_intent_never_publishes_actuation(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("expired", ["heartbeat", "frame"])
+@pytest.mark.parametrize("open_mount", [False, True])
 def test_gpio_boundary_rechecks_freshness_after_preparation(
-    tmp_path, monkeypatch, expired
+    tmp_path, monkeypatch, expired, open_mount
 ):
-    session, state, _stop, _lock, servo = _session(tmp_path)
+    session, state, _stop, _lock, servo = _session(
+        tmp_path, config=_mount_config() if open_mount else _config()
+    )
     original = session._events.write
 
     def write(event, **fields):
@@ -882,7 +996,7 @@ def test_gpio_boundary_rechecks_freshness_after_preparation(
 
     monkeypatch.setattr(session._events, "write", write)
     try:
-        _observe(session, 9, 3)
+        _observe(session, 3 if open_mount else 9, 3)
         _wait_for(lambda: not state.pending_servo_tag_ids)
         assert servo.actions == []
         assert state.servo_pulses_completed == 0

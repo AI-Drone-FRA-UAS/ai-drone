@@ -74,12 +74,17 @@ _TAG36H11_MAX_ID = 586
 MANUAL_FLIGHT_RECORDING_CONFIRMATION = "PASSIVE_MANUAL_FLIGHT_RECORDING"
 _INSPECT_OPERATION = "inspect"
 _TAG_SERVO_OPERATION = "tag-servo"
+_TAG_MOUNT_OPERATION = "tag-mount"
 
 
 def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
-    if operation not in {_INSPECT_OPERATION, _TAG_SERVO_OPERATION}:
+    if operation not in {
+        _INSPECT_OPERATION,
+        _TAG_SERVO_OPERATION,
+        _TAG_MOUNT_OPERATION,
+    }:
         raise ValueError(f"unknown recording operation {operation!r}")
-    tag_servo = operation == _TAG_SERVO_OPERATION
+    tag_servo = operation in {_TAG_SERVO_OPERATION, _TAG_MOUNT_OPERATION}
     parser = argparse.ArgumentParser(
         description=(
             (
@@ -96,6 +101,13 @@ def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
             )
         )
     )
+    if operation == _TAG_MOUNT_OPERATION:
+        parser.description = (
+            "Record camera video, AprilTags, and all available FC telemetry; open "
+            "the payload mount once when tag36h11 ID 3 is confirmed. Works disarmed "
+            "or already flying under manual RC control. Keeps recording through "
+            "arming/disarming until Ctrl-C or --duration. No flight-control commands."
+        )
     parser.add_argument(
         "--duration",
         type=float,
@@ -161,7 +173,11 @@ def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
             "throughput; each stream is still synced once when it closes."
         ),
     )
-    if tag_servo:
+    if operation == _TAG_MOUNT_OPERATION:
+        from ai_drone.cli.tag_servo_record import mount_recording_defaults
+
+        parser.set_defaults(**mount_recording_defaults())
+    elif tag_servo:
         from ai_drone.cli.tag_servo_record import add_arguments
 
         add_arguments(parser)
@@ -174,7 +190,7 @@ def _validate_args(
     *,
     operation: str = _INSPECT_OPERATION,
 ) -> None:
-    tag_servo = operation == _TAG_SERVO_OPERATION
+    tag_servo = operation in {_TAG_SERVO_OPERATION, _TAG_MOUNT_OPERATION}
     positive = {
         "--baud": args.baud,
         "--timeout": args.timeout,
@@ -711,7 +727,7 @@ def run(  # noqa: C901
     parser = _parser(operation=operation)
     args = parser.parse_args(arguments)
     _validate_args(parser, args, operation=operation)
-    tag_servo = operation == _TAG_SERVO_OPERATION
+    tag_servo = operation in {_TAG_SERVO_OPERATION, _TAG_MOUNT_OPERATION}
     manual_flight_recording = (
         getattr(args, "confirm_manual_flight_recording", None)
         == MANUAL_FLIGHT_RECORDING_CONFIRMATION
@@ -863,7 +879,7 @@ def run(  # noqa: C901
                 sync=IntervalSync(args.sync_interval),
                 allow_armed_after_ready=manual_flight_recording,
                 allow_armed_at_any_time=tag_servo,
-                stop_after_disarm=tag_servo,
+                stop_after_disarm=operation == _TAG_SERVO_OPERATION,
             )
             telemetry_worker.start()
 

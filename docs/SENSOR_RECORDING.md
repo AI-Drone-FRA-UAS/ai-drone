@@ -34,6 +34,43 @@ Without a camera calibration, tags are decoded but no metric pose is reported.
 Supply `--calibration FILE --tag-size METRES` only after rigid mounting, focus,
 and calibration at the selected resolution.
 
+## Full capture and open the mount on AprilTag 3
+
+On the Pi, run the dedicated script from `~/ai-drone`:
+
+```bash
+uv run --locked --group raspi python scripts/tag_mount_capture.py
+```
+
+The same command works disarmed, before the pilot arms, or while already flying
+under manual RC control. It records the full dataset listed above plus
+`servo.jsonl`. It requests FC telemetry and operates only the Pi's GPIO12
+payload servo; it sends no arm/disarm, mode, motor, RC override, mission, or
+flight-controller servo commands.
+
+Three consecutive fresh, uncorrected tag36h11 ID **3** detections with decision
+margin at least 30 command the same position (`0.0`, 1500 us) and 0.5-second hold
+as `uv run drone_mount open`, then detach PWM. The mount opens **once per run**.
+Recording continues when the tag disappears or the pilot arms/disarms. There
+is no automatic closing. To set the starting position, run
+`uv run --locked --group raspi drone_mount close` before starting the capture.
+
+Stop with Ctrl-C or specify a maximum duration and optional output directory:
+
+```bash
+uv run --locked --group raspi python scripts/tag_mount_capture.py --duration 60
+uv run --locked --group raspi python scripts/tag_mount_capture.py --output-dir artifacts/tag3-flight
+```
+
+The dataset path is printed at startup; the default is a new directory under
+`artifacts/`. The script uses the existing active recording checks: selected
+ArduPilot FC at MAVLink 1/1, `ARMING_SKIPCHK=0`, fresh heartbeats, working video
+and native AprilTag detection, and exclusive GPIO12 access. Missing individual
+FC sensor streams are reported in the manifest. Close other Pi camera/serial
+recorders first; the pilot's RC transmitter can remain in use. This foreground
+script stops on SSH hangup and finalizes the dataset. The event log records
+commands sent; the servo has no position feedback.
+
 ## Timed room walkthrough
 
 Physically remove the propellers, keep the drone disarmed, and carry it by

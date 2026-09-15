@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import ClassVar
 
 import pytest
@@ -66,7 +67,7 @@ class FakeServo:
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_controller() -> None:
+def _cleanup_controller() -> Iterator[None]:
     reset_mount_controller()
     FakeServo.instances.clear()
     yield

@@ -71,6 +71,9 @@ separate procedures for [Pi USB Ethernet](docs/RPI_ZERO2W_USB_SSH_SETUP.md) and
 For a timed, hand-carried recording with detached capture, CSV exports and an
 offline browser report, follow the [room walkthrough procedure](docs/SENSOR_RECORDING.md#timed-room-walkthrough).
 
+For full sensor capture that opens the mount once on AprilTag 3, disarmed or
+during manual flight, use [scripts/tag_mount_capture.py](docs/SENSOR_RECORDING.md#full-capture-and-open-the-mount-on-apriltag-3).
+
 ## Commands
 
 | Command | Purpose |

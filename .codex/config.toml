@@ -1,0 +1,217 @@
+# Codex tools for ordinary ai-drone development.
+# Context7 remains available; GitHub repository work uses git and gh.
+
+[features]
+apps = false
+
+[plugins."github@openai-curated"]
+enabled = false
+
+[plugins."github@openai-curated-remote"]
+enabled = false
+
+[plugins."github@chatgpt-global"]
+enabled = false
+
+[plugins."codex-security@openai-curated"]
+enabled = false
+
+[plugins."codex-security@openai-curated-remote"]
+enabled = false
+
+[plugins."gmail@openai-curated-remote"]
+enabled = false
+
+[plugins."openai-templates@openai-curated-remote"]
+enabled = false
+
+[plugins."plugin-management@openai-curated-remote"]
+enabled = false
+
+[plugins."kotlin-agent-skills@Kotlin"]
+enabled = false
+
+[plugins."superpowers@openai-curated"]
+enabled = false
+
+[mcp_servers.openaiDeveloperDocs]
+enabled = false
+
+[mcp_servers.zotero]
+enabled = false
+
+# Disable app connectors in this project. Direct Context7 MCP is separate.
+[apps._default]
+enabled = false
+
+[[skills.config]]
+name = "find-skills"
+enabled = false
+
+[[skills.config]]
+name = "imagegen"
+enabled = false
+
+[[skills.config]]
+name = "openai-docs"
+enabled = false
+
+[[skills.config]]
+name = "plugin-creator"
+enabled = false
+
+[[skills.config]]
+name = "skill-creator"
+enabled = false
+
+[[skills.config]]
+name = "skill-installer"
+enabled = false
+
+[[skills.config]]
+name = "context7:context7-mcp"
+enabled = false
+
+[[skills.config]]
+name = "plugin-management:plugin-management"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:assess-patch-risk"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:attack-path-analysis"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:deep-security-scan"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:define-security-policy"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:finding-discovery"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:fix-finding"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:propose-security-hardening"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:security-diff-scan"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:security-scan"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:threat-model"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:track-findings"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:triage-finding"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:validation"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:verify-fix"
+enabled = false
+
+[[skills.config]]
+name = "codex-security:vulnerability-writeup"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-analytics-dashboard"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-business-review"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-design-report"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-experiment-analysis"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-financial-budget"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-investment-committee-memo"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-legal-memorandum"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-market-trends-report"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-minimal-letterhead"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-operating-calendar"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-operating-review"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-project-kickoff"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-project-tracker"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-sales-pipeline"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-simple-dark-mode"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-simple-light-mode"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-strategy-memorandum"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-system-design"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-team-alignment"
+enabled = false
+
+[[skills.config]]
+name = "openai-templates:artifact-template-three-statement-forecast"
+enabled = false

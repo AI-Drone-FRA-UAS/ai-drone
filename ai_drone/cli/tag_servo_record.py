@@ -32,6 +32,9 @@ from ai_drone.cli.servo import (
     ServoProcessLock,
     _target_value_from_input,
 )
+from ai_drone.mount import DEFAULT_MAX_PULSE_US as MOUNT_MAX_PULSE_US
+from ai_drone.mount import DEFAULT_MIN_PULSE_US as MOUNT_MIN_PULSE_US
+from ai_drone.mount import DEFAULT_SETTLE_S, MOUNT_OPEN_VALUE
 from ai_drone.recording import json_safe, write_json_line
 
 ARMED_FLIGHT_CONFIRMATION = "ARMED_FLIGHT_TAG_SERVO_CLEAR"
@@ -113,6 +116,7 @@ class TagServoConfig:
     rest_pulse_us: int
     pulse_duration_s: float
     settle_duration_s: float
+    open_mount: bool = False
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> TagServoConfig:
@@ -131,7 +135,37 @@ class TagServoConfig:
             rest_pulse_us=args.rest_us,
             pulse_duration_s=args.pulse_duration,
             settle_duration_s=args.settle_duration,
+            open_mount=getattr(args, "open_mount", False),
         )
+
+
+def mount_recording_defaults() -> dict[str, object]:
+    """Fixed tag-3 release policy for scripts/tag_mount_capture.py.
+
+    Match drone_mount open's pulse geometry, position and hold time. Invoking
+    this dedicated script selects actuation while armed; it needs no separate
+    flight acknowledgement or servo calibration arguments.
+    """
+    active_us = round(
+        MOUNT_MIN_PULSE_US
+        + (MOUNT_OPEN_VALUE + 1) / 2 * (MOUNT_MAX_PULSE_US - MOUNT_MIN_PULSE_US)
+    )
+    return {
+        "all_tags": False,
+        "tag_ids": [3],
+        "stop_after": None,
+        "confirmation_frames": 3,
+        "min_decision_margin": 30.0,
+        "max_detection_age": 0.5,
+        "max_heartbeat_age": 2.5,
+        "min_us": MOUNT_MIN_PULSE_US,
+        "max_us": MOUNT_MAX_PULSE_US,
+        "active_us": active_us,
+        "rest_us": MOUNT_MIN_PULSE_US,  # Unused: this operation never re-closes.
+        "pulse_duration": DEFAULT_SETTLE_S,
+        "settle_duration": 0.0,
+        "open_mount": True,
+    }
 
 
 @dataclass(frozen=True)
@@ -739,7 +773,7 @@ class TagServoSession:
         )
 
     def _command_pulse(self, trigger: ServoTrigger) -> bool:
-        """Command active, then always command rest, settle, and detach."""
+        """Command active and detach; return to rest only for pulse sessions."""
 
         completed_hold = False
         pulse_error: BaseException | None = None
@@ -785,12 +819,13 @@ class TagServoSession:
             pulse_error = error
         finally:
             try:
-                rest_commanded_utc = datetime.now(UTC).isoformat()
-                rest_started = time.monotonic()
-                with self._lock:
-                    if not self._gpio_closed:
-                        self._servo.value = self._rest_value
-                time.sleep(self.config.settle_duration_s)
+                if not self.config.open_mount:
+                    rest_commanded_utc = datetime.now(UTC).isoformat()
+                    rest_started = time.monotonic()
+                    with self._lock:
+                        if not self._gpio_closed:
+                            self._servo.value = self._rest_value
+                    time.sleep(self.config.settle_duration_s)
             except BaseException as error:
                 if pulse_error is None:
                     pulse_error = error
@@ -804,7 +839,9 @@ class TagServoSession:
                     pulse_error = error
         if active_started is not None:
             self._record_and_print(
-                "servo_active_commanded",
+                "mount_open_commanded"
+                if self.config.open_mount
+                else "servo_active_commanded",
                 trigger,
                 commanded_us=self.config.active_pulse_us,
                 commanded_utc=active_commanded_utc,
@@ -932,7 +969,7 @@ class TagServoSession:
                     self._queue.task_done()
 
     def close(self) -> None:
-        """Cancel queued work, neutralize if used, detach, and release BCM12."""
+        """Cancel work, restore rest for pulse sessions, detach, and release BCM12."""
 
         if self._closed:
             return
@@ -970,7 +1007,11 @@ class TagServoSession:
 
         try:
             cleanup("stop payload servo worker", stop_worker)
-            if self._ever_commanded and not self._gpio_closed:
+            if (
+                self._ever_commanded
+                and not self._gpio_closed
+                and not self.config.open_mount
+            ):
                 cleanup("restore payload servo rest position", restore_rest)
             with self._lock:
                 if not self._gpio_closed:
@@ -1002,6 +1043,7 @@ class TagServoSession:
         return {
             "gpio": SERVO_GPIO_PIN,
             "feedback_available": False,
+            "open_mount": self.config.open_mount,
             "active_us": self.config.active_pulse_us,
             "rest_us": self.config.rest_pulse_us,
             "pulse_duration_s": self.config.pulse_duration_s,
