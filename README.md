@@ -11,7 +11,7 @@ explicit authorization and their physical prerequisites.
 
 The [9 September firmware and power update](state/2026-09-09/firmware-and-power.md)
 records the installed custom ArduCopter 4.7.1 build, connection/shutdown helpers
-and live checks. All four ESCs have the [WAV 34 startup melody](state/2026-09-09/startup-tone.md).
+and live checks. All four ESCs have the [acoustically refined WAV 34 startup melody](state/2026-09-09/startup-tone-articulation.md).
 The [MT-15 integration report](state/2026-09-09/mt15-integration.md)
 records forward lidar reaching the FC and Pi alongside downward range/flow. The earlier
 [repair report](state/2026-09-07/indoor-repair.md) records relative EKF aiding

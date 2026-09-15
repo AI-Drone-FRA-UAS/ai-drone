@@ -15,6 +15,6 @@ package and uv upgrades and the original firmware candidate preparation.
 
 The subsequent [firmware and power update](firmware-and-power.md) records the
 installed custom ArduCopter 4.7.1 image, matched simulation, live acceptance
-and new connection/shutdown commands. The [startup melody](startup-tone.md)
-was adapted from WAV 34, saved and replayed on all four ESCs with propellers
-removed. The compass pre-arm warning still requires physical investigation.
+and new connection/shutdown commands. The [startup melody](startup-tone-articulation.md)
+was adapted from WAV 34, acoustically corrected and recorded on all four ESCs
+with propellers removed. The compass pre-arm warning still requires physical investigation.

@@ -39,6 +39,9 @@ raspios-lite/
 *.qcow2
 *.raw
 
+# Local startup-tone recovery archives (keep checksum files tracked)
+/drone-tone-handover-backup-*.tar.gz
+
 aitrios-rpi-sample-apps/
 
 # Large handbook PDF

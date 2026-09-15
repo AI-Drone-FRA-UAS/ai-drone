@@ -1,5 +1,11 @@
 # ESC startup melody — 9 September 2026
 
+This records the initial installation. The later
+[microphone-based refinement](startup-tone-refinement.md) corrects measured
+pitch and timing errors and adds a lower voice. The subsequent
+[articulation update](startup-tone-articulation.md) describes the current melody.
+The initial backups and evidence below are retained.
+
 All four ESCs now contain the same approximately 3.429-second melody derived
 from the user's `34_fuller_less_ambience.wav`. Each complete 1,024-byte EEPROM
 was read back and compared with its original: precisely 59 bytes changed,

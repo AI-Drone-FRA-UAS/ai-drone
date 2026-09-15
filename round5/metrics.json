@@ -1,0 +1,60 @@
+{
+  "31_natural_less_ambience": {
+    "source": "21_natural_polished",
+    "seconds": 3.4285714285714284,
+    "rms_dbfs": -20.00052944803429,
+    "peak_dbfs": -3.1636936458632627,
+    "dominant_note_switches_over_100_cents": 0,
+    "checked_strong_pitch_frames": 195,
+    "estimated_broad_background_region_energy_change_db": -3.103920114592558,
+    "note": "Background-region change is a spectral proxy, not a measurement of isolated audience sound."
+  },
+  "32_clean_less_ambience": {
+    "source": "22_clean_polished",
+    "seconds": 3.4285714285714284,
+    "rms_dbfs": -20.000532628221737,
+    "peak_dbfs": -3.3931737287910035,
+    "dominant_note_switches_over_100_cents": 0,
+    "checked_strong_pitch_frames": 194,
+    "estimated_broad_background_region_energy_change_db": -4.493570240472455,
+    "note": "Background-region change is a spectral proxy, not a measurement of isolated audience sound."
+  },
+  "33_extra_clean_less_ambience": {
+    "source": "23_extra_clean_polished",
+    "seconds": 3.4285714285714284,
+    "rms_dbfs": -20.00053007922888,
+    "peak_dbfs": -3.75186433310701,
+    "dominant_note_switches_over_100_cents": 0,
+    "checked_strong_pitch_frames": 193,
+    "estimated_broad_background_region_energy_change_db": -4.38210790404645,
+    "note": "Background-region change is a spectral proxy, not a measurement of isolated audience sound."
+  },
+  "34_fuller_less_ambience": {
+    "source": "24_fuller_polished",
+    "seconds": 3.4285714285714284,
+    "rms_dbfs": -20.000529859390145,
+    "peak_dbfs": -3.24687657226554,
+    "dominant_note_switches_over_100_cents": 0,
+    "checked_strong_pitch_frames": 195,
+    "estimated_broad_background_region_energy_change_db": -4.492927568085479,
+    "note": "Background-region change is a spectral proxy, not a measurement of isolated audience sound."
+  },
+  "35_space_less_ambience": {
+    "source": "25_space_polished",
+    "seconds": 3.4285714285714284,
+    "rms_dbfs": -20.000530356994986,
+    "peak_dbfs": -3.3691790692976618,
+    "dominant_note_switches_over_100_cents": 0,
+    "checked_strong_pitch_frames": 194,
+    "estimated_broad_background_region_energy_change_db": -4.392340480187496,
+    "note": "Background-region change is a spectral proxy, not a measurement of isolated audience sound."
+  },
+  "method": {
+    "quiet_frame_count": 70,
+    "maximum_mid_attenuation_db": -12.59637310309515,
+    "maximum_side_attenuation_db": -17.005103689178455,
+    "audience_identity_verified": false,
+    "listening_verified": false,
+    "description": "Broadband floor estimated from quieter melody frames across eight repetitions, recurring-tone protection, and stronger attenuation of unprotected stereo side energy."
+  }
+}
