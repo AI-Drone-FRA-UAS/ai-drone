@@ -23,6 +23,12 @@ _LAZY_EXPORTS = {
     "FlightController": "ai_drone.flight.guards",
     "FlightGuardError": "ai_drone.flight.guards",
     "check_safety_guardrails": "ai_drone.flight.guards",
+    "MountController": "ai_drone.mount",
+    "openMount": "ai_drone.mount",
+    "closeMount": "ai_drone.mount",
+    "open_mount": "ai_drone.mount",
+    "close_mount": "ai_drone.mount",
+    "releaseMount": "ai_drone.mount",
 }
 
 __all__ = [
@@ -30,7 +36,13 @@ __all__ = [
     "FlightController",
     "FlightGuardError",
     "FlightSafetyError",
+    "MountController",
     "check_safety_guardrails",
+    "closeMount",
+    "close_mount",
+    "openMount",
+    "open_mount",
+    "releaseMount",
 ]
 
 
