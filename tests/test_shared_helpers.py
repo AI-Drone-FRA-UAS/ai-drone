@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+from types import SimpleNamespace
 
 import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
@@ -17,6 +19,8 @@ from ai_drone.platform import is_raspberry_pi
 
 
 class _Message:
+    _received_monotonic: float
+
     def __init__(
         self,
         *,
@@ -117,6 +121,29 @@ def test_fresh_disarmed_check_drains_stale_heartbeat_and_filters_source() -> Non
     assert result is fresh
     assert connection.queued == []
     assert connection.incoming == []
+
+
+def test_disarmed_wait_keeps_sensor_samples_and_rejects_old_shared_receipt():
+    sensor = _Message(message_type="DISTANCE_SENSOR")
+    stale = _Message()
+    stale._received_monotonic = time.monotonic() - 10
+    fresh = _Message()
+    incoming = iter([sensor, stale, fresh])
+    observed = []
+
+    def receive(*, type, blocking, **_kwargs):
+        assert type is None
+        return next(incoming, None) if blocking else None
+
+    result = require_fresh_disarmed_heartbeat(
+        SimpleNamespace(recv_match=receive),
+        system_id=1,
+        component_id=1,
+        timeout=1,
+        observe=observed.append,
+    )
+    assert result is fresh
+    assert observed == [sensor, stale, fresh]
 
 
 def test_ardupilot_bootstrap_ignores_other_sources_and_nonvehicle_heartbeats() -> None:

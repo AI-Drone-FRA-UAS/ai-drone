@@ -82,6 +82,6 @@ mode selection, mission-start, motor or servo commands:
 
 These gates validate firmware and sensor integration. Physical calibration,
 mechanical readiness and the independently validated emergency arrangement in
-the [flight procedure](../docs/PI_MAVLINK_CONTROL.md) remain required before
+the [flight procedure](../docs/OPERATIONS.md#takeoff-loiter-and-landing) remain required before
 any armed test. The current build does not provide forward proximity support;
 a forward sensor reading by itself would not establish obstacle avoidance.

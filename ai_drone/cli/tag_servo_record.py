@@ -1,11 +1,4 @@
-"""Armed-flight AprilTag recording with bounded BCM12 payload-servo pulses.
-
-This is deliberately a separate entry point from :mod:`ai_drone.cli.record`.
-The ordinary ``drone-inspect`` command remains passive and continues to reject
-an initially armed vehicle.  This module supplies the explicit actuation
-policy used by ``drone-tag-servo-record`` while reusing the synchronized camera
-and telemetry capture engine.
-"""
+"""Optional guarded BCM12 servo pulses for the shared AprilTag capture engine."""
 
 from __future__ import annotations
 
@@ -17,6 +10,7 @@ import queue
 import signal
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,22 +18,23 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Protocol
 
-from ai_drone.cli.servo import (
+from ai_drone.cli.servo import ACTUATION_CONFIRMATION
+from ai_drone.mount import (
     ABSOLUTE_MAX_PULSE_US,
     ABSOLUTE_MIN_PULSE_US,
-    ACTUATION_CONFIRMATION,
+    DEFAULT_MAX_PULSE_US,
+    DEFAULT_MIN_PULSE_US,
+    DEFAULT_SETTLE_S,
+    MOUNT_OPEN_VALUE,
     SERVO_GPIO_PIN,
     ServoProcessLock,
-    _target_value_from_input,
+    create_servo,
+    parse_servo_input,
+    pulse_us,
 )
-from ai_drone.mount import DEFAULT_MAX_PULSE_US as MOUNT_MAX_PULSE_US
-from ai_drone.mount import DEFAULT_MIN_PULSE_US as MOUNT_MIN_PULSE_US
-from ai_drone.mount import DEFAULT_SETTLE_S, MOUNT_OPEN_VALUE
 from ai_drone.recording import json_safe, write_json_line
 
 ARMED_FLIGHT_CONFIRMATION = "ARMED_FLIGHT_TAG_SERVO_CLEAR"
-DEFAULT_MIN_PULSE_US = 900
-DEFAULT_MAX_PULSE_US = 2100
 MAX_PULSE_DURATION_S = 2.0
 MAX_SETTLE_DURATION_S = 2.0
 MAX_DETECTION_AGE_S = 1.0
@@ -140,16 +135,13 @@ class TagServoConfig:
 
 
 def mount_recording_defaults() -> dict[str, object]:
-    """Fixed tag-3 release policy for scripts/tag_mount_capture.py.
+    """Proven mount motion with tag 3 as the default trigger.
 
-    Match drone_mount open's pulse geometry, position and hold time. Invoking
+    Match the mount helper's pulse geometry, position and hold time. Invoking
     this dedicated script selects actuation while armed; it needs no separate
     flight acknowledgement or servo calibration arguments.
     """
-    active_us = round(
-        MOUNT_MIN_PULSE_US
-        + (MOUNT_OPEN_VALUE + 1) / 2 * (MOUNT_MAX_PULSE_US - MOUNT_MIN_PULSE_US)
-    )
+    active_us = pulse_us(MOUNT_OPEN_VALUE)
     return {
         "all_tags": False,
         "tag_ids": [3],
@@ -158,10 +150,10 @@ def mount_recording_defaults() -> dict[str, object]:
         "min_decision_margin": 30.0,
         "max_detection_age": 0.5,
         "max_heartbeat_age": 2.5,
-        "min_us": MOUNT_MIN_PULSE_US,
-        "max_us": MOUNT_MAX_PULSE_US,
+        "min_us": DEFAULT_MIN_PULSE_US,
+        "max_us": DEFAULT_MAX_PULSE_US,
         "active_us": active_us,
-        "rest_us": MOUNT_MIN_PULSE_US,  # Unused: this operation never re-closes.
+        "rest_us": DEFAULT_MIN_PULSE_US,  # Unused: this operation never re-closes.
         "pulse_duration": DEFAULT_SETTLE_S,
         "settle_duration": 0.0,
         "open_mount": True,
@@ -176,6 +168,18 @@ class ServoTrigger:
     frame_index: int
     elapsed_s: float
     captured_monotonic: float
+
+
+def _tag_range(value: str) -> range:
+    try:
+        start, end = map(int, value.split(":"))
+        if not 0 <= start <= end <= 586:
+            raise ValueError
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "tag range requires 0 <= START <= END <= 586"
+        ) from None
+    return range(start, end + 1)
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -194,6 +198,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         metavar="ID",
         help="allow one tag36h11 ID; repeat to allow multiple IDs",
+    )
+    selection.add_argument(
+        "--tag-range",
+        dest="tag_ids",
+        action="extend",
+        type=_tag_range,
+        metavar="START:END",
+        help="allow an inclusive tag36h11 ID range; repeat for disjoint ranges",
     )
     parser.add_argument(
         "--stop-after",
@@ -293,7 +305,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Reject unsafe settings before platform, GPIO, camera, or MAVLink access."""
+    _validate_detection_args(parser, args)
+    _validate_pulse_args(parser, args)
+    _validate_tag_selection(parser, args)
 
+
+def _validate_detection_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
     if args.stop_after is not None and args.stop_after <= 0:
         parser.error("--stop-after must be a positive integer when provided")
     if args.stop_after is not None and args.stop_after > 587:
@@ -318,6 +337,11 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             f"--max-heartbeat-age must be greater than 1 and at most "
             f"{MAX_HEARTBEAT_AGE_S:g}"
         )
+
+
+def _validate_pulse_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
     if args.min_us < ABSOLUTE_MIN_PULSE_US:
         parser.error(
             f"--min-us must be at least the absolute software limit "
@@ -350,6 +374,11 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error(
             f"--settle-duration must be between 0 and {MAX_SETTLE_DURATION_S:g}"
         )
+
+
+def _validate_tag_selection(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
     if args.tag_ids is not None:
         if any(tag_id < 0 or tag_id > 586 for tag_id in args.tag_ids):
             parser.error("--tag-id must be between 0 and 586 for tag36h11")
@@ -389,6 +418,15 @@ class ServoEventWriter:
                 os.fsync(self._handle.fileno())
             finally:
                 self._handle.close()
+
+
+@dataclass
+class _PulseTiming:
+    active_commanded_utc: str | None = None
+    active_started: float | None = None
+    rest_commanded_utc: str | None = None
+    rest_started: float | None = None
+    detached_utc: str | None = None
 
 
 class TagServoSession:
@@ -433,23 +471,18 @@ class TagServoSession:
         servo_instance: Any = None
         event_writer: ServoEventWriter | None = None
         try:
-            if servo_factory is None:
-                from gpiozero import Servo  # ty: ignore[unresolved-import]
-
-                servo_factory = Servo
-            servo_instance = servo_factory(
-                SERVO_GPIO_PIN,
-                min_pulse_width=config.minimum_pulse_us / 1_000_000.0,
-                max_pulse_width=config.maximum_pulse_us / 1_000_000.0,
-                initial_value=None,
+            servo_instance = create_servo(
+                min_us=config.minimum_pulse_us,
+                max_us=config.maximum_pulse_us,
+                factory=servo_factory,
             )
             event_writer = ServoEventWriter(event_path)
-            self._active_value = _target_value_from_input(
+            self._active_value = parse_servo_input(
                 f"{config.active_pulse_us}us",
                 min_us=config.minimum_pulse_us,
                 max_us=config.maximum_pulse_us,
             )
-            self._rest_value = _target_value_from_input(
+            self._rest_value = parse_servo_input(
                 f"{config.rest_pulse_us}us",
                 min_us=config.minimum_pulse_us,
                 max_us=config.maximum_pulse_us,
@@ -672,57 +705,62 @@ class TagServoSession:
                     captured_monotonic=captured,
                 )
                 self._scheduled_ids.add(tag_id)
-            # Reserve ownership before I/O, but do not expose work to the
-            # actuator until the detection intent has reached durable storage.
-            # In particular, the command gate must remain available during I/O.
-            try:
-                self._events.write(
-                    "tag_confirmed_intent",
-                    tag_id=tag_id,
-                    frame=frame.frame_index,
-                    elapsed_s=round(frame.elapsed_s, 6),
-                    confirmation_frames=self._streaks[tag_id],
-                )
-            except BaseException:
-                self.capture_stop.set()
-                self.stop_accepting()
-                self._release_scheduled(tag_id)
-                raise
-            with self._lock:
-                if not self._accepting or self.capture_stop.is_set():
-                    self._release_scheduled(tag_id)
-                    return
-                try:
-                    self._queue.put_nowait(trigger)
-                except queue.Full:
-                    self._scheduled_ids.discard(tag_id)
-                    return
-                self._confirmed_ids.add(tag_id)
-            for record in tag_records:
-                if int(record["id"]) == tag_id:
-                    record["actuation_state"] = "pending"
-                    record["actuation_queued"] = True
-            self._publish_state()
+            self._enqueue_trigger(trigger, tag_records)
+            return
+
+    def _enqueue_trigger(
+        self, trigger: ServoTrigger, tag_records: list[dict[str, Any]]
+    ) -> None:
+        tag_id = trigger.tag_id
+        # Ownership is reserved, but the actuator cannot see this work until
+        # the intent is durable. Keep the command gate available during I/O.
+        try:
             self._events.write(
-                "tag_confirmed_queued",
+                "tag_confirmed_intent",
                 tag_id=tag_id,
-                frame=frame.frame_index,
-                elapsed_s=round(frame.elapsed_s, 6),
+                frame=trigger.frame_index,
+                elapsed_s=round(trigger.elapsed_s, 6),
                 confirmation_frames=self._streaks[tag_id],
             )
-            print(
-                json.dumps(
-                    {
-                        "event": "apriltag_confirmed",
-                        "id": tag_id,
-                        "frame": frame.frame_index,
-                        "elapsed_s": round(frame.elapsed_s, 6),
-                    },
-                    sort_keys=True,
-                ),
-                flush=True,
-            )
-            return
+        except BaseException:
+            self.capture_stop.set()
+            self.stop_accepting()
+            self._release_scheduled(tag_id)
+            raise
+        with self._lock:
+            if not self._accepting or self.capture_stop.is_set():
+                self._release_scheduled(tag_id)
+                return
+            try:
+                self._queue.put_nowait(trigger)
+            except queue.Full:
+                self._scheduled_ids.discard(tag_id)
+                return
+            self._confirmed_ids.add(tag_id)
+        for record in tag_records:
+            if int(record["id"]) == tag_id:
+                record["actuation_state"] = "pending"
+                record["actuation_queued"] = True
+        self._publish_state()
+        self._events.write(
+            "tag_confirmed_queued",
+            tag_id=tag_id,
+            frame=trigger.frame_index,
+            elapsed_s=round(trigger.elapsed_s, 6),
+            confirmation_frames=self._streaks[tag_id],
+        )
+        print(
+            json.dumps(
+                {
+                    "event": "apriltag_confirmed",
+                    "id": tag_id,
+                    "frame": trigger.frame_index,
+                    "elapsed_s": round(trigger.elapsed_s, 6),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
 
     def _selected_heartbeat_is_fresh(self, now: float) -> bool:
         observed = self.state.last_vehicle_heartbeat_monotonic
@@ -772,16 +810,69 @@ class TagServoSession:
             flush=True,
         )
 
+    def _release_pulse(self, timing: _PulseTiming) -> BaseException | None:
+        """Restore pulse-session rest and always attempt to detach PWM."""
+        release_error: BaseException | None = None
+        try:
+            if not self.config.open_mount:
+                timing.rest_commanded_utc = datetime.now(UTC).isoformat()
+                timing.rest_started = time.monotonic()
+                with self._lock:
+                    if not self._gpio_closed:
+                        self._servo.value = self._rest_value
+                time.sleep(self.config.settle_duration_s)
+        except BaseException as error:
+            release_error = error
+        try:
+            with self._lock:
+                if not self._gpio_closed:
+                    self._servo.detach()
+            timing.detached_utc = datetime.now(UTC).isoformat()
+        except BaseException as error:
+            if release_error is None:
+                release_error = error
+        return release_error
+
+    def _record_pulse_commands(
+        self, trigger: ServoTrigger, timing: _PulseTiming
+    ) -> None:
+        if timing.active_started is not None:
+            self._record_and_print(
+                "mount_open_commanded"
+                if self.config.open_mount
+                else "servo_active_commanded",
+                trigger,
+                commanded_us=self.config.active_pulse_us,
+                commanded_utc=timing.active_commanded_utc,
+                actual_active_s=round(
+                    max(
+                        0.0,
+                        (timing.rest_started or time.monotonic())
+                        - timing.active_started,
+                    ),
+                    6,
+                ),
+            )
+        if timing.rest_started is not None:
+            self._record_and_print(
+                "servo_rest_commanded",
+                trigger,
+                commanded_us=self.config.rest_pulse_us,
+                commanded_utc=timing.rest_commanded_utc,
+            )
+        if timing.detached_utc is not None:
+            self._record_and_print(
+                "servo_pwm_detached",
+                trigger,
+                commanded_utc=timing.detached_utc,
+            )
+
     def _command_pulse(self, trigger: ServoTrigger) -> bool:
         """Command active and detach; return to rest only for pulse sessions."""
 
         completed_hold = False
         pulse_error: BaseException | None = None
-        active_commanded_utc: str | None = None
-        active_started: float | None = None
-        rest_commanded_utc: str | None = None
-        rest_started: float | None = None
-        detached_utc: str | None = None
+        timing = _PulseTiming()
         self._record_and_print(
             "servo_pulse_starting",
             trigger,
@@ -805,9 +896,9 @@ class TagServoSession:
                 return False
             self._ever_commanded = True
             try:
-                active_commanded_utc = datetime.now(UTC).isoformat()
+                timing.active_commanded_utc = datetime.now(UTC).isoformat()
                 self._servo.value = self._active_value
-                active_started = time.monotonic()
+                timing.active_started = time.monotonic()
             except BaseException as error:
                 pulse_error = error
         try:
@@ -818,51 +909,10 @@ class TagServoSession:
         except BaseException as error:
             pulse_error = error
         finally:
-            try:
-                if not self.config.open_mount:
-                    rest_commanded_utc = datetime.now(UTC).isoformat()
-                    rest_started = time.monotonic()
-                    with self._lock:
-                        if not self._gpio_closed:
-                            self._servo.value = self._rest_value
-                    time.sleep(self.config.settle_duration_s)
-            except BaseException as error:
-                if pulse_error is None:
-                    pulse_error = error
-            try:
-                with self._lock:
-                    if not self._gpio_closed:
-                        self._servo.detach()
-                detached_utc = datetime.now(UTC).isoformat()
-            except BaseException as error:
-                if pulse_error is None:
-                    pulse_error = error
-        if active_started is not None:
-            self._record_and_print(
-                "mount_open_commanded"
-                if self.config.open_mount
-                else "servo_active_commanded",
-                trigger,
-                commanded_us=self.config.active_pulse_us,
-                commanded_utc=active_commanded_utc,
-                actual_active_s=round(
-                    max(0.0, (rest_started or time.monotonic()) - active_started),
-                    6,
-                ),
-            )
-        if rest_started is not None:
-            self._record_and_print(
-                "servo_rest_commanded",
-                trigger,
-                commanded_us=self.config.rest_pulse_us,
-                commanded_utc=rest_commanded_utc,
-            )
-        if detached_utc is not None:
-            self._record_and_print(
-                "servo_pwm_detached",
-                trigger,
-                commanded_utc=detached_utc,
-            )
+            release_error = self._release_pulse(timing)
+            if pulse_error is None:
+                pulse_error = release_error
+        self._record_pulse_commands(trigger, timing)
         if pulse_error is not None:
             raise RuntimeError(
                 f"payload servo command failed: {pulse_error}"
@@ -968,6 +1018,48 @@ class TagServoSession:
                 finally:
                     self._queue.task_done()
 
+    def _stop_worker(self) -> None:
+        self._cancel_queued_triggers()
+        self._queue.put_nowait(None)
+        if self._worker.ident is not None:
+            self._worker.join(
+                timeout=self.config.pulse_duration_s + self.config.settle_duration_s + 2
+            )
+        if self._worker.is_alive():
+            raise RuntimeError("payload servo worker did not stop boundedly")
+
+    def _restore_rest(self) -> None:
+        with self._lock:
+            self._servo.value = self._rest_value
+        time.sleep(self.config.settle_duration_s)
+
+    def _close_resources(
+        self, cleanup: Callable[[str, Callable[[], object]], bool]
+    ) -> None:
+        if (
+            self._ever_commanded
+            and not self._gpio_closed
+            and not self.config.open_mount
+        ):
+            cleanup("restore payload servo rest position", self._restore_rest)
+        with self._lock:
+            if not self._gpio_closed:
+                cleanup("detach payload servo PWM", self._servo.detach)
+                self._gpio_closed = cleanup(
+                    "close payload servo GPIO", self._servo.close
+                )
+        if not self._events_closed:
+            cleanup(
+                "write payload servo close event",
+                lambda: self._events.write("servo_session_closed"),
+            )
+            self._events_closed = cleanup(
+                "close payload servo event log", self._events.close
+            )
+        if self._gpio_closed:
+            released = cleanup("release payload servo lock", self._process_lock.close)
+            self._closed = released and self._events_closed
+
     def close(self) -> None:
         """Cancel work, restore rest for pulse sessions, detach, and release BCM12."""
 
@@ -977,7 +1069,7 @@ class TagServoSession:
         self.capture_stop.set()
         interruption: BaseException | None = None
 
-        def cleanup(label: str, action: Any) -> bool:
+        def cleanup(label: str, action: Callable[[], object]) -> bool:
             nonlocal interruption
             try:
                 action()
@@ -988,50 +1080,9 @@ class TagServoSession:
                     interruption = error
                 return False
 
-        def stop_worker() -> None:
-            self._cancel_queued_triggers()
-            self._queue.put_nowait(None)
-            if self._worker.ident is not None:
-                self._worker.join(
-                    timeout=self.config.pulse_duration_s
-                    + self.config.settle_duration_s
-                    + 2
-                )
-            if self._worker.is_alive():
-                raise RuntimeError("payload servo worker did not stop boundedly")
-
-        def restore_rest() -> None:
-            with self._lock:
-                self._servo.value = self._rest_value
-            time.sleep(self.config.settle_duration_s)
-
         try:
-            cleanup("stop payload servo worker", stop_worker)
-            if (
-                self._ever_commanded
-                and not self._gpio_closed
-                and not self.config.open_mount
-            ):
-                cleanup("restore payload servo rest position", restore_rest)
-            with self._lock:
-                if not self._gpio_closed:
-                    cleanup("detach payload servo PWM", self._servo.detach)
-                    self._gpio_closed = cleanup(
-                        "close payload servo GPIO", self._servo.close
-                    )
-            if not self._events_closed:
-                cleanup(
-                    "write payload servo close event",
-                    lambda: self._events.write("servo_session_closed"),
-                )
-                self._events_closed = cleanup(
-                    "close payload servo event log", self._events.close
-                )
-            if self._gpio_closed:
-                released = cleanup(
-                    "release payload servo lock", self._process_lock.close
-                )
-                self._closed = released and self._events_closed
+            cleanup("stop payload servo worker", self._stop_worker)
+            self._close_resources(cleanup)
         finally:
             # Termination remains a cooperative stop throughout rest/detach and
             # resource release, including repeated signals during cleanup.
@@ -1062,11 +1113,11 @@ class TagServoSession:
         }
 
 
-def main() -> None:
+def main(arguments: list[str] | None = None) -> int:
     from ai_drone.cli.record import run
 
-    raise SystemExit(run(operation="tag-servo"))
+    return run(arguments, operation="tag-servo")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

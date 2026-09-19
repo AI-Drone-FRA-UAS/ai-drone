@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_drone.link.targets import (
+    REMOTE_UV,
     preferred_pi_addresses,
     resolve_connection_target,
     resolve_deploy_target,
@@ -20,10 +22,13 @@ from ai_drone.link.targets import (
 )
 from ai_drone.mavlink.devices import STABLE_FLIGHT_CONTROLLER_DEVICE
 from ai_drone.mavlink.ownership import SerialDeviceBusyError, require_available_serial
+from ai_drone.mavlink.remote import runtime_request
 from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
 from ai_drone.platform import is_raspberry_pi
+from ai_drone.settings import load_settings
 
 WALK_UNIT = "ai-drone-walk.service"
+RUNTIME_UNIT = "ai-drone-runtime.service"
 REMOVALS = ("battery", "fc-usb", "pi-usb", "all")
 _ACTIVE = {"active", "activating", "deactivating", "reloading"}
 
@@ -45,8 +50,9 @@ for process in Path('/proc').iterdir():
         arguments = (process / 'cmdline').read_bytes().split(b'\0')
         package_job = name in ('apt', 'apt-get', 'dpkg', 'unattended-upgr') or any(
             arg.endswith(b'/pi-safe-upgrade.sh') for arg in arguments)
-        walk = any(line.endswith('/' + 'ai-drone-walk.service')
-                   for line in (process / 'cgroup').read_text().splitlines())
+        groups = (process / 'cgroup').read_text().splitlines()
+        walk = any(line.endswith('/ai-drone-walk.service') for line in groups)
+        runtime = any(line.endswith('/ai-drone-runtime.service') for line in groups)
         for descriptor in (process / 'fd').iterdir():
             try:
                 target = os.readlink(descriptor)
@@ -56,7 +62,7 @@ for process in Path('/proc').iterdir():
                 package_job = True
             if target.startswith(prefixes):
                 hardware.append({'pid': int(process.name), 'name': name,
-                                 'device': target, 'walk': walk})
+                                 'device': target, 'walk': walk, 'runtime': runtime})
         if package_job:
             packages.append({'pid': int(process.name), 'name': name})
     except (FileNotFoundError, ProcessLookupError):
@@ -88,7 +94,22 @@ def _remaining(deadline: float | None, maximum: float = 10) -> float:
 def _owners(*, deadline: float | None = None) -> dict[str, Any]:
     if not sys.platform.startswith("linux"):
         raise RuntimeError("hardware-owner inspection currently requires Linux")
-    command = ["/usr/bin/python3", "-c", _OWNERS_SCRIPT]
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError("uv is required for hardware-owner inspection")
+    command = [
+        uv,
+        "run",
+        "--no-project",
+        "--no-config",
+        "--offline",
+        "--python",
+        "/usr/bin/python3",
+        "python",
+        "-I",
+        "-c",
+        _OWNERS_SCRIPT,
+    ]
     if os.geteuid() != 0:
         command = ["sudo", "-n", *command]
     result = _run(command, timeout=_remaining(deadline))
@@ -132,7 +153,39 @@ def _pi_snapshot(*, deadline: float | None = None) -> dict[str, Any]:
     result["walk"] = _walk_state(deadline=deadline)
     audit = _run(["dpkg", "--audit"], timeout=_remaining(deadline))
     result["package_database_ok"] = audit.returncode == 0 and not audit.stdout.strip()
+    result["runtime"] = _runtime_status(deadline=deadline)
     return result
+
+
+def _runtime_status(*, deadline: float | None = None) -> dict[str, Any] | None:
+    socket = load_settings().runtime.socket
+    if not Path(socket).exists():
+        return None
+    return {
+        **runtime_request(socket, {"status": True}, timeout=_remaining(deadline, 3)),
+        "socket": socket,
+    }
+
+
+def _runtime_fc(status: dict[str, Any]) -> dict[str, Any]:
+    age = status.get("heartbeat_age_s")
+    updated = status.get("updated_monotonic")
+    if (
+        status.get("fresh") is not True
+        or status.get("source_known") is not True
+        or (status.get("system_id"), status.get("component_id")) != (1, 1)
+        or not isinstance(age, int | float)
+        or isinstance(age, bool)
+        or not isinstance(updated, int | float)
+        or isinstance(updated, bool)
+        or not 0 <= time.monotonic() - updated <= 2
+    ):
+        raise RuntimeError("runtime selected-FC status is stale or unknown")
+    fc = {**status, "heartbeat_age_s": age + time.monotonic() - updated}
+    if fc.get("armed") is not False:
+        raise RuntimeError("runtime FC is armed or unknown")
+    _require_disarmed(fc)
+    return fc
 
 
 def _guard_idle(snapshot: dict[str, Any], *, allow_walk: bool = False) -> None:
@@ -140,8 +193,32 @@ def _guard_idle(snapshot: dict[str, Any], *, allow_walk: bool = False) -> None:
         raise RuntimeError("hardware-owner status is unknown")
     if snapshot.get("packages") or snapshot.get("package_database_ok") is not True:
         raise RuntimeError("package maintenance is active or dpkg is incomplete")
+    runtime = snapshot.get("runtime")
+    if runtime is not None:
+        _runtime_fc(runtime)
+        if (
+            "control_client" not in runtime
+            or runtime["control_client"] is not None
+            or runtime.get("network_busy") is not False
+        ):
+            raise RuntimeError(
+                "runtime control or network operation is active or unknown"
+            )
+        clients = runtime.get("clients")
+        allowed = (
+            2 if allow_walk and snapshot["walk"].get("ActiveState") in _ACTIVE else 1
+        )
+        if type(clients) is not int or not 1 <= clients <= allowed:
+            raise RuntimeError(
+                "recorder or another runtime client is active or unknown"
+            )
     owners = [
-        owner for owner in snapshot["hardware"] if not (allow_walk and owner["walk"])
+        owner
+        for owner in snapshot["hardware"]
+        if not (
+            (allow_walk and owner.get("walk"))
+            or (runtime is not None and owner.get("runtime"))
+        )
     ]
     if owners:
         raise RuntimeError(
@@ -205,6 +282,24 @@ def _configure_receiver(fd: int) -> None:
     termios.tcflush(fd, termios.TCIFLUSH)
 
 
+def _observe_power(message: Any, result: dict[str, Any]) -> None:
+    from pymavlink.dialects.v20 import ardupilotmega as mavlink
+
+    if isinstance(message, mavlink.MAVLink_sys_status_message):
+        result["battery_voltage_v"] = (
+            message.voltage_battery / 1000 if message.voltage_battery != 65535 else None
+        )
+        result["battery_remaining_percent"] = (
+            message.battery_remaining if message.battery_remaining >= 0 else None
+        )
+    elif isinstance(message, mavlink.MAVLink_power_status_message):
+        result.update(
+            board_voltage_v=message.Vcc / 1000,
+            servo_voltage_v=message.Vservo / 1000,
+            power_flags=message.flags,
+        )
+
+
 def _receive_fc(fd: int, device: str, *, duration: float = 4) -> dict[str, Any]:
     import select
 
@@ -237,23 +332,8 @@ def _receive_fc(fd: int, device: str, *, duration: float = 4) -> dict[str, Any]:
                 armed = armed or heartbeat_is_armed(message)
                 last_heartbeat = time.monotonic()
                 heartbeats += 1
-            elif isinstance(message, mavlink.MAVLink_sys_status_message):
-                result["battery_voltage_v"] = (
-                    message.voltage_battery / 1000
-                    if message.voltage_battery != 65535
-                    else None
-                )
-                result["battery_remaining_percent"] = (
-                    message.battery_remaining
-                    if message.battery_remaining >= 0
-                    else None
-                )
-            elif isinstance(message, mavlink.MAVLink_power_status_message):
-                result.update(
-                    board_voltage_v=message.Vcc / 1000,
-                    servo_voltage_v=message.Vservo / 1000,
-                    power_flags=message.flags,
-                )
+            else:
+                _observe_power(message, result)
     age = None if last_heartbeat is None else time.monotonic() - last_heartbeat
     result.update(heartbeats=heartbeats, heartbeat_age_s=age)
     if armed:
@@ -316,10 +396,14 @@ def _remote_action(action: str) -> dict[str, Any]:
     if action == "fc":
         snapshot = _pi_snapshot()
         _guard_idle(snapshot)
-        return _probe_fc(Path("/dev/serial0"))
+        return _pi_fc(snapshot)
     if action not in {"idle", "shutdown"}:
         raise ValueError("unknown Pi action")
-    _guard_idle(_pi_snapshot())
+    snapshot = _pi_snapshot()
+    _guard_idle(snapshot)
+    runtime = snapshot.get("runtime")
+    if runtime is not None:
+        return _shared_final_action(action, runtime)
     # An earlier laptop USB observation cannot authorize a later remote action.
     # Check the idle Pi UART here, then include all final checks and the action
     # within the selected heartbeat's remaining two-second freshness window.
@@ -339,9 +423,50 @@ def _remote_action(action: str) -> dict[str, Any]:
     return {"shutdown_requested": True, "halt_confirmed": False}
 
 
+def _pi_fc(snapshot: dict[str, Any]) -> dict[str, Any]:
+    runtime = snapshot.get("runtime")
+    return (
+        _runtime_fc(runtime) if runtime is not None else _probe_fc(Path("/dev/serial0"))
+    )
+
+
+def _shared_final_action(action: str, runtime: dict[str, Any]) -> dict[str, Any]:
+    """Keep new clients blocked through cable removal or accepted shutdown."""
+    socket = runtime["socket"]
+    confirmed = False
+    acquired = False
+    try:
+        result = runtime_request(socket, {"maintenance": True})
+        if result.get("maintenance") is not True:
+            raise RuntimeError("runtime did not enter maintenance")
+        acquired = True
+        snapshot = _pi_snapshot()
+        _guard_idle(snapshot)
+        fc = _pi_fc(snapshot)
+        deadline = time.monotonic() + 2 - fc["heartbeat_age_s"]
+        if action == "shutdown":
+            result = _run(
+                ["sudo", "-n", "systemctl", "poweroff", "--no-block"],
+                timeout=_remaining(deadline),
+            )
+            if result.returncode:
+                raise RuntimeError("Pi rejected the shutdown request")
+        else:
+            _remaining(deadline)
+        confirmed = True
+        return (
+            {"idle": True, "maintenance": True}
+            if action == "idle"
+            else {"shutdown_requested": True, "halt_confirmed": False}
+        )
+    finally:
+        if acquired and not confirmed:
+            runtime_request(socket, {"maintenance": False})
+
+
 def _ssh_commands(action: str) -> list[list[str]]:
     connection = resolve_connection_target()
-    target = resolve_deploy_target(ping=lambda _host: False)
+    target = resolve_deploy_target()
     hosts = (
         [target.ssh_target]
         if os.environ.get("PI_HOST")
@@ -352,7 +477,7 @@ def _ssh_commands(action: str) -> list[list[str]]:
     )
     remote = (
         f"cd {shlex.quote(target.project_dir)} && "
-        "uv run --no-sync python -m ai_drone.cli.power --remote " + action
+        f"{REMOTE_UV} run --no-sync python -m ai_drone.cli.power --remote " + action
     )
     return [
         [
@@ -436,7 +561,7 @@ def _print_preparations(blocked: str | None = None) -> None:
             else "needs Pi shutdown; prepare rechecks the idle Pi UART first"
         )
         print(f"{removal}: {state}")
-        print(f"  uv run --locked drone-power prepare {removal}")
+        print(f"  uv run --locked python scripts/power.py prepare {removal}")
 
 
 def _status() -> int:
@@ -515,6 +640,10 @@ def _prepare(args: argparse.Namespace) -> int:
         print(
             f"Prepared for {args.removal}; keep your attested independent Pi supply connected."
         )
+        if final.get("maintenance"):
+            print(
+                "Runtime maintenance remains active; restart the runtime before the next flight."
+            )
     else:
         if final.get("shutdown_requested") is not True:
             raise RuntimeError("Pi shutdown was not acknowledged")

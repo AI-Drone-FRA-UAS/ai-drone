@@ -1,5 +1,5 @@
 # Architectural contracts for ai_drone.  These encode the layering documented in
-# CLAUDE.md so a future change cannot quietly reintroduce a cycle or let a
+# docs/SOFTWARE_ARCHITECTURE.md so a future change cannot quietly reintroduce a cycle or let a
 # shared leaf reach back into a concern package.
 [importlinter]
 root_package = ai_drone
@@ -37,6 +37,13 @@ source_modules =
     ai_drone.cli_parsing
     ai_drone.recording
     ai_drone.validation
+    ai_drone.settings
+    ai_drone.storage
+    ai_drone.transfer
+    ai_drone.network
+    ai_drone.operator
+    ai_drone.runtime
+    ai_drone.mount
 forbidden_modules =
     ai_drone.cli
 
@@ -57,6 +64,9 @@ source_modules =
     ai_drone.cli_parsing
     ai_drone.recording
     ai_drone.validation
+    ai_drone.settings
+    ai_drone.storage
+    ai_drone.mount
 forbidden_modules =
     ai_drone.cli
     ai_drone.capture

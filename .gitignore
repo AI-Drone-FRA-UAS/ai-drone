@@ -28,6 +28,7 @@ mav.parm
 .DS_Store
 
 # Local secrets
+/drone.toml
 .env
 .env.*
 !.env.example

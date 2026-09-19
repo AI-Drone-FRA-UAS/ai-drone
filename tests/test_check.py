@@ -399,6 +399,26 @@ def test_freshness_rejects_an_old_sample_despite_positive_message_count(rig):
     assert observed.errors == ["OPTICAL_FLOW: missing or stale FC telemetry"]
 
 
+@pytest.mark.parametrize("received,fresh", [(7, False), (9, True), (11, False)])
+def test_shared_observations_keep_original_receipt_age(monkeypatch, received, fresh):
+    monkeypatch.setattr(check.time, "monotonic", lambda: 10)
+    observed = check.Observations()
+    observed.observe(Message("ATTITUDE", roll=0, _received_monotonic=received))
+    assert (observed.fresh("ATTITUDE", 10) is not None) is fresh
+
+
+def test_old_or_foreign_sample_cannot_replace_current_observation(monkeypatch):
+    monkeypatch.setattr(check.time, "monotonic", lambda: 10)
+    observed = check.Observations()
+    observed.observe(Message("ATTITUDE", roll=1, _received_monotonic=9))
+    observed.observe(Message("ATTITUDE", roll=2, _received_monotonic=8))
+    observed.observe(Message("ATTITUDE", source=(2, 1), roll=3, _received_monotonic=10))
+    assert observed.latest["ATTITUDE"]["roll"] == 1
+    assert observed.seen["ATTITUDE"] == 9
+    with pytest.raises(RuntimeError, match="ARMED"):
+        observed.observe(Message("HEARTBEAT", base_mode=128, _received_monotonic=1))
+
+
 def test_parameter_transport_error_still_only_closes(rig, capsys, monkeypatch):
     _, connection = rig
 

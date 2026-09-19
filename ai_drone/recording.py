@@ -12,7 +12,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, TextIO
 
-from pymavlink.dialects.v10 import ardupilotmega as mavlink
+from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 # Rates are deliberately bounded for the verified 115200-baud Pi/FC link.
 # Unsupported messages are harmless: ArduPilot rejects or ignores the request.
@@ -26,6 +26,8 @@ TELEMETRY_RATES_HZ: Mapping[str, float] = {
     "RAW_IMU": 10.0,
     "AHRS2": 5.0,
     "BATTERY_STATUS": 2.0,
+    "RPM": 2.0,
+    "ESC_TELEMETRY_1_TO_4": 2.0,
     "EKF_STATUS_REPORT": 5.0,
     "GLOBAL_POSITION_INT": 5.0,
     "GPS_RAW_INT": 5.0,
@@ -54,6 +56,7 @@ class RecordingPaths:
     telemetry_tlog: Path
     telemetry_events: Path
     actuation_events: Path
+    storage_events: Path
     first_frame: Path
     last_frame: Path
     manifest: Path
@@ -95,6 +98,7 @@ def create_recording_paths(
         telemetry_tlog=root / "telemetry.tlog",
         telemetry_events=root / "telemetry.jsonl",
         actuation_events=root / "servo.jsonl",
+        storage_events=root / "storage.jsonl",
         first_frame=root / "first-frame.jpg",
         last_frame=root / "last-frame.jpg",
         manifest=root / "manifest.json",

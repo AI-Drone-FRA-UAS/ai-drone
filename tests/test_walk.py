@@ -22,11 +22,13 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(walk, "_runtime_root", lambda: root)
     monkeypatch.setattr(walk.sys, "executable", str(python))
     monkeypatch.setattr(walk, "_user_ids", lambda: (1000, 1000))
+    monkeypatch.setenv("AI_DRONE_CONFIG", walk.os.devnull)
     return root, python
 
 
+@pytest.mark.parametrize("no_video", [False, True])
 def test_dry_run_is_read_only_and_preserves_venv_interpreter(
-    runtime, monkeypatch, capsys
+    runtime, monkeypatch, capsys, no_video
 ):
     root, python = runtime
     monkeypatch.setattr(
@@ -36,13 +38,19 @@ def test_dry_run_is_read_only_and_preserves_venv_interpreter(
         walk, "_validate_runtime", lambda *_args: pytest.fail("hardware checked")
     )
 
-    assert walk.main(["--dry-run", "--duration", "180"]) == 0
+    assert (
+        walk.main(
+            ["--dry-run", "--duration", "180", *(["--no-video"] if no_video else [])]
+        )
+        == 0
+    )
 
     lines = capsys.readouterr().out.splitlines()
     command = shlex.split(lines[0])
     assert command[:3] == ["sudo", "-n", "systemd-run"]
     assert str(python) in command
     assert "--duration" in command and "180.0" in command
+    assert ("--no-video" in command) is no_video
     assert "--unit=ai-drone-walk.service" in command
     assert "--expand-environment=no" in command
     assert "--property=KillSignal=SIGINT" in command
@@ -188,13 +196,15 @@ class _Child:
 @pytest.mark.parametrize(
     ("capture_code", "report_code"), [(0, 0), (1, 0), (3, 0), (0, 2)]
 )
+@pytest.mark.parametrize("no_video", [False, True])
 def test_worker_reports_actual_capture_path_and_retains_failures(
-    runtime, monkeypatch, capture_code, report_code
+    runtime, monkeypatch, capture_code, report_code, no_video
 ):
     root, python = runtime
     requested = root / "walk"
     actual = root / "walk-1"
     calls = []
+    monkeypatch.setattr(walk, "_validate_runtime", lambda *_args: None)
 
     def spawn(command, **kwargs):
         assert kwargs["cwd"] == root and kwargs["stdin"] == subprocess.DEVNULL
@@ -202,24 +212,53 @@ def test_worker_reports_actual_capture_path_and_retains_failures(
         calls.append(command)
         if len(calls) == 1:
             assert not requested.exists()
-            assert command[:3] == [str(python), "-m", "ai_drone.cli.record"]
-            assert command[3:9] == [
-                "--device",
-                "/dev/serial0",
-                "--baud",
-                "115200",
-                "--backend",
-                "native",
+            assert command[1:6] == [
+                "run",
+                "--no-sync",
+                "--python",
+                str(python),
+                "python",
             ]
+            assert command[6:8] == ["-m", "ai_drone.cli.record"]
+            assert (
+                command[command.index("--device") + 1]
+                == "unix:/run/ai-drone/vehicle.sock"
+            )
+            assert command[command.index("--baud") + 1] == "115200"
+            assert command[command.index("--backend") + 1] == "native"
             assert "--confirm-manual-flight-recording" not in command
+            assert ("--no-video" in command) is no_video
             return _Child(
                 f"Finished\nManifest: {actual / 'manifest.json'}\n", capture_code
             )
-        assert command == [str(python), "-m", "ai_drone.cli.report", str(actual)]
+        assert command[1:] == [
+            "run",
+            "--no-sync",
+            "--python",
+            str(python),
+            "python",
+            "-m",
+            "ai_drone.cli.report",
+            str(actual),
+        ]
         return _Child("Report written\n", report_code)
 
     monkeypatch.setattr(walk.subprocess, "Popen", spawn)
-    assert walk._run_worker(root, python, requested, 300) == (
+    launch = walk._launch_command(
+        root,
+        python,
+        1000,
+        1000,
+        [
+            "--duration",
+            "300",
+            "--output-dir",
+            str(requested),
+            *(["--no-video"] if no_video else []),
+        ],
+        tag_servo=False,
+    )
+    assert walk.main(launch[launch.index("--worker") :]) == (
         capture_code or report_code
     )
     assert len(calls) == 2
@@ -234,7 +273,7 @@ def test_worker_does_not_guess_dataset_after_a_crash(runtime, monkeypatch):
         return _Child("Capture crashed before its manifest\n", 1)
 
     monkeypatch.setattr(walk.subprocess, "Popen", spawn)
-    assert walk._run_worker(root, python, root / "walk", 300) == 1
+    assert walk._run_worker(root, python, root / "walk", []) == 1
     assert len(calls) == 1
 
 
@@ -261,7 +300,7 @@ def test_worker_forwards_stop_to_capture_and_still_reports(runtime, monkeypatch)
     monkeypatch.setattr(
         walk.subprocess, "Popen", lambda *_args, **_kwargs: next(children)
     )
-    assert walk._run_worker(root, python, output, 300) == 0
+    assert walk._run_worker(root, python, output, []) == 0
     assert capture.signals == [signal.SIGINT]
     assert report.signals == []
     assert handlers == {signal.SIGINT: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
@@ -287,4 +326,140 @@ def test_worker_rechecks_output_without_touching_existing_data(runtime, monkeypa
         lambda *_args, **_kwargs: pytest.fail("capture started"),
     )
     with pytest.raises(ValueError, match="already exists"):
-        walk._run_worker(root, python, output, 300)
+        walk._run_worker(root, python, output, [])
+
+
+def test_detached_recording_freezes_calibration_and_storage_settings(
+    runtime, tmp_path, monkeypatch, capsys
+):
+    root, _python = runtime
+    settings = tmp_path / "drone.toml"
+    settings.write_text(
+        "[recording]\n"
+        "storage_reserve_mib = 128\n"
+        "storage_warning_mib = 512\n"
+        "storage_stop_mib = 8\n"
+        "storage_check_interval = 3\n"
+    )
+    monkeypatch.setenv("AI_DRONE_CONFIG", str(settings))
+    monkeypatch.chdir(tmp_path)
+    assert (
+        walk.main(
+            [
+                "--dry-run",
+                "--calibration",
+                "camera calibration.json",
+                "--tag-size",
+                "0.224",
+                "--storage-reserve-mib",
+                "256",
+                "--no-video",
+            ]
+        )
+        == 0
+    )
+    launch = shlex.split(capsys.readouterr().out.splitlines()[0])
+    assert "--setenv=AI_DRONE_CONFIG=/dev/null" in launch
+
+    # The service starts from another cwd after the original configuration changes.
+    settings.write_text("invalid configuration")
+    monkeypatch.setenv("AI_DRONE_CONFIG", "/dev/null")
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(walk, "_validate_runtime", lambda *_args: None)
+    captured = []
+
+    def run_worker(_root, _python, _output, arguments, **_kwargs):
+        captured.extend(arguments)
+        return 0
+
+    monkeypatch.setattr(walk, "_run_worker", run_worker)
+    assert walk.main(launch[launch.index("--worker") :]) == 0
+    expected = {
+        "--calibration": str(tmp_path / "camera calibration.json"),
+        "--tag-size": "0.224",
+        "--storage-reserve-mib": "256.0",
+        "--storage-warning-mib": "512.0",
+        "--storage-stop-mib": "8.0",
+        "--storage-check-interval": "3.0",
+    }
+    for option, value in expected.items():
+        assert captured[captured.index(option) + 1] == value
+    assert "--no-video" in captured
+    assert "--allow-flight" not in captured
+
+
+SERVO_OPTIONS = [
+    "--tag-servo",
+    "--tag-range",
+    "3:5",
+    "--active-us",
+    "1500",
+    "--rest-us",
+    "900",
+    "--pulse-duration",
+    "0.5",
+    "--confirm-actuation",
+    "SERVO_CLEAR",
+    "--confirm-armed-flight",
+    "ARMED_FLIGHT_TAG_SERVO_CLEAR",
+]
+
+
+@pytest.mark.parametrize("servo", [False, True])
+def test_explicit_flight_recording_keeps_its_gates_through_detach(
+    runtime, monkeypatch, capsys, servo
+):
+    options = SERVO_OPTIONS if servo else ["--allow-flight"]
+    assert walk.main(["--dry-run", "--no-video", *options]) == 0
+    launch = shlex.split(capsys.readouterr().out.splitlines()[0])
+    output = Path(launch[launch.index("--output-dir") + 1])
+    calls = []
+    monkeypatch.setattr(walk, "_validate_runtime", lambda *_args: None)
+
+    def spawn(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            return _Child(f"Manifest: {output / 'manifest.json'}\n")
+        return _Child("Report written\n")
+
+    monkeypatch.setattr(walk.subprocess, "Popen", spawn)
+    assert walk.main(launch[launch.index("--worker") :]) == 0
+    capture = calls[0]
+    module = capture[capture.index("-m") + 1]
+    assert module == (
+        "ai_drone.cli.tag_servo_record" if servo else "ai_drone.cli.record"
+    )
+    assert "--no-video" in capture
+    assert "ai_drone.cli.report" in calls[1]
+    if servo:
+        ids = [
+            capture[index + 1]
+            for index, value in enumerate(capture)
+            if value == "--tag-id"
+        ]
+        assert ids == ["3", "4", "5"]
+        assert "--tag-range" not in capture
+        assert "SERVO_CLEAR" in capture and "ARMED_FLIGHT_TAG_SERVO_CLEAR" in capture
+        assert capture[capture.index("--active-us") + 1] == "1500"
+        assert capture[capture.index("--rest-us") + 1] == "900"
+        assert capture[capture.index("--backend") + 1] == "native"
+    else:
+        assert "--allow-flight" in capture
+        assert "--confirm-actuation" not in capture
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--tag-servo"],
+        ["--confirm-manual-flight-recording", "yes"],
+        [*SERVO_OPTIONS, "--backend", "opencv"],
+    ],
+)
+def test_unsafe_recording_options_fail_before_launch(runtime, monkeypatch, options):
+    monkeypatch.setattr(
+        walk.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("job started")
+    )
+    with pytest.raises(SystemExit) as error:
+        walk.main(["--dry-run", *options])
+    assert error.value.code == 2

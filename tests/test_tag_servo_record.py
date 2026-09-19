@@ -16,16 +16,17 @@ from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 import ai_drone.capture.workers as capture_workers
 import ai_drone.cli.record as record_cli
-from ai_drone.cli.record import (
+from ai_drone.capture.state import (
     AnalysisFrame,
     CaptureState,
     CaptureWindow,
-    TelemetryWorker,
+)
+from ai_drone.capture.workers import TelemetryWorker
+from ai_drone.cli.record import (
     _parser,
     _queue_analysis_frame,
     _validate_args,
 )
-from ai_drone.cli.servo import ServoProcessLock
 from ai_drone.cli.tag_servo_record import (
     ARMED_FLIGHT_CONFIRMATION,
     ActuationStop,
@@ -34,7 +35,7 @@ from ai_drone.cli.tag_servo_record import (
 )
 from ai_drone.durability import IntervalSync
 from ai_drone.mavlink.parameters import request_parameter
-from ai_drone.mount import DEFAULT_SETTLE_S, MOUNT_OPEN_VALUE
+from ai_drone.mount import DEFAULT_SETTLE_S, MOUNT_OPEN_VALUE, ServoProcessLock
 from ai_drone.recording import request_telemetry_messages
 from ai_drone.vision.apriltags import TagDetection
 
@@ -65,9 +66,9 @@ def _parse(*extra: str):
     return args
 
 
-def _mount_config() -> TagServoConfig:
+def _mount_config(*arguments: str) -> TagServoConfig:
     parser = _parser(operation="tag-mount")
-    args = parser.parse_args([])
+    args = parser.parse_args(list(arguments))
     _validate_args(parser, args, operation="tag-mount")
     assert args.duration is None
     assert args.backend == "native"
@@ -165,6 +166,34 @@ def test_active_parser_requires_unique_valid_tag_allowlist() -> None:
             ["--tag-id", "1", "--tag-id", "2", "--stop-after", "3", *base]
         )
         _validate_args(parser, args, operation="tag-servo")
+
+
+def test_tag_ranges_normalize_to_explicit_allowed_ids():
+    parser = _parser(operation="tag-servo")
+    args = parser.parse_args(
+        ["--tag-range", "3:5", "--tag-range", "9:9", *_arguments()[1:]]
+    )
+    _validate_args(parser, args, operation="tag-servo")
+    assert args.tag_ids == [3, 4, 5, 9]
+    assert TagServoConfig.from_args(args).allowed_tag_ids == frozenset({3, 4, 5, 9})
+
+
+@pytest.mark.parametrize("value", ["-1:3", "3:2", "0:587", "1", "1:2:3", "a:b"])
+def test_tag_range_rejects_invalid_boundaries(value):
+    parser = _parser(operation="tag-servo")
+    with pytest.raises(SystemExit):
+        parser.parse_args([f"--tag-range={value}", *_arguments()[1:]])
+
+
+def test_tag_ranges_reject_overlap_and_excessive_stop_count():
+    for selection in (
+        ["--tag-range", "3:5", "--tag-range", "5:8"],
+        ["--tag-range", "3:5", "--stop-after", "4"],
+    ):
+        parser = _parser(operation="tag-servo")
+        args = parser.parse_args([*selection, *_arguments()[1:]])
+        with pytest.raises(SystemExit):
+            _validate_args(parser, args, operation="tag-servo")
 
 
 def test_payload_servo_process_lock_is_exclusive_and_reusable(tmp_path: Path) -> None:
@@ -364,6 +393,34 @@ def test_mount_rejects_unqualified_tag_detections(tmp_path, reason):
         assert servo.actions == []
     finally:
         session.close()
+
+
+def test_selected_mount_tag_preserves_motion_and_triggers_once(tmp_path):
+    config = _mount_config("--tag-id", "7")
+    assert config.allowed_tag_ids == frozenset({7})
+    assert (config.active_pulse_us, config.pulse_duration_s, config.open_mount) == (
+        1500,
+        0.5,
+        True,
+    )
+    session, state, _stop, lock, servo = _session(tmp_path, config=config)
+    try:
+        _observe(session, 3, 3)
+        assert servo.actions == []
+        _observe(session, 7, 3)
+        _wait_for(lambda: state.servo_pulses_completed == 1, timeout=2)
+        _observe(session, 7, 5)
+        assert servo.actions == [("value", MOUNT_OPEN_VALUE), ("detach", None)]
+    finally:
+        session.close()
+    assert [value for action, value in servo.actions if action == "value"] == [0.0]
+    assert servo.closed and lock.closed
+
+
+@pytest.mark.parametrize("tag_id", ["-1", "587"])
+def test_mount_rejects_invalid_selected_tag(tag_id):
+    with pytest.raises(SystemExit):
+        _mount_config(f"--tag-id={tag_id}")
 
 
 def test_stop_during_mount_open_detaches_without_reclosing(tmp_path):
@@ -843,10 +900,10 @@ def test_active_outbound_mavlink_is_read_and_interval_requests_only() -> None:
     )
     requested = request_telemetry_messages(connection)
 
-    assert len(requested) == 23
+    assert len(requested) == 25
     assert [name for name, _values in calls].count("PARAM_REQUEST_READ") == 1
     command_calls = [values for name, values in calls if name == "COMMAND_LONG"]
-    assert len(command_calls) == 23
+    assert len(command_calls) == 25
     assert all(
         values[2] == mavlink.MAV_CMD_SET_MESSAGE_INTERVAL for values in command_calls
     )

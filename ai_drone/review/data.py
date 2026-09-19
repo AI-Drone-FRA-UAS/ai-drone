@@ -696,11 +696,9 @@ _HANDLERS = {
 }
 
 
-def export_recording(
-    recording: Path, output: Path, *, system: int = 1, component: int = 1
-) -> dict[str, Any]:
-    """Write full CSVs and return chart data for the selected FC's recording."""
-    warnings: Counter[str] = Counter()
+def _recording_metadata(
+    recording: Path, warnings: Counter[str]
+) -> tuple[dict[str, Any], float]:
     manifest: dict[str, Any] = {}
     try:
         loaded = json.loads((recording / "manifest.json").read_text())
@@ -722,42 +720,44 @@ def export_recording(
             ),
             default=0,
         )
-    output.mkdir(parents=True, exist_ok=True)
+    return manifest, duration
+
+
+def _export_telemetry(
+    recording: Path,
+    export: Export,
+    warnings: Counter[str],
+    duration: float,
+    system: int,
+    component: int,
+) -> tuple[Counter[str], int, int]:
     messages: Counter[str] = Counter()
     other_sources = outside_window = 0
-    with ExitStack() as stack:
-        export = Export(output, duration, stack)
-        for row in _records(recording / "telemetry.jsonl", warnings):
-            if row["elapsed_s"] > duration:
-                outside_window += 1
-                continue
-            if (
-                _integer(row.get("source_system"), 255, 1),
-                _integer(row.get("source_component"), 255, 1),
-            ) != (system, component):
-                other_sources += 1
-                continue
-            name, fields = row.get("message"), row.get("fields")
-            if not isinstance(name, str) or not isinstance(fields, dict):
-                warnings[
-                    "Telemetry rows with an invalid message or fields object were skipped."
-                ] += 1
-                continue
-            messages[name] += 1
-            handler = _HANDLERS.get(name)
-            if handler:
-                handler(export, {key: row.get(key) for key in COMMON}, fields)
-        for row in _records(recording / "camera.jsonl", warnings):
-            if row["elapsed_s"] <= duration:
-                _camera(export, row)
-    if other_sources:
-        warnings[
-            f"Excluded {other_sources} telemetry messages from other MAVLink sources; raw logs retain them."
-        ] += 1
-    if outside_window:
-        warnings[
-            f"Excluded {outside_window} telemetry messages outside the recorded capture interval."
-        ] += 1
+    for row in _records(recording / "telemetry.jsonl", warnings):
+        if row["elapsed_s"] > duration:
+            outside_window += 1
+            continue
+        if (
+            _integer(row.get("source_system"), 255, 1),
+            _integer(row.get("source_component"), 255, 1),
+        ) != (system, component):
+            other_sources += 1
+            continue
+        name, fields = row.get("message"), row.get("fields")
+        if not isinstance(name, str) or not isinstance(fields, dict):
+            warnings[
+                "Telemetry rows with an invalid message or fields object were skipped."
+            ] += 1
+            continue
+        messages[name] += 1
+        handler = _HANDLERS.get(name)
+        if handler:
+            handler(export, {key: row.get(key) for key in COMMON}, fields)
+    return messages, other_sources, outside_window
+
+
+def _sensor_warnings(export: Export, messages: Counter[str]) -> Counter[str]:
+    warnings: Counter[str] = Counter()
     if not messages.get("HEARTBEAT"):
         warnings[
             "No selected-FC heartbeat was recorded; vehicle state is unavailable."
@@ -786,6 +786,33 @@ def export_recording(
     warnings[
         "Charts retain a bounded min/max envelope; CSVs retain every selected sample. Gaps and invalid readings are not filled in."
     ] += 1
+    return warnings
+
+
+def export_recording(
+    recording: Path, output: Path, *, system: int = 1, component: int = 1
+) -> dict[str, Any]:
+    """Write full CSVs and return chart data for the selected FC's recording."""
+    warnings: Counter[str] = Counter()
+    manifest, duration = _recording_metadata(recording, warnings)
+    output.mkdir(parents=True, exist_ok=True)
+    with ExitStack() as stack:
+        export = Export(output, duration, stack)
+        messages, other_sources, outside_window = _export_telemetry(
+            recording, export, warnings, duration, system, component
+        )
+        for row in _records(recording / "camera.jsonl", warnings):
+            if row["elapsed_s"] <= duration:
+                _camera(export, row)
+    if other_sources:
+        warnings[
+            f"Excluded {other_sources} telemetry messages from other MAVLink sources; raw logs retain them."
+        ] += 1
+    if outside_window:
+        warnings[
+            f"Excluded {outside_window} telemetry messages outside the recorded capture interval."
+        ] += 1
+    warnings.update(_sensor_warnings(export, messages))
     return {
         "title": recording.name,
         "started_utc": manifest.get("started_utc"),

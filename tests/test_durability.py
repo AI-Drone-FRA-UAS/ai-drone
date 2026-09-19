@@ -183,3 +183,21 @@ def test_fsync_directory_closes_its_descriptor(tmp_path: Path) -> None:
         fsync_directory(tmp_path)
 
     assert len(closed) == 1
+
+
+def test_interval_sync_supports_binary_tlogs_without_changing_wire_bytes(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "telemetry.tlog"
+    synced = []
+    monkeypatch.setattr(os, "fsync", synced.append)
+    sync = IntervalSync(5)
+    packet = b"\x00\x00\x01\xfe\xff\n"
+    with path.open("wb") as handle:
+        handle.write(packet)
+        assert not sync.after_record(handle, now=10)
+        assert path.read_bytes() == packet
+        handle.write(packet)
+        assert sync.after_record(handle, now=15)
+        assert synced == [handle.fileno()]
+        assert path.read_bytes() == packet * 2

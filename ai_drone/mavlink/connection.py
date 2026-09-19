@@ -14,6 +14,11 @@ def open_ardupilot_connection(device: str, **options: Any) -> Any:
     receiving anything, including when pymavlink was imported earlier.
     """
 
+    if device.startswith("unix:"):
+        from ai_drone.mavlink.remote import RemoteConnection
+
+        return RemoteConnection(device.removeprefix("unix:"))
+
     from pymavlink import mavutil
 
     os.environ["MAVLINK20"] = "1"

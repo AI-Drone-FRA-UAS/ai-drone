@@ -92,38 +92,23 @@ but emits native MAVLink ID0; the pinned ArduPilot backend separates incoming
 readings by orientation. The configured 0.1 m minimum remains conservative;
 native packets advertising 2 cm are not an accuracy or blind-zone calibration.
 
-See [sensor recording and wiring](SENSOR_RECORDING.md).
+See [sensor recording and wiring](OPERATIONS.md#recording).
 The reviewed ArduCopter 4.7 EKF correction, comparison evidence, and SITL
 acceptance result are in the
 [no-GPS Loiter review](ARDUCOPTER_4_7_NOGPS_LOITER.md).
 
 ## Capture the live configuration
 
-`drone-config-sync` reads the complete indexed MAVLink parameter set through
-the Pi. It does not send `PARAM_SET`, change mode, arm, or drive an actuator.
+`uv run drone config` reads the complete indexed MAVLink parameter set through
+the Pi. It does not write parameters, change mode, arm or drive an actuator.
 
 ```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
-  uv run drone-config-sync
+uv run drone config
 ```
 
-The command writes:
+The command writes `params/flywoo-f745-live-YYYY-MM-DD.param` and matching
+`state/YYYY-MM-DD/drone-config.json`. It retries missing indexes, rejects
+duplicate names/indexes and verifies the parameter-file checksum. Review and
+commit the generated pair separately; capture does not deploy or publish.
 
-```text
-params/flywoo-f745-live-YYYY-MM-DD.param
-state/YYYY-MM-DD/drone-config.json
-```
-
-It retries missing indexes, rejects duplicate names/indexes, and verifies the
-parameter-file checksum. To commit exactly the generated pair from a clean
-worktree and push the current branch:
-
-```bash
-SSH_CONFIG=/dev/null PI_HOST=seb@seb-is-pm.tail59e6a4.ts.net \
-  uv run drone-config-sync --publish
-```
-
-Git credentials remain on the developer machine and are not copied to the Pi.
-
-For direct USB inspection and MAVProxy troubleshooting, see
-[Developer machine connection](DEVELOPER_MACHINE_DRONE_CONNECTION.md).
+For direct FC USB inspection, see the [operator guide](OPERATIONS.md#disarmed-checks).

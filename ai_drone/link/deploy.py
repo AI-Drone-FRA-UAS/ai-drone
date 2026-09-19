@@ -3,27 +3,21 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import io
 import json
 import os
-import platform
 import re
 import secrets
 import shlex
-import shutil
 import subprocess
-import sys
 import tarfile
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from ai_drone.link.targets import DeployTarget, resolve_deploy_target
+from ai_drone.link.targets import REMOTE_UV, DeployTarget, resolve_deploy_target
 
-# ai_drone/link/deploy.py -> ai_drone/link -> ai_drone -> the repository root.
-# tests/test_deploy.py pins this so moving the module cannot silently break it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_NAME = ".__ai_drone_manifest"
 SENTINEL_NAME = ".__ai_drone_deploy_sentinel"
@@ -36,11 +30,20 @@ RUNTIME_TREES = ("ai_drone",)
 RUNTIME_FILES = frozenset(
     {
         "README.md",  # Referenced by pyproject.toml during package builds.
+        "drone.example.toml",
         "pyproject.toml",
-        "scripts/ai-drone-network",
-        "scripts/ai-drone-network.service",
+        "scripts/network.py",
+        "scripts/transfer.py",
+        "scripts/power.py",
+        "scripts/setup_runtime.py",
+        "scripts/motor_test.py",
+        "scripts/servo.py",
+        "scripts/mount.py",
+        "scripts/usb_ssh.py",
+        "scripts/tag_mount_capture.py",
+        "scripts/disarmed_tag_mount.py",
+        "scripts/verify_ardupilot_firmware.py",
         "scripts/pi-safe-upgrade.sh",
-        "scripts/setup-pi-dual-network.sh",
         "scripts/setup-pi-hotspot.sh",
         "scripts/setup-pi-power-resilience.sh",
         "scripts/usb0-static.service",
@@ -60,6 +63,8 @@ EXCLUDE_NAMES = frozenset(
         ".ruff_cache",
         ".pytest_cache",
         "artifacts",
+        "state",
+        "drone.toml",
         "__pycache__",
         "aitrios-rpi-sample-apps",
         "Drone-Handbook.pdf",
@@ -77,10 +82,8 @@ _FORBIDDEN_REMOTE_ROOTS = frozenset(
 @dataclass(frozen=True)
 class DeployPlan:
     target: DeployTarget
-    mode: str | None
-    extra_args: tuple[str, ...]
     dry_run: bool
-    sync_method: str
+    offline: bool = False
 
 
 def ssh_base_command(target: DeployTarget) -> list[str]:
@@ -88,17 +91,6 @@ def ssh_base_command(target: DeployTarget) -> list[str]:
     if target.ssh_config:
         command.extend(["-F", target.ssh_config])
     return command
-
-
-def choose_sync_method(
-    system: str | None = None,
-    *,
-    rsync_path: str | None = None,
-) -> str:
-    current_system = platform.system() if system is None else system
-    if current_system != "Windows" and rsync_path:
-        return "rsync"
-    return "tar"
 
 
 def _validated_remote_project_dir(target: DeployTarget) -> str:
@@ -145,22 +137,28 @@ def _validated_remote_project_dir(target: DeployTarget) -> str:
             "letters, digits, '.', '_' and '-'"
         )
 
+    _validate_deployment_location(parts, target.user, raw)
+    return canonical
+
+
+def _validate_deployment_location(parts: tuple[str, ...], user: str, raw: str) -> None:
+    """Keep a canonical target within permitted, dedicated storage locations."""
     first = parts[0]
     if first in _FORBIDDEN_REMOTE_ROOTS:
         raise ValueError(
             f"refusing unsafe PI_DIR {raw!r}: deployment below /{first} is not allowed"
         )
-    if first == "home" and (target.user == "root" or parts[1] != target.user):
+    if first == "home" and (user == "root" or parts[1] != user):
         raise ValueError(
             f"refusing unsafe PI_DIR {raw!r}: /home deployments must stay below "
-            f"/home/{target.user}"
+            f"/home/{user}"
         )
     if first in {"home", "Users"} and len(parts) < 3:
         raise ValueError(
             f"refusing unsafe PI_DIR {raw!r}: a user's home directory is not a "
             "deployment target"
         )
-    if first == "root" and target.user != "root":
+    if first == "root" and user != "root":
         raise ValueError(
             f"refusing unsafe PI_DIR {raw!r}: only root may deploy below /root"
         )
@@ -174,23 +172,15 @@ def _validated_remote_project_dir(target: DeployTarget) -> str:
             f"refusing unsafe PI_DIR {raw!r}: hidden home paths are not deployment "
             "targets"
         )
-    return canonical
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Sync ai-drone to the Raspberry Pi and optionally run a task."
-    )
-    parser.add_argument(
-        "--run",
-        choices=("inspect", "servo", "tag-servo-record", "motor-test", "control"),
-        help="run one allowlisted task after deployment",
+        description="Sync the runtime and install dependencies on the Raspberry Pi."
     )
     parser.add_argument("--dry-run", action="store_true", help="print commands only")
     parser.add_argument(
-        "task_args",
-        nargs=argparse.REMAINDER,
-        help="task arguments after --, for example -- --duration 10",
+        "--offline", action="store_true", help="install from the Pi's uv cache only"
     )
     return parser
 
@@ -199,30 +189,15 @@ def build_plan(
     arguments: Sequence[str] | None = None,
     *,
     environ: Mapping[str, str] | None = None,
-    system: str | None = None,
-    ping: Callable[[str], bool] | None = None,
-    rsync_path: str | None = None,
 ) -> DeployPlan:
     parser = _parser()
     args = parser.parse_args(arguments)
-    extra_args = tuple(args.task_args)
-    if extra_args[:1] == ("--",):
-        extra_args = extra_args[1:]
-    if args.run is None and extra_args:
-        parser.error("task arguments require --run")
-
-    target = resolve_deploy_target(environ, ping=ping, system=system)
+    target = resolve_deploy_target(environ)
     _validated_remote_project_dir(target)
-    sync_method = choose_sync_method(
-        system,
-        rsync_path=shutil.which("rsync") if rsync_path is None else rsync_path,
-    )
     return DeployPlan(
         target=target,
-        mode=args.run,
-        extra_args=extra_args,
         dry_run=args.dry_run,
-        sync_method=sync_method,
+        offline=args.offline,
     )
 
 
@@ -278,8 +253,13 @@ def _is_secret_path(relative: Path | PurePosixPath | str) -> bool:
 
 
 def _is_excluded(relative: Path) -> bool:
-    return _is_secret_path(relative) or any(
-        part in EXCLUDE_NAMES for part in relative.parts
+    return (
+        _is_secret_path(relative)
+        or relative.suffix.lower() in {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
+        or any(
+            part in EXCLUDE_NAMES or part.startswith("drone-tone-handover-backup-")
+            for part in relative.parts
+        )
     )
 
 
@@ -291,87 +271,6 @@ def _is_runtime_path(relative: Path | PurePosixPath | str) -> bool:
         return True
     # Explicit files need their parent directories in both transport payloads.
     return any(runtime_file.startswith(f"{value}/") for runtime_file in RUNTIME_FILES)
-
-
-def _rsync_filter_rules() -> list[str]:
-    rules: list[str] = []
-    for name in sorted(EXCLUDE_NAMES):
-        rules.extend(
-            (
-                f"protect {name}",
-                f"protect {name}/***",
-                f"hide {name}",
-                f"hide {name}/***",
-            )
-        )
-    rules.extend(
-        (
-            "protect .env",
-            "protect .env.*",
-            "hide .env",
-            "hide .env.*",
-        )
-    )
-    for tree in RUNTIME_TREES:
-        rules.extend((f"show /{tree}/", f"show /{tree}/***"))
-    parent_dirs = {
-        parent.as_posix()
-        for runtime_file in RUNTIME_FILES
-        for parent in PurePosixPath(runtime_file).parents
-        if parent.as_posix() != "."
-    }
-    rules.extend(f"show /{parent}/" for parent in sorted(parent_dirs))
-    rules.extend(f"show /{runtime_file}" for runtime_file in sorted(RUNTIME_FILES))
-    rules.append("hide /***")
-    return rules
-
-
-def rsync_command(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> list[str]:
-    project_dir = _validated_remote_project_dir(plan.target)
-    ssh_transport = shlex.join(ssh_base_command(plan.target))
-    command = ["rsync", "-az", "--delete", "-e", ssh_transport]
-    for rule in _rsync_filter_rules():
-        command.extend(["--filter", rule])
-    command.extend([f"{repo_root}/", f"{plan.target.ssh_target}:{project_dir}/"])
-    return command
-
-
-def install_command(plan: DeployPlan) -> list[str]:
-    target = plan.target
-    project_dir = _validated_remote_project_dir(target)
-    setup = (
-        "if [ ! -f .venv/pyvenv.cfg ] || ! grep -qx "
-        '"include-system-site-packages = true" .venv/pyvenv.cfg; then '
-        "uv venv --clear --python /usr/bin/python3 --system-site-packages .venv; "
-        "fi; "
-        "uv sync --locked --python .venv/bin/python --no-dev --group raspi"
-    )
-    target_home = "/root" if target.user == "root" else f"/home/{target.user}"
-    path_prefix = f"PATH={target_home}/.local/bin:$PATH"
-    command = (
-        f"cd {shlex.quote(project_dir)} && {path_prefix} sh -lc {shlex.quote(setup)}"
-    )
-    return remote_command(target, command)
-
-
-def mode_command(plan: DeployPlan) -> list[str] | None:
-    target = plan.target
-    project_dir = _validated_remote_project_dir(target)
-    extra = " ".join(shlex.quote(argument) for argument in plan.extra_args)
-    suffix = f" {extra}" if extra else ""
-
-    modules = {
-        "inspect": "ai_drone.cli.record",
-        "servo": "ai_drone.cli.servo",
-        "tag-servo-record": "ai_drone.cli.tag_servo_record",
-        "motor-test": "ai_drone.cli.motor_test",
-        "control": "ai_drone.cli.control",
-    }
-    module = modules.get(plan.mode or "")
-    if module is None:
-        return None
-    command = f"cd {shlex.quote(project_dir)} && .venv/bin/python -m {module}{suffix}"
-    return remote_command(target, command, tty=True)
 
 
 def _iter_sync_paths(repo_root: Path) -> list[Path]:
@@ -471,49 +370,49 @@ def _create_sync_archive(repo_root: Path, deployment_id: str) -> Path:
     return archive
 
 
-class DeploymentCleanupError(RuntimeError):
-    """The uploaded metadata is not safe enough to authorize deletion."""
+class DeploymentPayloadError(RuntimeError):
+    """The uploaded payload is missing or inconsistent with its manifest."""
 
 
 def _read_deployment_file(path: Path, maximum_size: int) -> str:
     if path.is_symlink() or not path.is_file():
-        raise DeploymentCleanupError(f"{path.name} is missing or is not a regular file")
+        raise DeploymentPayloadError(f"{path.name} is missing or is not a regular file")
     try:
         if path.stat().st_size > maximum_size:
-            raise DeploymentCleanupError(f"{path.name} is unexpectedly large")
+            raise DeploymentPayloadError(f"{path.name} is unexpectedly large")
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
-        raise DeploymentCleanupError(f"cannot read {path.name}: {error}") from error
+        raise DeploymentPayloadError(f"cannot read {path.name}: {error}") from error
 
 
 def _manifest_listing(root: Path, deployment_id: str) -> list[object]:
     sentinel_path = root / SENTINEL_NAME
     sentinel = _read_deployment_file(sentinel_path, 512)
     if sentinel != f"{SENTINEL_PREFIX}{deployment_id}\n":
-        raise DeploymentCleanupError("deployment sentinel does not match this upload")
+        raise DeploymentPayloadError("deployment sentinel does not match this upload")
 
     manifest_path = root / MANIFEST_NAME
     manifest_text = _read_deployment_file(manifest_path, 1_000_000)
     try:
         document = json.loads(manifest_text)
     except (TypeError, ValueError) as error:
-        raise DeploymentCleanupError(f"manifest is not valid JSON: {error}") from error
+        raise DeploymentPayloadError(f"manifest is not valid JSON: {error}") from error
     if not isinstance(document, dict):
-        raise DeploymentCleanupError("manifest root is not an object")
+        raise DeploymentPayloadError("manifest root is not an object")
     if document.get("format") != MANIFEST_FORMAT:
-        raise DeploymentCleanupError("manifest format is unsupported")
+        raise DeploymentPayloadError("manifest format is unsupported")
     if document.get("deployment_id") != deployment_id:
-        raise DeploymentCleanupError("manifest does not match this upload")
+        raise DeploymentPayloadError("manifest does not match this upload")
 
     listed = document.get("paths")
     if not isinstance(listed, list) or not listed:
-        raise DeploymentCleanupError("manifest path list is missing or empty")
+        raise DeploymentPayloadError("manifest path list is missing or empty")
     return listed
 
 
 def _validated_manifest_path(relative: object) -> str:
     if not isinstance(relative, str):
-        raise DeploymentCleanupError("manifest contains a non-string path")
+        raise DeploymentPayloadError("manifest contains a non-string path")
     path = PurePosixPath(relative)
     if (
         not path.parts
@@ -521,11 +420,11 @@ def _validated_manifest_path(relative: object) -> str:
         or path.as_posix() != relative
         or any(part in {"", ".", ".."} for part in path.parts)
     ):
-        raise DeploymentCleanupError(f"manifest contains unsafe path {relative!r}")
+        raise DeploymentPayloadError(f"manifest contains unsafe path {relative!r}")
     if relative in {MANIFEST_NAME, SENTINEL_NAME}:
-        raise DeploymentCleanupError("manifest contains deployment metadata")
+        raise DeploymentPayloadError("manifest contains deployment metadata")
     if _is_excluded(Path(relative)) or not _is_runtime_path(relative):
-        raise DeploymentCleanupError(f"manifest contains non-runtime path {relative!r}")
+        raise DeploymentPayloadError(f"manifest contains non-runtime path {relative!r}")
     return relative
 
 
@@ -534,10 +433,10 @@ def _manifest_paths(root: Path, deployment_id: str) -> set[str]:
     allowed = {_validated_manifest_path(relative) for relative in listed}
 
     if len(allowed) != len(listed):
-        raise DeploymentCleanupError("manifest contains duplicate paths")
+        raise DeploymentPayloadError("manifest contains duplicate paths")
     missing_required = sorted(REQUIRED_RUNTIME_PATHS - allowed)
     if missing_required:
-        raise DeploymentCleanupError(
+        raise DeploymentPayloadError(
             "manifest omits required paths: " + ", ".join(missing_required)
         )
 
@@ -547,52 +446,10 @@ def _manifest_paths(root: Path, deployment_id: str) -> set[str]:
         if path.is_symlink() or not path.exists():
             missing_payload.append(relative)
     if missing_payload:
-        raise DeploymentCleanupError(
+        raise DeploymentPayloadError(
             "uploaded payload is missing paths: " + ", ".join(missing_payload)
         )
     return allowed
-
-
-def _cleanup_deployment(deployment_id: str, root: Path | None = None) -> None:
-    deployment_id = _validated_deployment_id(deployment_id)
-    deployment_root = Path.cwd() if root is None else root
-    allowed = _manifest_paths(deployment_root, deployment_id)
-    metadata = {MANIFEST_NAME, SENTINEL_NAME}
-
-    for path in sorted(
-        deployment_root.rglob("*"),
-        key=lambda item: (len(item.parts), item.as_posix()),
-        reverse=True,
-    ):
-        relative = path.relative_to(deployment_root).as_posix()
-        if relative in metadata or _is_excluded(Path(relative)) or relative in allowed:
-            continue
-        if path.is_dir() and not path.is_symlink():
-            with contextlib.suppress(OSError):
-                path.rmdir()
-        else:
-            path.unlink(missing_ok=True)
-
-    (deployment_root / MANIFEST_NAME).unlink()
-    (deployment_root / SENTINEL_NAME).unlink()
-
-
-def _cleanup_entry(deployment_id: str, root: Path | None = None) -> int:
-    try:
-        _cleanup_deployment(deployment_id, root)
-    except (DeploymentCleanupError, ValueError) as error:
-        print(f"Refusing deployment cleanup: {error}", file=sys.stderr)
-        return 2
-    return 0
-
-
-def _cleanup_script(deployment_id: str) -> str:
-    deployment_id = _validated_deployment_id(deployment_id)
-    payload = (
-        "from ai_drone.link.deploy import _cleanup_entry;"
-        f"raise SystemExit(_cleanup_entry({deployment_id!r}))"
-    )
-    return f"python3 -c {shlex.quote(payload)}"
 
 
 def _print_command(command: Sequence[str]) -> None:
@@ -610,94 +467,47 @@ def _run_remote_preflight(plan: DeployPlan) -> None:
     _run(remote_preflight_command(plan), dry_run=plan.dry_run)
 
 
-def _sync_with_rsync(plan: DeployPlan, repo_root: Path) -> None:
-    project_dir = _validated_remote_project_dir(plan.target)
-    _validate_runtime_source(repo_root, _iter_sync_paths(repo_root))
-    _run_remote_preflight(plan)
-    print(
-        f"Syncing to {plan.target.ssh_target}:{project_dir}/ ...",
-        flush=True,
-    )
-    _run(rsync_command(plan, repo_root), dry_run=plan.dry_run)
-
-
-def _sync_with_tar(plan: DeployPlan, repo_root: Path) -> None:
-    target = plan.target
-    project_dir = _validated_remote_project_dir(target)
+def _deploy_transaction(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
     _validate_runtime_source(repo_root, _iter_sync_paths(repo_root))
     _run_remote_preflight(plan)
     deployment_id = secrets.token_hex(16)
-    extract = (
-        f"mkdir -p {shlex.quote(project_dir)} && "
-        f"tar -xzf - -C {shlex.quote(project_dir)}"
+    stage = f"/tmp/ai-drone-deploy-{deployment_id}"
+    project = _validated_remote_project_dir(plan.target)
+    upload = remote_command(
+        plan.target,
+        f"umask 077; mkdir -- {shlex.quote(stage)} && tar -xzf - -C {shlex.quote(stage)}",
     )
-    cleanup = f"cd {shlex.quote(project_dir)} && {_cleanup_script(deployment_id)}"
-    extract_command = remote_command(target, extract)
-    cleanup_command = remote_command(target, cleanup)
-
+    payload = (
+        "from ai_drone.cli.deploy import _transaction_entry;"
+        f"_transaction_entry({stage!r}, {project!r}, {deployment_id!r}, offline={plan.offline!r})"
+    )
+    command = remote_command(
+        plan.target,
+        f"cd {shlex.quote(project)} && PYTHONPATH={shlex.quote(stage)} "
+        f"{REMOTE_UV} run --no-project --no-config --offline "
+        f"--python {shlex.quote(project + '/.venv/bin/python')} python -P -c {shlex.quote(payload)}",
+    )
     print(
-        f"Syncing to {target.ssh_target}:{project_dir}/ using SSH tar stream ...",
+        "Stage runtime; verify disarmed idle state; back up source/environment; update and restart.",
         flush=True,
     )
-    print(f"  python tar.gz stream | {shlex.join(extract_command)}", flush=True)
-    _print_command(cleanup_command)
+    _print_command(upload)
+    _print_command(command)
     if plan.dry_run:
         return
-
     archive = _create_sync_archive(repo_root, deployment_id)
     try:
-        with archive.open("rb") as handle:
-            subprocess.run(extract_command, stdin=handle, check=True)
-        subprocess.run(cleanup_command, check=True)
+        with archive.open("rb") as source:
+            subprocess.run(upload, stdin=source, check=True)
+        subprocess.run(command, check=True)
     finally:
         archive.unlink(missing_ok=True)
 
 
-def sync_project(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
-    _validated_remote_project_dir(plan.target)
-    if plan.sync_method == "rsync":
-        _sync_with_rsync(plan, repo_root)
-    else:
-        _sync_with_tar(plan, repo_root)
-    print("Sync done.", flush=True)
-
-
 def run(arguments: Sequence[str] | None = None) -> int:
     plan = build_plan(arguments)
-    sync_project(plan)
-
-    print("Installing raspi dependencies on the Pi ...", flush=True)
-    _run(install_command(plan), dry_run=plan.dry_run)
-    print("Dependencies installed.", flush=True)
-
-    command = mode_command(plan)
-    if command is None:
-        print(
-            "Done. Use --run TASK -- TASK_ARGS to start an allowlisted task.",
-            flush=True,
-        )
-        return 0
-
-    if plan.mode == "inspect":
-        print(
-            "Inspecting camera and disarmed sensor telemetry on the Pi ...", flush=True
-        )
-        print("This mode never arms, changes mode, or actuates anything.", flush=True)
-    elif plan.mode == "servo":
-        print("Starting the SG90 servo test on the Pi ...", flush=True)
-    elif plan.mode == "tag-servo-record":
-        print(
-            "Starting explicitly confirmed armed-flight tag recording with BCM12 "
-            "servo actuation ...",
-            flush=True,
-        )
-    elif plan.mode == "motor-test":
-        print("Starting the guarded ArduPilot bench motor test ...", flush=True)
-        print("PROPELLERS MUST BE REMOVED and the vehicle secured.", flush=True)
-    elif plan.mode == "control":
-        print("Starting the explicitly selected flight-control task ...", flush=True)
-
-    _run(command, dry_run=plan.dry_run)
+    _deploy_transaction(plan)
+    print("Dry run complete." if plan.dry_run else "Runtime updated.", flush=True)
     return 0
 
 

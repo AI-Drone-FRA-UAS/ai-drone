@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_drone.mavlink.connection import open_ardupilot_connection
+from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.ownership import require_available_serial
 from ai_drone.mavlink.safety import (
     heartbeat_is_armed,
@@ -125,6 +126,62 @@ def drain_heartbeats(connection: Any, last_heartbeat: float) -> float:
             last_heartbeat = time.monotonic()
 
 
+def _capture_expired(
+    *,
+    now: float,
+    last_heartbeat: float,
+    errors: queue.Queue,
+    deadline: float,
+    state: str,
+    last_camera: float,
+) -> bool:
+    """Check telemetry and camera health before considering a mount command."""
+    if now - last_heartbeat > 2:
+        raise RuntimeError("flight-controller heartbeat older than 2 seconds")
+    if not errors.empty():
+        raise RuntimeError(f"camera: {errors.get_nowait()}")
+    if now >= deadline:
+        event("finished", reason="duration_elapsed", opened=False)
+        return True
+    if state != "camera_startup" and now - last_camera > 2:
+        raise RuntimeError("camera stopped delivering frames")
+    return False
+
+
+def _command_finished(child: subprocess.Popen, started: float, now: float) -> bool:
+    result = child.poll()
+    if result is not None:
+        if result:
+            raise RuntimeError(f"mount command exited with status {result}")
+        return True
+    if now - started > 5:
+        raise RuntimeError("mount command exceeded 5-second limit")
+    return False
+
+
+def _frame_action(
+    state: str,
+    gate: TagGate,
+    frame: tuple[int, float, list[Any]],
+    *,
+    now: float,
+    started: float,
+) -> str | None:
+    index, captured, tags = frame
+    if state == "camera_startup" and 0 <= now - captured <= 0.5:
+        return "close"
+    if state == "watching":
+        event(
+            "detections",
+            elapsed_s=round(now - started, 3),
+            ids=[t.tag_id for t in tags],
+            frame=index,
+        )
+        if gate.observe(index, captured, tags, now):
+            return "open"
+    return None
+
+
 def supervise(connection: Any, duration: float, uv: str, stop: threading.Event) -> int:
     frames: queue.Queue = queue.Queue(maxsize=1)
     errors: queue.Queue = queue.Queue()
@@ -145,63 +202,45 @@ def supervise(connection: Any, duration: float, uv: str, stop: threading.Event) 
             # Drain all queued link traffic before considering any GPIO command.
             last_heartbeat = drain_heartbeats(connection, last_heartbeat)
             now = time.monotonic()
-            if now - last_heartbeat > 2:
-                raise RuntimeError("flight-controller heartbeat older than 2 seconds")
-            if not errors.empty():
-                raise RuntimeError(f"camera: {errors.get_nowait()}")
-            if now >= deadline:
-                event("finished", reason="duration_elapsed", opened=False)
+            if _capture_expired(
+                now=now,
+                last_heartbeat=last_heartbeat,
+                errors=errors,
+                deadline=deadline,
+                state=state,
+                last_camera=last_camera,
+            ):
                 return 2
-            if state != "camera_startup" and now - last_camera > 2:
-                raise RuntimeError("camera stopped delivering frames")
-            if child is not None:
-                result = child.poll()
-                if result is not None:
-                    if result:
-                        raise RuntimeError(f"mount command exited with status {result}")
-                    child = None
-                    if state == "opening":
-                        event(
-                            "finished",
-                            reason="tag_3_open_command_completed",
-                            opened=True,
-                            physical_position_verified=False,
-                            vehicle_state="disarmed",
-                        )
-                        return 0
-                    state = "watching"
-                    gate = TagGate()
-                    started = now
-                    deadline = now + duration
+            if child is not None and _command_finished(child, command_started, now):
+                child = None
+                if state == "opening":
                     event(
-                        "ready",
-                        duration_s=duration,
-                        target_id=3,
+                        "finished",
+                        reason="tag_3_open_command_completed",
+                        opened=True,
+                        physical_position_verified=False,
                         vehicle_state="disarmed",
                     )
-                elif now - command_started > 5:
-                    raise RuntimeError("mount command exceeded 5-second limit")
+                    return 0
+                state = "watching"
+                gate = TagGate()
+                started = now
+                deadline = now + duration
+                event(
+                    "ready",
+                    duration_s=duration,
+                    target_id=3,
+                    vehicle_state="disarmed",
+                )
             try:
-                index, captured, tags = frames.get_nowait()
+                frame = frames.get_nowait()
             except queue.Empty:
                 stop.wait(0.01)
                 continue
             last_camera = now
-            action = None
-            if state == "camera_startup" and 0 <= now - captured <= 0.5:
-                action = "close"
-                state = "closing"
-            elif state == "watching":
-                event(
-                    "detections",
-                    elapsed_s=round(now - started, 3),
-                    ids=[t.tag_id for t in tags],
-                    frame=index,
-                )
-                if gate.observe(index, captured, tags, now):
-                    action = "open"
-                    state = "opening"
+            action = _frame_action(state, gate, frame, now=now, started=started)
             if action:
+                state = {"close": "closing", "open": "opening"}[action]
                 if stop.is_set() or time.monotonic() - last_heartbeat > 2:
                     raise RuntimeError(
                         "actuation cancelled: stopped or stale heartbeat"
@@ -214,7 +253,17 @@ def supervise(connection: Any, duration: float, uv: str, stop: threading.Event) 
                 )
                 # Reuse the user's exact CLI, without syncing an active environment.
                 child = subprocess.Popen(
-                    [uv, "run", "--no-sync", "--group", "raspi", "drone_mount", action],
+                    [
+                        uv,
+                        "run",
+                        "--no-sync",
+                        "--group",
+                        "raspi",
+                        "python",
+                        "-m",
+                        "ai_drone.cli.mount",
+                        action,
+                    ],
                     start_new_session=True,
                 )
                 command_started = time.monotonic()
@@ -243,8 +292,9 @@ def main() -> int:
         signal.signal(signum, lambda *_: stop.set())
     connection = None
     try:
-        require_available_serial("/dev/serial0", on_pi=True)
-        connection = open_ardupilot_connection("/dev/serial0", baud=115200)
+        endpoint = resolve_mavlink_endpoint(None)
+        require_available_serial(endpoint, on_pi=True)
+        connection = open_ardupilot_connection(endpoint, baud=115200)
         heartbeat = require_ardupilot_heartbeat(
             connection, system_id=1, component_id=1, timeout=10
         )

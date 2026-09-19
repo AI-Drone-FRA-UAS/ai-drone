@@ -1,4 +1,4 @@
-"""Launch one timed, disarmed Pi recording independently of the SSH session."""
+"""Launch one explicitly configured Pi recording independently of SSH."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -14,7 +15,10 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ai_drone.cli import record
+from ai_drone.mavlink.devices import is_network_endpoint
 from ai_drone.platform import is_raspberry_pi
+from ai_drone.settings import load_settings
 from ai_drone.validation import positive_finite
 
 UNIT = "ai-drone-walk.service"
@@ -26,10 +30,10 @@ def _runtime_root() -> Path:
 
 def _user_ids() -> tuple[int, int]:
     if not hasattr(os, "getuid"):
-        raise ValueError("drone-walk requires a Linux user account")
+        raise ValueError("drone walk requires a Linux user account")
     uid, gid = os.getuid(), os.getgid()
     if uid == 0 or os.geteuid() == 0:
-        raise ValueError("run drone-walk as the normal Pi user, without sudo")
+        raise ValueError("run drone walk as the normal Pi user, without sudo")
     return uid, gid
 
 
@@ -50,7 +54,7 @@ def _output_path(requested: Path | None, root: Path) -> Path:
 def _validate_runtime(root: Path, python: Path) -> None:
     if not is_raspberry_pi():
         raise ValueError(
-            "drone-walk must run on the Raspberry Pi; use --dry-run to preview"
+            "drone walk must run on the Raspberry Pi; use --dry-run to preview"
         )
     for path in (
         python,
@@ -59,13 +63,36 @@ def _validate_runtime(root: Path, python: Path) -> None:
     ):
         if not path.is_file():
             raise ValueError(f"required runtime file is missing: {path}")
-    if not Path("/dev/serial0").exists():
-        raise ValueError("the Pi flight-controller port /dev/serial0 is missing")
+
+
+def _record_arguments(args: argparse.Namespace) -> list[str]:
+    """Freeze validated defaults and overrides before changing process or cwd."""
+    arguments = []
+    for name, value in vars(args).items():
+        if name in {"tag_servo", "worker", "dry_run", "output_dir"} or value is None:
+            continue
+        option = "--tag-id" if name == "tag_ids" else f"--{name.replace('_', '-')}"
+        if isinstance(value, bool):
+            arguments.extend([option] if value else [])
+        elif name in {"resolution", "analysis_resolution"}:
+            arguments.extend([option, "x".join(map(str, value))])
+        else:
+            values = value if isinstance(value, list) else [value]
+            for item in values:
+                arguments.extend([option, str(item)])
+    return [*arguments, "--output-dir", str(args.output_dir)]
 
 
 def _launch_command(
-    root: Path, python: Path, output: Path, duration: float, uid: int, gid: int
+    root: Path,
+    python: Path,
+    uid: int,
+    gid: int,
+    arguments: list[str],
+    *,
+    tag_servo: bool,
 ) -> list[str]:
+    interpreter = _python_command(python)
     return [
         "sudo",
         "-n",
@@ -78,18 +105,29 @@ def _launch_command(
         f"--gid={gid}",
         f"--working-directory={root}",
         "--setenv=PYTHONUNBUFFERED=1",
+        "--setenv=AI_DRONE_CONFIG=/dev/null",
+        f"--setenv=PATH={Path(interpreter[0]).parent}:{os.defpath}",
         "--property=Restart=no",
         "--property=KillSignal=SIGINT",
         "--property=KillMode=mixed",
         "--property=TimeoutStopSec=180",
-        str(python),
+        *interpreter,
         "-m",
         "ai_drone.cli.walk",
         "--worker",
-        "--duration",
-        str(duration),
-        "--output-dir",
-        str(output),
+        *(["--tag-servo"] if tag_servo else []),
+        *arguments,
+    ]
+
+
+def _python_command(python: Path) -> list[str]:
+    return [
+        shutil.which("uv") or "uv",
+        "run",
+        "--no-sync",
+        "--python",
+        str(python),
+        "python",
     ]
 
 
@@ -132,7 +170,14 @@ def _reported_dataset(line: str, requested: Path) -> Path | None:
     return dataset
 
 
-def _run_worker(root: Path, python: Path, output: Path, duration: float) -> int:
+def _run_worker(
+    root: Path,
+    python: Path,
+    output: Path,
+    arguments: list[str],
+    *,
+    tag_servo: bool = False,
+) -> int:
     child: subprocess.Popen[str] | None = None
     interrupted = False
     dataset: Path | None = None
@@ -180,19 +225,10 @@ def _run_worker(root: Path, python: Path, output: Path, duration: float) -> int:
         _output_path(output, root)
         capture_result = execute(
             [
-                str(python),
+                *_python_command(python),
                 "-m",
-                "ai_drone.cli.record",
-                "--device",
-                "/dev/serial0",
-                "--baud",
-                "115200",
-                "--backend",
-                "native",
-                "--duration",
-                str(duration),
-                "--output-dir",
-                str(output),
+                "ai_drone.cli.tag_servo_record" if tag_servo else "ai_drone.cli.record",
+                *arguments,
             ],
             recording=True,
         )
@@ -204,7 +240,8 @@ def _run_worker(root: Path, python: Path, output: Path, duration: float) -> int:
             return capture_result or 1
         print(f"Dataset: {dataset}", flush=True)
         report_result = execute(
-            [str(python), "-m", "ai_drone.cli.report", str(dataset)], recording=False
+            [*_python_command(python), "-m", "ai_drone.cli.report", str(dataset)],
+            recording=False,
         )
         return capture_result or report_result
     finally:
@@ -212,32 +249,57 @@ def _run_worker(root: Path, python: Path, output: Path, duration: float) -> int:
             signal.signal(signum, handler)
 
 
-def main(arguments: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Start a detached, timed disarmed walkthrough recording and report."
+def _parser(arguments: list[str] | None) -> tuple[argparse.ArgumentParser, str]:
+    selection = argparse.ArgumentParser(add_help=False)
+    selection.add_argument("--tag-servo", action="store_true")
+    mode, _ = selection.parse_known_args(arguments)
+    operation = "tag-servo" if mode.tag_servo else "inspect"
+    parser = record._parser(operation=operation)
+    parser.prog = "drone walk"
+    parser.description = "Start a detached recording and report. Disarmed by default."
+    parser.set_defaults(
+        duration=300.0,
+        device=f"unix:{load_settings().runtime.socket}",
+        backend="native",
     )
-    parser.add_argument("--duration", type=float, default=300.0, metavar="SECONDS")
-    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--tag-servo", action="store_true", help="enable the guarded tag/servo workflow"
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="print the launch command only"
     )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args(arguments)
+    return parser, operation
+
+
+def main(arguments: list[str] | None = None) -> int:
     try:
-        duration = positive_finite(args.duration, "--duration")
+        parser, operation = _parser(arguments)
+        args = parser.parse_args(arguments)
+        args.duration = positive_finite(args.duration, "--duration")
+        record._validate_args(parser, args, operation=operation)
         root = _runtime_root()
         # Preserve the venv path: resolving its interpreter symlink would lose
         # the Pi environment that includes the camera's system packages.
         python = Path(sys.executable).absolute()
-        output = _output_path(args.output_dir, root)
+        output = args.output_dir = _output_path(args.output_dir, root)
+        if args.calibration is not None:
+            args.calibration = args.calibration.expanduser().absolute()
+        if not is_network_endpoint(args.device):
+            args.device = str(Path(args.device).expanduser().absolute())
+        recording_arguments = _record_arguments(args)
         uid, gid = _user_ids()
-        command = _launch_command(root, python, output, duration, uid, gid)
+        command = _launch_command(
+            root, python, uid, gid, recording_arguments, tag_servo=args.tag_servo
+        )
         if args.dry_run:
             print(shlex.join(command))
         else:
             _validate_runtime(root, python)
             if args.worker:
-                return _run_worker(root, python, output, duration)
+                return _run_worker(
+                    root, python, output, recording_arguments, tag_servo=args.tag_servo
+                )
             _require_free_unit()
             # systemd also rejects an existing unit atomically if another
             # launcher wins the race after our read-only status check.

@@ -1,16 +1,9 @@
-"""Payload mount servo control interface for locking and releasing the mount.
-
-This module provides a reusable interface to control the micro-servo on
-Raspberry Pi BCM GPIO 12 (physical pin 32), with direct helper functions
-``openMount()`` (sets 0.0) and ``closeMount()`` (sets -1.0) as well as the
-object-oriented ``MountController``.
-"""
+"""Payload mount servo control on BCM GPIO 12."""
 
 from __future__ import annotations
 
 import math
 import os
-import sys
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -82,14 +75,9 @@ class ServoProcessLock:
     """Prevent cooperating ai-drone processes from sharing BCM12 concurrently."""
 
     def __init__(self, path: Path = _LOCK_PATH) -> None:
-        try:
-            import fcntl
+        import fcntl
 
-            self._fcntl: Any = fcntl
-        except ImportError:
-            self._fcntl = None
-            self._handle: Any = None
-            return
+        self._fcntl = fcntl
 
         descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         self._handle = os.fdopen(descriptor, "r+")
@@ -108,13 +96,36 @@ class ServoProcessLock:
             raise
 
     def close(self) -> None:
-        if self._handle is None or self._handle.closed:
+        if self._handle.closed:
             return
         try:
-            if self._fcntl is not None:
-                self._fcntl.flock(self._handle.fileno(), self._fcntl.LOCK_UN)
+            self._fcntl.flock(self._handle.fileno(), self._fcntl.LOCK_UN)
         finally:
             self._handle.close()
+
+
+def create_servo(
+    pin: int = SERVO_GPIO_PIN,
+    *,
+    min_us: int = DEFAULT_MIN_PULSE_US,
+    max_us: int = DEFAULT_MAX_PULSE_US,
+    factory: Callable[..., Any] | None = None,
+) -> Any:
+    """Start with PWM off, retaining gpiozero's configured pin factory."""
+    if factory is None:
+        try:
+            from gpiozero import Servo  # ty: ignore[unresolved-import]
+        except ImportError as error:
+            raise RuntimeError(
+                "gpiozero is required on the Pi: sudo apt install python3-gpiozero"
+            ) from error
+        factory = Servo
+    return factory(
+        pin,
+        min_pulse_width=min_us / 1_000_000.0,
+        max_pulse_width=max_us / 1_000_000.0,
+        initial_value=None,
+    )
 
 
 class MountController(AbstractContextManager["MountController"]):
@@ -145,16 +156,11 @@ class MountController(AbstractContextManager["MountController"]):
         self.dry_run = dry_run
 
         self._lock: ServoProcessLock | None = None
-        self._servo: Any | None = None
+        self._servo: Any | None = servo
         self._current_value: float | None = None
         self._is_closed = False
 
-        if servo is not None:
-            self._servo = servo
-        elif servo_factory is not None:
-            self._servo_factory = servo_factory
-        else:
-            self._servo_factory = None
+        self._servo_factory = servo_factory
 
     @property
     def is_closed(self) -> bool:
@@ -173,37 +179,19 @@ class MountController(AbstractContextManager["MountController"]):
         if self.dry_run:
             return None
 
-        if self._servo_factory is not None:
-            self._lock = ServoProcessLock()
-            self._servo = self._servo_factory(
-                self.pin,
-                min_pulse_width=self.min_pulse_us / 1_000_000.0,
-                max_pulse_width=self.max_pulse_us / 1_000_000.0,
-                initial_value=None,
-            )
-            return self._servo
-
-        if not is_raspberry_pi():
+        if self._servo_factory is None and not is_raspberry_pi():
             raise RuntimeError(
                 "Servo control requires a Raspberry Pi with BCM GPIO 12. "
                 "For testing on non-Pi platforms, pass dry_run=True or a mock servo."
             )
 
-        try:
-            from gpiozero import Servo  # ty: ignore[unresolved-import]
-        except ImportError as err:
-            raise RuntimeError(
-                "gpiozero is not installed on this Pi. Install with: "
-                "sudo apt install python3-gpiozero"
-            ) from err
-
         self._lock = ServoProcessLock()
         try:
-            self._servo = Servo(
+            self._servo = create_servo(
                 self.pin,
-                min_pulse_width=self.min_pulse_us / 1_000_000.0,
-                max_pulse_width=self.max_pulse_us / 1_000_000.0,
-                initial_value=None,
+                min_us=self.min_pulse_us,
+                max_us=self.max_pulse_us,
+                factory=self._servo_factory,
             )
         except BaseException:
             if self._lock is not None:
@@ -243,10 +231,6 @@ class MountController(AbstractContextManager["MountController"]):
         """Close the mount holder by steering the servo to -1.0."""
         return self.set_position(MOUNT_CLOSE_VALUE, settle_s=settle_s)
 
-    # User-requested camelCase naming
-    openMount = open_mount
-    closeMount = close_mount
-
     def detach(self) -> None:
         """Stop active PWM pulse generation."""
         if self._servo is not None and hasattr(self._servo, "detach"):
@@ -276,97 +260,3 @@ class MountController(AbstractContextManager["MountController"]):
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
-
-
-# Module-level controller instance for simple script calls
-_default_controller: MountController | None = None
-
-
-def get_mount_controller(*, dry_run: bool = False) -> MountController:
-    """Get or initialize the shared MountController instance."""
-    global _default_controller
-    if _default_controller is None or _default_controller.is_closed:
-        _default_controller = MountController(dry_run=dry_run)
-    return _default_controller
-
-
-def reset_mount_controller() -> None:
-    """Close and reset the shared MountController instance."""
-    global _default_controller
-    if _default_controller is not None:
-        _default_controller.close()
-        _default_controller = None
-
-
-def openMount(settle_s: float = DEFAULT_SETTLE_S, *, dry_run: bool = False) -> float:
-    """Open the mount holder by setting the servo to 0.0."""
-    return get_mount_controller(dry_run=dry_run).openMount(settle_s=settle_s)
-
-
-def closeMount(settle_s: float = DEFAULT_SETTLE_S, *, dry_run: bool = False) -> float:
-    """Close the mount holder by setting the servo to -1.0."""
-    return get_mount_controller(dry_run=dry_run).closeMount(settle_s=settle_s)
-
-
-def releaseMount() -> None:
-    """Release the mount servo and close resources."""
-    reset_mount_controller()
-
-
-# Pythonic snake_case aliases
-open_mount = openMount
-close_mount = closeMount
-release_mount = releaseMount
-
-
-def _cli() -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Direct payload mount control.")
-    parser.add_argument(
-        "action",
-        choices=["open", "close", "set"],
-        help="Action to perform: open (0.0), close (-1.0), or set a specific value",
-    )
-    parser.add_argument(
-        "--value",
-        type=float,
-        default=None,
-        help="Position between -1.0 and 1.0 (required for 'set')",
-    )
-    parser.add_argument(
-        "--settle",
-        type=float,
-        default=DEFAULT_SETTLE_S,
-        help=f"Settle time in seconds (default: {DEFAULT_SETTLE_S})",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Test without moving physical hardware",
-    )
-    args = parser.parse_args()
-
-    controller = get_mount_controller(dry_run=args.dry_run)
-    try:
-        if args.action == "open":
-            print("Opening mount (servo value -> 0.0) ...")
-            controller.openMount(settle_s=args.settle)
-            print("Mount opened.")
-        elif args.action == "close":
-            print("Closing mount (servo value -> -1.0) ...")
-            controller.closeMount(settle_s=args.settle)
-            print("Mount closed.")
-        elif args.action == "set":
-            if args.value is None:
-                parser.error("--value is required when action is 'set'")
-            print(f"Setting mount position to {args.value} ...")
-            controller.set_position(args.value, settle_s=args.settle)
-            print(f"Mount set to {args.value}.")
-    finally:
-        releaseMount()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(_cli())

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import ClassVar
 
 import pytest
@@ -13,16 +12,8 @@ from ai_drone.mount import (
     MOUNT_CLOSE_VALUE,
     MOUNT_OPEN_VALUE,
     MountController,
-    close_mount,
-    closeMount,
-    get_mount_controller,
-    open_mount,
-    openMount,
     parse_servo_input,
     pulse_us,
-    release_mount,
-    releaseMount,
-    reset_mount_controller,
 )
 
 
@@ -67,11 +58,9 @@ class FakeServo:
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_controller() -> Iterator[None]:
-    reset_mount_controller()
+def _cleanup_controller():
     FakeServo.instances.clear()
     yield
-    reset_mount_controller()
     FakeServo.instances.clear()
 
 
@@ -79,7 +68,7 @@ def test_open_mount_sets_zero() -> None:
     fake = FakeServo(12, min_pulse_width=0.0009, max_pulse_width=0.0021)
     controller = MountController(servo=fake)
 
-    val = controller.openMount(settle_s=0.0)
+    val = controller.open_mount(settle_s=0.0)
 
     assert val == MOUNT_OPEN_VALUE
     assert fake.value == 0.0
@@ -90,7 +79,7 @@ def test_close_mount_sets_minus_one() -> None:
     fake = FakeServo(12, min_pulse_width=0.0009, max_pulse_width=0.0021)
     controller = MountController(servo=fake)
 
-    val = controller.closeMount(settle_s=0.0)
+    val = controller.close_mount(settle_s=0.0)
 
     assert val == MOUNT_CLOSE_VALUE
     assert fake.value == -1.0
@@ -146,7 +135,7 @@ def test_pulse_us_calculation() -> None:
 def test_context_manager() -> None:
     fake = FakeServo(12, min_pulse_width=0.0009, max_pulse_width=0.0021)
     with MountController(servo=fake) as controller:
-        controller.openMount(settle_s=0.0)
+        controller.open_mount(settle_s=0.0)
         assert fake.value == 0.0
         assert not controller.is_closed
 
@@ -156,43 +145,11 @@ def test_context_manager() -> None:
 
 def test_dry_run_mode() -> None:
     controller = MountController(dry_run=True)
-    val_open = controller.openMount(settle_s=0.0)
+    val_open = controller.open_mount(settle_s=0.0)
     assert val_open == 0.0
-    val_close = controller.closeMount(settle_s=0.0)
+    val_close = controller.close_mount(settle_s=0.0)
     assert val_close == -1.0
     controller.close()
-
-
-def test_module_level_functions(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = FakeServo(12, min_pulse_width=0.0009, max_pulse_width=0.0021)
-
-    controller = MountController(servo=fake)
-    monkeypatch.setattr("ai_drone.mount._default_controller", controller)
-
-    # Test openMount
-    openMount(settle_s=0.0)
-    assert fake.value == 0.0
-
-    # Test closeMount
-    closeMount(settle_s=0.0)
-    assert fake.value == -1.0
-
-    # Test get_mount_controller
-    assert get_mount_controller() is controller
-
-    # Test snake_case aliases
-    open_mount(settle_s=0.0)
-    assert fake.value == 0.0
-    close_mount(settle_s=0.0)
-    assert fake.value == -1.0
-
-    # Test release aliases
-    releaseMount()
-    assert fake.closed
-    assert controller.is_closed
-
-    # Second call via alias should safely no-op
-    release_mount()
 
 
 def test_default_constants() -> None:

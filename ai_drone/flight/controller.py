@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.flight.ownership import OwnershipPolicy, human_takeover_allowed
 from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
@@ -20,6 +22,7 @@ from ai_drone.mavlink.safety import (
     require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
 )
+from ai_drone.mavlink.shared import received_monotonic
 from ai_drone.recording import request_message_intervals
 from ai_drone.validation import finite_in_range
 
@@ -100,6 +103,41 @@ class FlightSafetyError(RuntimeError):
     """Raised when a live-flight safety invariant is violated."""
 
 
+class HumanControlTaken(FlightSafetyError):
+    """Autonomous work must yield; the caller must keep telemetry alive until disarm."""
+
+
+def _reported_altitude(message: Any) -> float | None:
+    current = int(message.current_distance)
+    minimum = int(message.min_distance)
+    maximum = int(message.max_distance)
+    quality = int(getattr(message, "signal_quality", 255))
+    # MAVLink quality 0 is unspecified; 1 explicitly invalidates the reading.
+    if (
+        current <= 0
+        or (minimum > 0 and current < minimum)
+        or (maximum > 0 and current > maximum)
+        or quality == 1
+    ):
+        return None
+    altitude = current / 100.0
+    return altitude if math.isfinite(altitude) else None
+
+
+def _reported_battery_voltage(message: Any) -> float | None:
+    millivolts = float(message.voltage_battery)
+    healthy = all(
+        int(getattr(message, field, 0)) & mavlink.MAV_SYS_STATUS_SENSOR_BATTERY
+        for field in (
+            "onboard_control_sensors_present",
+            "onboard_control_sensors_enabled",
+            "onboard_control_sensors_health",
+        )
+    )
+    # UINT16_MAX means voltage was not supplied.
+    return millivolts / 1_000.0 if healthy and 0.0 < millivolts < 65_535.0 else None
+
+
 class DroneController:
     """One controller for arm, takeoff, hover, and landing.
 
@@ -115,6 +153,10 @@ class DroneController:
         min_battery_voltage: float = 0.0,
         target_system: int = 1,
         target_component: int = 1,
+        *,
+        operator_alive: Callable[[], bool] | None = None,
+        human_takeover_requested: Callable[[], bool] | None = None,
+        ownership_policy: OwnershipPolicy | None = None,
     ) -> None:
         if isinstance(baud, bool) or not 1 <= baud <= 4_000_000:
             raise ValueError("baud must be between 1 and 4000000")
@@ -171,6 +213,69 @@ class DroneController:
         # handling.  Every long pre-landing loop checks it; landing deliberately
         # ignores it so a second signal cannot interrupt cleanup.
         self.stop_requested: Callable[[], bool] | None = None
+        self.operator_alive = operator_alive
+        self.human_takeover_requested = human_takeover_requested
+        self.ownership_policy = ownership_policy or OwnershipPolicy()
+        self._human_control = False
+
+    @property
+    def owns_control(self) -> bool:
+        return not self._human_control and (
+            self._arm_command_sent
+            or self._armed_by_controller
+            or self._flight_started_by_controller
+        )
+
+    @property
+    def control_owner(self) -> str:
+        if self._human_control:
+            return "human"
+        return "autonomous" if self.owns_control else "unclaimed"
+
+    def _require_autonomous_control(self) -> None:
+        if self._human_control:
+            raise HumanControlTaken("control was handed to the radio pilot")
+
+    def _resolve_control_ownership(self) -> None:
+        callback = self.human_takeover_requested
+        if not self.owns_control or callback is None:
+            return
+        try:
+            requested = bool(callback())
+        except Exception as error:
+            logger.error("human takeover callback failed: %s", error)
+            return
+        if not human_takeover_allowed(
+            self.ownership_policy,
+            requested=requested,
+            armed=self.is_armed,
+            mode=self.flight_mode,
+            heartbeat_received=self.last_heartbeat_time,
+            rc_received=self.last_rc_channels_time,
+            rc_channels=self.rc_channel_count,
+            now=time.monotonic(),
+        ):
+            return
+        self._human_control = True
+        self._arm_command_sent = False
+        self._armed_by_controller = False
+        self._flight_started_by_controller = False
+        self._landing_commanded = False
+        logger.warning("control handed to the radio pilot in %s", self.flight_mode)
+
+    def _require_operator(self) -> None:
+        callback = self.operator_alive
+        if callback is None or self._human_control:
+            return
+        try:
+            alive = bool(callback())
+        except Exception as error:
+            logger.error("operator heartbeat callback failed: %s", error)
+            alive = False
+        if not alive:
+            if self._flight_started_by_controller:
+                self.emergency_stop()
+            raise FlightSafetyError("operator heartbeat lost")
 
     @staticmethod
     def find_device(requested: str | Path | None) -> str:
@@ -191,6 +296,9 @@ class DroneController:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
+            if self._human_control:
+                self.supervise_human()
+                return
             if self._flight_started_by_controller:
                 # Once TAKEOFF has been sent, cleanup must never issue a disarm.
                 # LAND may already have been requested or may have timed out; in
@@ -199,10 +307,27 @@ class DroneController:
                 self.land()
             elif self._arm_command_sent or self._armed_by_controller:
                 self.disarm()
+        except HumanControlTaken:
+            self.supervise_human()
         except Exception as error:
             logger.error("Could not complete controller cleanup: %s", error)
         finally:
             self.close()
+
+    def supervise_human(self) -> None:
+        """Keep the onboard heartbeat until the pilot confirms disarm."""
+        if not self._human_control:
+            raise FlightSafetyError(
+                "pilot supervision requires confirmed human ownership"
+            )
+        while self.is_armed or not self.heartbeat_is_fresh():
+            try:
+                self.update_telemetry()
+                time.sleep(0.05)
+            except KeyboardInterrupt:
+                logger.warning(
+                    "pilot retains control; maintaining heartbeat until disarm"
+                )
 
     def _connection(self) -> Any:
         if self.connection is None:
@@ -309,67 +434,28 @@ class DroneController:
     def _process_message(self, message: Any, now: float) -> None:
         if not self._matching_vehicle_message(message):
             return
+        received = received_monotonic(message, default=now)
         message_type = message.get_type()
         if message_type == "HEARTBEAT":
-            self.is_armed = heartbeat_is_armed(message)
-            self.last_heartbeat_time = now
-            mode = getattr(self._connection(), "flightmode", None)
-            if isinstance(mode, str):
-                self.flight_mode = mode
-            if not self.is_armed:
-                self.is_flying = False
-                self._armed_by_controller = False
-                self._flight_started_by_controller = False
-                self._local_altitude_offset = None
-                self.local_position_altitude_aligned = None
+            self._process_heartbeat(message, received, now)
             return
+        now = received
         if message_type in {"ATTITUDE", "LOCAL_POSITION_NED"}:
             self._process_pose_message(message, message_type, now)
             return
         if message_type == "DISTANCE_SENSOR":
-            if int(message.orientation) != DOWNWARD_ORIENTATION:
-                return
-            if not self._timestamp_is_fresh(
-                getattr(message, "time_boot_ms", None), now
-            ):
-                return
-            current = int(message.current_distance)
-            minimum = int(message.min_distance)
-            maximum = int(message.max_distance)
-            quality = int(getattr(message, "signal_quality", 255))
-            # MAVLink defines 0 as unknown/not supplied and 1 as invalid.
-            if (
-                current <= 0
-                or (minimum > 0 and current < minimum)
-                or (maximum > 0 and current > maximum)
-                or quality == 1
-            ):
-                return
-            altitude = current / 100.0
-            if not math.isfinite(altitude):
-                return
-            self.current_altitude = altitude
-            self.last_telemetry_time = now
-            self._align_local_altitude(now)
+            self._process_downward_range(message, now)
         elif message_type == "EKF_STATUS_REPORT":
             self.ekf_flags = int(message.flags)
             self.last_ekf_time = now
         elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
-            quality = int(message.quality)
-            self.flow_quality = quality
-            if quality > 0:
-                self.last_flow_time = now
+            self._process_flow_quality(message, now)
         elif message_type == "RC_CHANNELS":
-            if not self._timestamp_is_fresh(
-                getattr(message, "time_boot_ms", None), now
-            ):
-                return
-            channel_count = int(message.chancount)
-            if 0 <= channel_count <= 18:
-                self.rc_channel_count = channel_count
-                self.last_rc_channels_time = now
+            self._process_rc_channels(message, now)
         elif message_type == "SYS_STATUS":
-            self._process_battery_message(message, now)
+            # Invalid new data immediately revokes an earlier good observation.
+            self.battery_voltage = _reported_battery_voltage(message)
+            self.last_battery_time = now if self.battery_voltage is not None else 0.0
         elif message_type == "AUTOPILOT_VERSION":
             self.flight_sw_version = int(message.flight_sw_version)
             custom = message.flight_custom_version
@@ -377,26 +463,52 @@ class DroneController:
                 custom if isinstance(custom, bytes) else bytes(custom)
             )
 
-    def _process_battery_message(self, message: Any, now: float) -> None:
-        millivolts = float(message.voltage_battery)
-        battery_flag = mavlink.MAV_SYS_STATUS_SENSOR_BATTERY
-        healthy = all(
-            int(getattr(message, field, 0)) & battery_flag
-            for field in (
-                "onboard_control_sensors_present",
-                "onboard_control_sensors_enabled",
-                "onboard_control_sensors_health",
-            )
-        )
-        # UINT16_MAX means voltage was not supplied. A newly reported invalid
-        # value must invalidate an earlier good sample immediately, rather than
-        # leaving the battery guard satisfied until that sample ages out.
-        if not healthy or not 0.0 < millivolts < 65_535.0:
-            self.battery_voltage = None
-            self.last_battery_time = 0.0
+    def _process_flow_quality(self, message: Any, now: float) -> None:
+        self.flow_quality = int(message.quality)
+        if self.flow_quality > 0:
+            self.last_flow_time = now
+
+    def _process_heartbeat(self, message: Any, received: float, now: float) -> None:
+        if (
+            received < self.last_heartbeat_time
+            or not 0 <= now - received <= self.ownership_policy.heartbeat_max_age
+        ):
             return
-        self.battery_voltage = millivolts / 1_000.0
-        self.last_battery_time = now
+        self.is_armed = heartbeat_is_armed(message)
+        self.last_heartbeat_time = received
+        mode = (
+            mavutil.mode_string_v10(message)
+            if isinstance(getattr(message, "custom_mode", None), int)
+            else getattr(self._connection(), "flightmode", None)
+        )
+        if isinstance(mode, str):
+            self.flight_mode = mode
+        if not self.is_armed:
+            self.is_flying = False
+            self._armed_by_controller = False
+            self._flight_started_by_controller = False
+            self._local_altitude_offset = None
+            self.local_position_altitude_aligned = None
+
+    def _process_downward_range(self, message: Any, now: float) -> None:
+        if int(message.orientation) != DOWNWARD_ORIENTATION:
+            return
+        if not self._timestamp_is_fresh(getattr(message, "time_boot_ms", None), now):
+            return
+        altitude = _reported_altitude(message)
+        if altitude is None:
+            return
+        self.current_altitude = altitude
+        self.last_telemetry_time = now
+        self._align_local_altitude(now)
+
+    def _process_rc_channels(self, message: Any, now: float) -> None:
+        if not self._timestamp_is_fresh(getattr(message, "time_boot_ms", None), now):
+            return
+        channel_count = int(message.chancount)
+        if 0 <= channel_count <= 18:
+            self.rc_channel_count = channel_count
+            self.last_rc_channels_time = now
 
     def _process_pose_message(
         self, message: Any, message_type: str, now: float
@@ -436,66 +548,38 @@ class DroneController:
         if self.connection is None:
             return
         self._pump_gcs_heartbeat()
-        self._raise_if_stop_requested()
         for _ in range(max_messages):
             message = self.connection.recv_match(blocking=False)
             if message is None:
                 break
             self._process_message(message, time.monotonic())
-        if (
-            self._flight_started_by_controller
-            and not self._landing_commanded
-            and (
-                (
-                    self.current_altitude is not None
-                    and self.current_altitude > self.max_altitude
-                )
-                or (
-                    self.local_position_altitude_aligned is not None
-                    and self.local_position_altitude_aligned > self.max_altitude
-                )
-            )
-        ):
+        self._resolve_control_ownership()
+        self._raise_if_stop_requested()
+        if self._flight_started_by_controller and not self._landing_commanded:
+            self._enforce_flight_limits()
+
+    def _enforce_flight_limits(self) -> None:
+        altitudes = (self.current_altitude, self.local_position_altitude_aligned)
+        if any(value is not None and value > self.max_altitude for value in altitudes):
             self.emergency_stop()
-            measured = max(
-                value
-                for value in (
-                    self.current_altitude,
-                    self.local_position_altitude_aligned,
-                )
-                if value is not None
-            )
+            measured = max(value for value in altitudes if value is not None)
             raise FlightSafetyError(
                 f"altitude {measured:.2f} m exceeds {self.max_altitude:.2f} m"
             )
-        if (
-            self._flight_started_by_controller
-            and not self._landing_commanded
-            and self.flight_mode == "LOITER"
-            and not self.navigation_is_healthy()
-        ):
+        if self.flight_mode == "LOITER" and not self.navigation_is_healthy():
             self.emergency_stop()
             raise FlightSafetyError(
                 "Loiter navigation became unhealthy (optical flow or relative EKF position)"
             )
-        if (
-            self._flight_started_by_controller
-            and not self._landing_commanded
-            and not self.no_rc_input_is_confirmed()
-        ):
+        if not self.no_rc_input_is_confirmed():
             self.emergency_stop()
             raise FlightSafetyError(
                 "autonomous-flight receiver topology changed or RC_CHANNELS became stale"
             )
-        if (
-            self._flight_started_by_controller
-            and not self._landing_commanded
-            and self.min_battery_voltage > 0.0
-            and (
-                not self.battery_is_fresh()
-                or self.battery_voltage is None
-                or self.battery_voltage < self.min_battery_voltage
-            )
+        if self.min_battery_voltage > 0.0 and (
+            not self.battery_is_fresh()
+            or self.battery_voltage is None
+            or self.battery_voltage < self.min_battery_voltage
         ):
             self.emergency_stop()
             if not self.battery_is_fresh() or self.battery_voltage is None:
@@ -505,7 +589,18 @@ class DroneController:
                 f"{self.min_battery_voltage:.2f} V"
             )
 
+    def _poll(self, timeout: float) -> Iterator[None]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.update_telemetry()
+            yield
+            time.sleep(0.05)
+
     def _raise_if_stop_requested(self) -> None:
+        if self._human_control:
+            return
+        if self.owns_control and not self._landing_commanded:
+            self._require_operator()
         callback = self.stop_requested
         if callback is None or self._landing_commanded:
             return
@@ -622,24 +717,18 @@ class DroneController:
         """Wait for a fresh nonzero-quality optical-flow observation."""
 
         finite_in_range(timeout, "timeout", minimum=0.05, maximum=30.0)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.update_telemetry()
+        for _ in self._poll(timeout):
             if self.optical_flow_is_fresh():
                 return
-            time.sleep(0.05)
         raise FlightSafetyError("no fresh valid optical-flow sample")
 
     def wait_for_attitude(self, timeout: float = 3.0) -> None:
         """Wait for the yaw used to construct a level attitude target."""
 
         finite_in_range(timeout, "timeout", minimum=0.05, maximum=30.0)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.update_telemetry()
+        for _ in self._poll(timeout):
             if self.attitude_is_fresh():
                 return
-            time.sleep(0.05)
         raise FlightSafetyError("no fresh attitude sample")
 
     def wait_for_no_rc_input(self, timeout: float = 3.0) -> None:
@@ -650,9 +739,7 @@ class DroneController:
         """
 
         finite_in_range(timeout, "timeout", minimum=0.05, maximum=30.0)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.update_telemetry()
+        for _ in self._poll(timeout):
             if self.no_rc_input_is_confirmed():
                 return
             if (
@@ -664,7 +751,6 @@ class DroneController:
                 raise FlightSafetyError(
                     "active RC receiver detected; autonomous flight requires zero channels"
                 )
-            time.sleep(0.05)
         raise FlightSafetyError(
             "no fresh RC_CHANNELS report confirming zero receiver channels"
         )
@@ -675,9 +761,7 @@ class DroneController:
         finite_in_range(timeout, "timeout", minimum=0.05, maximum=30.0)
         if self.min_battery_voltage <= 0.0:
             return
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.update_telemetry()
+        for _ in self._poll(timeout):
             if self.battery_is_fresh():
                 voltage = self.battery_voltage
                 if voltage is None:  # guarded above; keeps the comparison exact
@@ -688,7 +772,6 @@ class DroneController:
                         f"{self.min_battery_voltage:.2f} V"
                     )
                 return
-            time.sleep(0.05)
         raise FlightSafetyError("no fresh battery voltage before arming")
 
     def _fresh_disarmed(self, timeout: float = 2.5) -> None:
@@ -697,6 +780,7 @@ class DroneController:
             system_id=self.target_system,
             component_id=self.target_component,
             timeout=timeout,
+            observe=lambda message: self._process_message(message, time.monotonic()),
         )
         self._process_message(heartbeat, time.monotonic())
 
@@ -792,6 +876,7 @@ class DroneController:
             raise FlightSafetyError("LOG_BITMASK must be nonzero")
 
     def set_mode(self, mode_name: str, timeout: float = 5.0) -> None:
+        self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
         connection = self._connection()
         requested = mode_name.upper()
@@ -803,17 +888,18 @@ class DroneController:
             mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mapping[requested],
         )
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.update_telemetry()
+        for _ in self._poll(timeout):
+            self._require_autonomous_control()
             if self.flight_mode == requested:
                 return
-            time.sleep(0.05)
         raise TimeoutError(f"flight controller did not confirm {requested} mode")
 
     def arm(self, timeout: float = 10.0) -> None:
+        self._require_autonomous_control()
+        self._require_operator()
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         self.update_telemetry()
+        self._require_autonomous_control()
         if self.is_armed and not self._armed_by_controller:
             raise FlightSafetyError(
                 "refusing to take ownership of an already-armed vehicle"
@@ -835,6 +921,7 @@ class DroneController:
         # so use ArduPilot's position-free autonomous takeoff mode instead.
         self.set_mode("GUIDED_NOGPS")
         self._fresh_disarmed()
+        self._require_operator()
         if not self.altitude_is_fresh():
             raise FlightSafetyError("downward altitude became stale before arming")
         self._arm_command_sent = True
@@ -843,10 +930,12 @@ class DroneController:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self._pump_gcs_heartbeat()
-            self._raise_if_stop_requested()
             message = self._connection().recv_match(blocking=True, timeout=0.5)
             if message is not None:
                 self._process_message(message, time.monotonic())
+            self._resolve_control_ownership()
+            self._require_autonomous_control()
+            self._raise_if_stop_requested()
             if self.is_armed:
                 self._arm_command_sent = False
                 self._armed_by_controller = True
@@ -867,6 +956,7 @@ class DroneController:
     ) -> None:
         """Send one command and require its source-filtered COMMAND_ACK."""
 
+        self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
         self._connection().mav.command_long_send(
             self.target_system,
@@ -910,9 +1000,11 @@ class DroneController:
         )
 
     def _request_disarm(self) -> None:
+        self._require_autonomous_control()
         self._connection().arducopter_disarm()
 
     def disarm(self, timeout: float = 10.0) -> None:
+        self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         if self._flight_started_by_controller:
             raise FlightSafetyError("refusing to force-disarm a flight; use land()")
@@ -948,6 +1040,7 @@ class DroneController:
         1.0 requests ``WP_SPD_UP``.  It is never raw motor thrust here.
         """
 
+        self._require_autonomous_control()
         fraction = finite_in_range(
             climb_fraction, "climb_fraction", minimum=-1.0, maximum=1.0
         )
@@ -975,6 +1068,7 @@ class DroneController:
         )
 
     def takeoff(self, target_alt: float, timeout: float = 15.0) -> None:
+        self._require_autonomous_control()
         target = finite_in_range(
             target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
         )
@@ -1004,6 +1098,7 @@ class DroneController:
         deadline = started + timeout
         while time.monotonic() < deadline:
             self.update_telemetry()
+            self._require_autonomous_control()
             now = time.monotonic()
             if now - started > 2.0 and (
                 not self.altitude_is_fresh() or not self.heartbeat_is_fresh()
@@ -1028,6 +1123,7 @@ class DroneController:
     ) -> None:
         """Wait for continuously healthy flow-backed relative navigation."""
 
+        self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=60.0)
         finite_in_range(stable_for, "stable_for", minimum=0.1, maximum=10.0)
         healthy_since: float | None = None
@@ -1058,6 +1154,7 @@ class DroneController:
     def enter_loiter(self, timeout: float = 10.0, stable_for: float = 1.0) -> None:
         """Gate and confirm the GuidedNoGPS-to-Loiter handoff."""
 
+        self._require_autonomous_control()
         if not self.is_armed or not self._flight_started_by_controller:
             raise FlightSafetyError("Loiter transition requires a controller takeoff")
         self.wait_for_relative_position(timeout=timeout, stable_for=stable_for)
@@ -1074,12 +1171,14 @@ class DroneController:
     def hold_loiter(self, duration: float) -> None:
         """Hold confirmed Loiter while enforcing flow, EKF, range and link gates."""
 
+        self._require_autonomous_control()
         finite_in_range(duration, "duration", minimum=0.1, maximum=3_600.0)
         if self.flight_mode != "LOITER":
             raise FlightSafetyError("Loiter hold requires confirmed LOITER mode")
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
             self.update_telemetry()
+            self._require_autonomous_control()
             if self.flight_mode != "LOITER":
                 self.emergency_stop()
                 raise FlightSafetyError(
@@ -1091,16 +1190,18 @@ class DroneController:
             time.sleep(0.05)
 
     def land(self, timeout: float = 30.0) -> None:
+        self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
         self._landing_commanded = True
         deadline = time.monotonic() + timeout
         next_request = 0.0
         while time.monotonic() < deadline:
+            self.update_telemetry()
+            self._require_autonomous_control()
             now = time.monotonic()
             if now >= next_request:
                 self.emergency_stop()
                 next_request = now + 1.0
-            self.update_telemetry()
             if not self.is_armed:
                 self.is_flying = False
                 return
@@ -1111,7 +1212,7 @@ class DroneController:
 
     def emergency_stop(self) -> None:
         """Command LAND without force-disarming a possibly airborne vehicle."""
-        if self.connection is None:
+        if self.connection is None or self._human_control:
             return
         self._landing_commanded = True
         mapping = self.connection.mode_mapping()

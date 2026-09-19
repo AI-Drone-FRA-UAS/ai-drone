@@ -10,7 +10,7 @@
 # was interrupted that way and left the package database inconsistent; the
 # machine needed a manual rescue on 2026-08-19. This script applies the
 # measures that keep a power cut recoverable, and deliberately does NOT make
-# the root filesystem read-only, because `drone-deploy` and the sensor
+# the root filesystem read-only, because deployment and the sensor
 # recorders both need a writable card.
 #
 # What it changes, all reversible with --revert:

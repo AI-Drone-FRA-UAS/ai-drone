@@ -87,6 +87,27 @@ def _downward_range_summary(
     return 0, None, None, False
 
 
+def _sample_status(samples: int, parent: str, *, fresh: bool = True) -> str:
+    if parent != "ok":
+        return "unavailable"
+    if not samples:
+        return "no_data"
+    return "ok" if fresh else "stale"
+
+
+def _flow_status(state: CaptureState, parent: str, observed_at: float) -> str:
+    status = _sample_status(
+        state.optical_flow_samples,
+        parent,
+        fresh=_observation_is_fresh(state.flow_observed_monotonic, observed_at),
+    )
+    if status != "ok":
+        return status
+    if state.latest_flow_quality is None:
+        return "unknown_quality"
+    return "low_quality" if state.latest_flow_quality <= 0 else "ok"
+
+
 def _component_report(
     state: CaptureState,
     *,
@@ -98,34 +119,21 @@ def _component_report(
     duration: float,
     observed_at: float | None = None,
 ) -> dict[str, dict[str, object]]:
-    def dependent(samples: int, parent: str) -> str:
-        if parent != "ok":
-            return "unavailable"
-        return "ok" if samples else "no_data"
-
     observed_at = time.monotonic() if observed_at is None else observed_at
     downward, downward_m, range_source, range_fresh = _downward_range_summary(
         state, observed_at
     )
-    downward_status = dependent(downward, flight_controller)
-    if downward_status == "ok" and not range_fresh:
-        downward_status = "stale"
-    flow_status = dependent(state.optical_flow_samples, flight_controller)
-    if flow_status == "ok":
-        if not _observation_is_fresh(state.flow_observed_monotonic, observed_at):
-            flow_status = "stale"
-        elif state.latest_flow_quality is None:
-            flow_status = "unknown_quality"
-        elif state.latest_flow_quality <= 0:
-            flow_status = "low_quality"
+    downward_status = _sample_status(downward, flight_controller, fresh=range_fresh)
+    flow_status = _flow_status(state, flight_controller, observed_at)
     forward = state.distance_samples[0]
-    forward_status = dependent(forward, flight_controller)
-    forward_observed = state.distance_observed_monotonic.get(0)
-    if forward_status == "ok" and not _observation_is_fresh(
-        forward_observed, observed_at
-    ):
-        forward_status = "stale"
-    tag_status = dependent(state.tag_detections, camera)
+    forward_status = _sample_status(
+        forward,
+        flight_controller,
+        fresh=_observation_is_fresh(
+            state.distance_observed_monotonic.get(0), observed_at
+        ),
+    )
+    tag_status = _sample_status(state.tag_detections, camera)
     if detector != "ok":
         tag_status = "unavailable"
     report: dict[str, dict[str, object]] = {

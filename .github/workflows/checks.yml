@@ -15,6 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  laptop:
+    name: Laptop tools (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.11"
+          enable-cache: true
+      - run: uv sync --locked --group dev --group docs
+      - run: uv run --locked --group dev --group docs pytest -q tests/test_cli.py tests/test_cross_platform_scripts.py tests/test_settings.py tests/test_transfer.py
+
   python:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-24.04
@@ -53,6 +77,9 @@ jobs:
 
       - name: Lint Python
         run: uv run --locked --group dev --group docs ruff check .
+
+      - name: Check function complexity without suppressions
+        run: uv run --locked --group dev --group docs ruff check . --select C901 --ignore-noqa
 
       - name: Check types
         run: uv run --locked --group dev --group docs ty check .

@@ -40,7 +40,7 @@ def test_motor_count_rejects_duplicate_output_assignments(monkeypatch) -> None:
     functions = iter([33.0, 33.0, 34.0, 35.0, 0.0, 0.0, 0.0, 0.0])
     monkeypatch.setattr(
         motor_test,
-        "_request_parameter",
+        "request_parameter",
         lambda *_args, **_kwargs: next(functions),
     )
 
@@ -54,7 +54,7 @@ def test_motor_count_rejects_invalid_function_values(
 ) -> None:
     monkeypatch.setattr(
         motor_test,
-        "_request_parameter",
+        "request_parameter",
         lambda *_args, **_kwargs: function,
     )
 
@@ -116,7 +116,7 @@ def test_motor_test_does_not_select_a_different_vehicle(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         motor_test,
-        "_request_parameter",
+        "request_parameter",
         lambda *_args, **_kwargs: pytest.fail("must not query a different vehicle"),
     )
     monkeypatch.setattr(
@@ -171,7 +171,7 @@ def test_motor_test_requires_exact_all_checks_value(
     )
     monkeypatch.setattr(
         motor_test,
-        "_request_parameter",
+        "request_parameter",
         lambda _connection, name: requested.append(name) or arming_skipchk,
     )
 
@@ -303,7 +303,7 @@ def test_partial_motor_command_write_still_triggers_stop_cleanup(monkeypatch) ->
         "open_ardupilot_connection",
         lambda *_args, **_kwargs: connection,
     )
-    monkeypatch.setattr(motor_test, "_request_parameter", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(motor_test, "request_parameter", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(motor_test, "_configured_motor_count", lambda _connection: 4)
     monkeypatch.setattr(motor_test, "_send_motor_test", fail_first_send)
     monkeypatch.setattr(

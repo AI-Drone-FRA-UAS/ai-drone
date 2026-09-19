@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from ai_drone.capture.reporting import _observe_sensor_message
 from ai_drone.capture.state import (
@@ -19,11 +20,13 @@ from ai_drone.capture.state import (
 )
 from ai_drone.durability import IntervalSync, synced_stream
 from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
+from ai_drone.mavlink.shared import received_monotonic
 from ai_drone.recording import json_safe, telemetry_record, write_json_line
 from ai_drone.vision.apriltags import (
     CameraCalibration,
     Detector,
     PoseEstimationError,
+    TagDetection,
     estimate_pose,
 )
 
@@ -42,7 +45,6 @@ class TelemetryWorker(threading.Thread):
         stop: threading.Event,
         state: CaptureState,
         sync: IntervalSync,
-        allow_armed_after_ready: bool = False,
         allow_armed_at_any_time: bool = False,
         stop_after_disarm: bool = False,
     ) -> None:
@@ -55,9 +57,60 @@ class TelemetryWorker(threading.Thread):
         self.stop = stop
         self.state = state
         self.sync = sync
-        self.allow_armed_after_ready = allow_armed_after_ready
         self.allow_armed_at_any_time = allow_armed_at_any_time
         self.stop_after_disarm = stop_after_disarm
+
+    def _observe_heartbeat(
+        self, message: Any, *, selected_vehicle: bool, received_at: float
+    ) -> tuple[bool, bool]:
+        """Return disarm-stop and armed-abort decisions before any recording I/O."""
+        if not (
+            message.get_type() == "HEARTBEAT"
+            and selected_vehicle
+            and self.state.heartbeat_is_current(received_at)
+        ):
+            return False, False
+        armed = heartbeat_is_armed(message)
+        disarm_stop = not armed and self.stop_after_disarm and self.state.saw_armed
+        if disarm_stop:
+            # Close actuation before publishing a fresh disarmed heartbeat.
+            self.state.set_stop_reason("vehicle_disarmed")
+            self.stop.set()
+        self.state.observe_vehicle_state(armed=armed, observed_at=received_at)
+        armed_abort = armed and not self.allow_armed_at_any_time
+        if armed_abort:
+            self.state.armed_abort = True
+            self.state.record_error(
+                "vehicle became ARMED during camera startup or capture"
+            )
+            self.stop.set()
+        return disarm_stop, armed_abort
+
+    def _record_message(
+        self,
+        handle: TextIO,
+        message: Any,
+        *,
+        selected_vehicle: bool,
+        received_at: float,
+        started: float,
+    ) -> None:
+        message_type = message.get_type()
+        self.state.telemetry_counts[message_type] += 1
+        if selected_vehicle:
+            self.state.vehicle_telemetry_counts[message_type] += 1
+            _observe_sensor_message(self.state, message, observed_at=received_at)
+        record = telemetry_record(message, elapsed_s=received_at - started)
+        timestamp = getattr(message, "_timestamp", None)
+        if isinstance(timestamp, int | float) and not isinstance(timestamp, bool):
+            record["timestamp_utc"] = datetime.fromtimestamp(timestamp, UTC).isoformat()
+        write_json_line(handle, record)
+        synced = self.sync.after_record(handle)
+        logfile = getattr(self.connection, "logfile", None)
+        if logfile is not None:
+            logfile.flush()
+            if synced:
+                os.fsync(logfile.fileno())
 
     def run(self) -> None:
         try:
@@ -79,47 +132,19 @@ class TelemetryWorker(threading.Thread):
                     )
                     if message is None:
                         continue
-                    received_at = time.monotonic()
+                    received_at = received_monotonic(message)
                     selected_vehicle = is_vehicle_message(
                         message,
                         system_id=self.vehicle_system,
                         component_id=self.vehicle_component,
                     )
-                    is_vehicle_heartbeat = (
-                        message.get_type() == "HEARTBEAT" and selected_vehicle
+                    disarm_stop, armed_abort = self._observe_heartbeat(
+                        message,
+                        selected_vehicle=selected_vehicle,
+                        received_at=received_at,
                     )
-                    if is_vehicle_heartbeat:
-                        armed = heartbeat_is_armed(message)
-                        had_seen_armed = self.state.saw_armed
-                        disarm_stop = (
-                            not armed and self.stop_after_disarm and had_seen_armed
-                        )
-                        if disarm_stop:
-                            # Close actuation before publishing a fresh disarmed
-                            # heartbeat or performing potentially blocking I/O.
-                            self.state.set_stop_reason("vehicle_disarmed")
-                            self.stop.set()
-                        self.state.observe_vehicle_state(armed=armed)
-                        if armed and (
-                            not self.allow_armed_at_any_time
-                            and (
-                                not self.allow_armed_after_ready
-                                or not self.window.ready.is_set()
-                            )
-                        ):
-                            self.state.armed_abort = True
-                            self.state.record_error(
-                                "vehicle became ARMED during camera startup or capture"
-                                if not self.allow_armed_after_ready
-                                else "vehicle became ARMED before the manual-flight "
-                                "recorder was READY"
-                            )
-                            self.stop.set()
-                            return
-                        if not armed:
-                            self.state.disarmed_heartbeat.set()
-                    else:
-                        disarm_stop = False
+                    if armed_abort:
+                        return
                     started = self.window.started_monotonic
                     deadline = self.window.deadline
                     if disarm_stop and started is None:
@@ -132,21 +157,13 @@ class TelemetryWorker(threading.Thread):
                         self.state.set_stop_reason("duration_elapsed")
                         self.stop.set()
                         return
-                    message_type = message.get_type()
-                    self.state.telemetry_counts[message_type] += 1
-                    if selected_vehicle:
-                        self.state.vehicle_telemetry_counts[message_type] += 1
-                        _observe_sensor_message(
-                            self.state, message, observed_at=received_at
-                        )
-                    write_json_line(
+                    self._record_message(
                         handle,
-                        telemetry_record(
-                            message,
-                            elapsed_s=received_at - started,
-                        ),
+                        message,
+                        selected_vehicle=selected_vehicle,
+                        received_at=received_at,
+                        started=started,
                     )
-                    self.sync.after_record(handle)
                     if disarm_stop:
                         self.state.set_stop_reason("vehicle_disarmed")
                         self.stop.set()
@@ -189,6 +206,40 @@ class DetectionWorker(threading.Thread):
         self.sync = sync
         self.observer = observer
 
+    def _describe_detection(
+        self, detection: TagDetection
+    ) -> tuple[dict[str, Any], bool]:
+        tag: dict[str, Any] = {
+            "id": detection.tag_id,
+            "center_px": list(detection.center),
+            "corners_px": detection.corners.tolist(),
+            "hamming": detection.hamming,
+            "decision_margin": detection.decision_margin,
+        }
+        pose_rejected = False
+        if self.calibration is not None:
+            try:
+                pose = estimate_pose(
+                    detection,
+                    self.calibration,
+                    tag_size_m=self.tag_size,
+                    image_width=self.resolution[0],
+                    image_height=self.resolution[1],
+                )
+            except PoseEstimationError as error:
+                tag.update(pose_valid=False, pose_error=str(error))
+                pose_rejected = True
+            else:
+                tag.update(
+                    camera_xyz_m=list(pose.translation_m),
+                    distance_m=pose.distance_m,
+                    reprojection_error_px=pose.reprojection_error_px,
+                    pose_valid=(
+                        pose.reprojection_error_px <= self.max_reprojection_error
+                    ),
+                )
+        return tag, pose_rejected
+
     def run(self) -> None:
         visible_ids: set[int] = set()
         try:
@@ -208,36 +259,7 @@ class DetectionWorker(threading.Thread):
                         tags = []
                         observer_detections = []
                         for detection in detections:
-                            tag: dict[str, Any] = {
-                                "id": detection.tag_id,
-                                "center_px": list(detection.center),
-                                "corners_px": detection.corners.tolist(),
-                                "hamming": detection.hamming,
-                                "decision_margin": detection.decision_margin,
-                            }
-                            pose_rejected = False
-                            if self.calibration is not None:
-                                try:
-                                    pose = estimate_pose(
-                                        detection,
-                                        self.calibration,
-                                        tag_size_m=self.tag_size,
-                                        image_width=self.resolution[0],
-                                        image_height=self.resolution[1],
-                                    )
-                                except PoseEstimationError as error:
-                                    tag.update(pose_valid=False, pose_error=str(error))
-                                    pose_rejected = True
-                                else:
-                                    tag.update(
-                                        camera_xyz_m=list(pose.translation_m),
-                                        distance_m=pose.distance_m,
-                                        reprojection_error_px=pose.reprojection_error_px,
-                                        pose_valid=(
-                                            pose.reprojection_error_px
-                                            <= self.max_reprojection_error
-                                        ),
-                                    )
+                            tag, pose_rejected = self._describe_detection(detection)
                             if not pose_rejected:
                                 observer_detections.append(detection)
                             tags.append(tag)

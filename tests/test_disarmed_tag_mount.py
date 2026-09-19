@@ -119,7 +119,9 @@ def test_supervisor_runs_mount_commands_in_order(monkeypatch, target, expected):
             "--no-sync",
             "--group",
             "raspi",
-            "drone_mount",
+            "python",
+            "-m",
+            "ai_drone.cli.mount",
         ]
         return SimpleNamespace(poll=lambda: 0)
 

@@ -31,15 +31,10 @@ MOTOR_FUNCTIONS = frozenset(range(33, 41))
 ACCEPTED = mavlink.MAV_RESULT_ACCEPTED
 
 
-# Private compatibility name retained for focused tests and downstream imports;
-# the implementation is shared with the flight controller.
-_request_parameter = request_parameter
-
-
 def _configured_motor_count(connection: Any) -> int:
     assignments: dict[int, int] = {}
     for output in range(1, 9):
-        raw_function = float(_request_parameter(connection, f"SERVO{output}_FUNCTION"))
+        raw_function = float(request_parameter(connection, f"SERVO{output}_FUNCTION"))
         if not math.isfinite(raw_function) or not raw_function.is_integer():
             raise RuntimeError(
                 f"SERVO{output}_FUNCTION is not a finite integer: {raw_function!r}"
@@ -196,7 +191,7 @@ def _cleanup_motor_test(
     return disarmed_observed
 
 
-def main(arguments: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Briefly test selected motor outputs on a propeller-free bench."
     )
@@ -205,7 +200,7 @@ def main(arguments: list[str] | None = None) -> int:
     selection.add_argument(
         "--all-motors", action="store_true", help="test all configured motors in order"
     )
-    parser.add_argument("--device", default="/dev/serial0")
+    parser.add_argument("--device")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--target-system", type=int, default=1)
     parser.add_argument("--target-component", type=int, default=1)
@@ -214,8 +209,10 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--countdown", type=int, default=5)
     parser.add_argument("--confirm-props-removed", required=True)
     parser.add_argument("--confirm-vehicle-secured", required=True)
-    args = parser.parse_args(arguments)
+    return parser
 
+
+def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.baud <= 0:
         parser.error("--baud must be greater than zero")
     if not 1 <= args.target_system <= 255 or not 1 <= args.target_component <= 255:
@@ -232,6 +229,23 @@ def main(arguments: list[str] | None = None) -> int:
         parser.error(f"--duration must be between 0.1 and {MAX_DURATION_SECONDS:g}")
     if not 3 <= args.countdown <= 10:
         parser.error("--countdown must be between 3 and 10 seconds")
+
+
+def _motor_selection(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, connection: Any
+) -> tuple[int, int, int]:
+    motor_count = _configured_motor_count(connection)
+    if args.motor is None:
+        return motor_count, 1, motor_count
+    if not 1 <= args.motor <= motor_count:
+        parser.error(f"--motor must be between 1 and {motor_count}")
+    return motor_count, args.motor, 1
+
+
+def main(arguments: list[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    _validate_args(parser, args)
 
     endpoint = resolve_mavlink_endpoint(args.device, include_pi_uart=True)
     print(f"Connecting to {endpoint} at {args.baud} baud ...")
@@ -256,7 +270,7 @@ def main(arguments: list[str] | None = None) -> int:
         connection.target_system = args.target_system
         connection.target_component = args.target_component
 
-        arming_skipchk = float(_request_parameter(connection, "ARMING_SKIPCHK"))
+        arming_skipchk = float(request_parameter(connection, "ARMING_SKIPCHK"))
         if arming_skipchk != 0.0:
             raise SystemExit(
                 f"ARMING_SKIPCHK={arming_skipchk:g}. Set ARMING_SKIPCHK=0 "
@@ -264,18 +278,13 @@ def main(arguments: list[str] | None = None) -> int:
                 "using this utility."
             )
 
-        motor_count = _configured_motor_count(connection)
-        if args.motor is not None:
-            if not 1 <= args.motor <= motor_count:
-                parser.error(f"--motor must be between 1 and {motor_count}")
-            first_motor = args.motor
-            requested_count = 1
-        else:
-            requested_count = motor_count
+        motor_count, first_motor, requested_count = _motor_selection(
+            parser, args, connection
+        )
 
-        pwm_min = _request_parameter(connection, "MOT_PWM_MIN")
-        pwm_max = _request_parameter(connection, "MOT_PWM_MAX")
-        spin_min = _request_parameter(connection, "MOT_SPIN_MIN") * 100.0
+        pwm_min = request_parameter(connection, "MOT_PWM_MIN")
+        pwm_max = request_parameter(connection, "MOT_PWM_MAX")
+        spin_min = request_parameter(connection, "MOT_SPIN_MIN") * 100.0
         estimated_pwm = pwm_min + (pwm_max - pwm_min) * args.throttle_percent / 100.0
 
         print("\nBENCH MOTOR TEST — PROPELLERS MUST BE REMOVED")

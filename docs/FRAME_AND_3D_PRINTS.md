@@ -93,7 +93,7 @@ assembly against the newest hardware capture; the mount has to hold:
 | Component | Requirement |
 |-----------|-------------|
 | MicoAir MTF-01P | Pointing straight down, with nothing in its field of view — that includes the payload and the payload arm |
-| Payload servo + release arm | Rigid enough that the arm does not flex out of the retained position — see [Payload Drop Mechanism](PAYLOAD_DROP.md) |
+| Payload servo + release arm | Rigid enough that the arm does not flex out of the retained position — see [Payload Drop Mechanism](OPERATIONS.md#servo-and-tag-triggered-release) |
 | Raspberry Pi Zero 2 WH | Uses the `Body` enclosure; the UART4 cable and the USB port must stay reachable |
 | Pi AI Camera (IMX500) | Downward-facing for AprilTags in the present project; preserve the CSI ribbon bend radius and strain relief |
 

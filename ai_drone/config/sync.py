@@ -1,11 +1,10 @@
-"""Fetch the live drone configuration through the Pi and optionally publish it."""
+"""Fetch and validate the live drone configuration through the Pi."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import os
 import shlex
 import subprocess
 from collections.abc import Mapping
@@ -21,6 +20,7 @@ from ai_drone.config.snapshot import (
 )
 from ai_drone.durability import atomic_write_text
 from ai_drone.link import deploy
+from ai_drone.link.targets import REMOTE_UV
 
 
 def _run(
@@ -40,25 +40,10 @@ def _run(
         raise
 
 
-def _ensure_clean_repository(repo_root: Path) -> None:
-    completed = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    if completed.stdout.strip():
-        raise RuntimeError(
-            "--publish requires a clean repository before capture so unrelated "
-            "changes cannot enter the snapshot commit."
-        )
-
-
 def remote_export_command(
     plan: deploy.DeployPlan,
     *,
-    device: str,
+    device: str | None,
     baud: int,
     timeout: float,
 ) -> list[str]:
@@ -67,11 +52,25 @@ def remote_export_command(
     target = plan.target
     command = (
         f"cd {shlex.quote(target.project_dir)} && "
-        ".venv/bin/python -m ai_drone.cli.config_export "
-        f"--device {shlex.quote(device)} --baud {baud} "
+        f"{REMOTE_UV} run --no-sync python -m ai_drone.cli.config_export "
+        f"{('--device ' + shlex.quote(device) + ' ') if device else ''}--baud {baud} "
         f"--download-timeout {timeout}"
     )
     return deploy.remote_command(target, command)
+
+
+def _captured_at(value: object) -> datetime:
+    captured_value = value
+    if not isinstance(captured_value, str):
+        raise ValueError("Snapshot captured_at must be an ISO-8601 string")
+    try:
+        captured = datetime.fromisoformat(captured_value)
+    except ValueError as error:
+        raise ValueError("Snapshot captured_at is not valid ISO-8601") from error
+    if captured.tzinfo is None:
+        raise ValueError("Snapshot captured_at must include a timezone")
+
+    return captured
 
 
 def _validated_bundle(
@@ -82,15 +81,7 @@ def _validated_bundle(
     if bundle.get("schema_version") != 1:
         raise ValueError("Unsupported or missing snapshot schema_version")
 
-    captured_value = bundle.get("captured_at")
-    if not isinstance(captured_value, str):
-        raise ValueError("Snapshot captured_at must be an ISO-8601 string")
-    try:
-        captured = datetime.fromisoformat(captured_value)
-    except ValueError as error:
-        raise ValueError("Snapshot captured_at is not valid ISO-8601") from error
-    if captured.tzinfo is None:
-        raise ValueError("Snapshot captured_at must include a timezone")
+    captured = _captured_at(bundle.get("captured_at"))
 
     source = bundle.get("source")
     if not isinstance(source, Mapping):
@@ -172,86 +163,23 @@ def write_snapshot(bundle: dict[str, Any], repo_root: Path) -> tuple[Path, Path]
     return parameter_path, metadata_path
 
 
-def publish_snapshot(paths: tuple[Path, Path], repo_root: Path) -> None:
-    """Commit exactly the generated files and push the current branch."""
-
-    relative = [str(path.relative_to(repo_root)) for path in paths]
-    branch = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if not branch:
-        raise RuntimeError("Cannot publish a configuration from detached HEAD")
-
-    subprocess.run(["git", "add", "--", *relative], cwd=repo_root, check=True)
-    changed = subprocess.run(
-        ["git", "diff", "--cached", "--quiet", "--", *relative],
-        cwd=repo_root,
-        check=False,
-    ).returncode
-    if changed == 0:
-        print("The live configuration is unchanged; no commit was needed.")
-        return
-
-    date = paths[0].stem.removeprefix("flywoo-f745-live-")
-    subprocess.run(
-        [
-            "git",
-            "commit",
-            "--only",
-            "-m",
-            f"Snapshot live drone configuration {date}",
-            "--",
-            *relative,
-        ],
-        cwd=repo_root,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "push", "-u", "origin", branch],
-        cwd=repo_root,
-        check=True,
-    )
-    print(f"Published the snapshot to origin/{branch}.")
-
-
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Read the full flight-controller configuration through the Pi, save it "
-            "locally, and optionally commit/push exactly those generated files."
+            "locally without deploying, changing parameters, or publishing to Git."
         )
     )
-    parser.add_argument("--device", default="/dev/serial0")
+    parser.add_argument("--device")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=180.0)
-    parser.add_argument(
-        "--no-sync",
-        action="store_true",
-        help="skip project sync/install when the Pi already has this code",
-    )
-    parser.add_argument(
-        "--publish",
-        action="store_true",
-        help="commit exactly the snapshot files and push the current branch",
-    )
     args = parser.parse_args(arguments)
 
     if args.baud <= 0:
         parser.error("--baud must be greater than zero")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be finite and greater than zero")
-    if args.publish:
-        _ensure_clean_repository(deploy.REPO_ROOT)
-
-    plan = deploy.build_plan([], environ=os.environ)
-    if not args.no_sync:
-        deploy.sync_project(plan)
-        print("Installing/updating the Pi environment ...", flush=True)
-        _run(deploy.install_command(plan))
+    plan = deploy.build_plan([])
 
     completed = _run(
         remote_export_command(
@@ -269,10 +197,6 @@ def main(arguments: list[str] | None = None) -> int:
     print(f"Saved {bundle['parameter_count']} parameters to {paths[0]}")
     print(f"Saved snapshot metadata to {paths[1]}")
 
-    if args.publish:
-        publish_snapshot(paths, deploy.REPO_ROOT)
-    else:
-        print("Review the files, or rerun from a clean tree with --publish.")
     return 0
 
 

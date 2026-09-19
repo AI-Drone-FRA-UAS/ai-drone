@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 # Bounds how much of an append-only stream a power cut may discard. Five
 # seconds keeps the fsync cost per recording negligible at the bounded
@@ -98,7 +98,9 @@ class IntervalSync:
 
         return self.interval_s > 0
 
-    def after_record(self, handle: TextIO, *, now: float | None = None) -> bool:
+    def after_record(
+        self, handle: TextIO | BinaryIO, *, now: float | None = None
+    ) -> bool:
         """Flush one record and report whether it also reached the device."""
 
         handle.flush()
@@ -114,7 +116,7 @@ class IntervalSync:
         self._due_at = current + self.interval_s
         return True
 
-    def finalize(self, handle: TextIO) -> None:
+    def finalize(self, handle: TextIO | BinaryIO) -> None:
         """Persist the tail of a finished stream.
 
         This runs once per stream, so it stays enabled even when periodic

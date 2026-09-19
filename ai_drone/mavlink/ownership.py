@@ -63,7 +63,7 @@ def require_available_serial(endpoint: str, *, on_pi: bool = False) -> None:
             )
         if properties.get("ActiveState") not in ("inactive", "failed"):
             raise RuntimeError(
-                "Recorder is running or its state is unknown; wait for drone-walk to finish"
+                "Recorder is running or its state is unknown; wait for drone walk to finish"
             )
     # The resolved path is absolute and cannot be parsed as an option. Some
     # supported host fuser implementations do not accept a -- separator.

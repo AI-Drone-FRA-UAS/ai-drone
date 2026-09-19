@@ -178,7 +178,12 @@ def test_verifies_relative_build_dir_with_official_extractor(
     assert result.manifest_path == manifest_path
     assert calls == [
         [
+            "uv",
+            "run",
+            "--no-sync",
+            "--python",
             sys.executable,
+            "python",
             str(root / "Tools" / "scripts" / "extract_features.py"),
             str(build_dir / "bin" / "arducopter"),
             "--nm",

@@ -17,8 +17,8 @@ Develop an indoor aircraft that can eventually:
    sensing have been integrated.
 
 Disarmed sensing and software implementation do not establish flight readiness.
-Follow the staged procedures in [MAVLink control](PI_MAVLINK_CONTROL.md) and
-the [AprilTag mission architecture](APRILTAG_MISSION.md).
+Follow the staged procedures in [MAVLink control](OPERATIONS.md#takeoff-loiter-and-landing) and
+the [AprilTag mission architecture](SOFTWARE_ARCHITECTURE.md#remaining-stages).
 
 ## Aircraft
 

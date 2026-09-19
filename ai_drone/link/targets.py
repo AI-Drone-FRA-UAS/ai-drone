@@ -6,18 +6,20 @@ import os
 import platform
 import subprocess
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 
-# Shared Tailscale nodes require the full MagicDNS name across tailnets.
-DEFAULT_PI_HOSTNAME = "seb-is-pm.tail59e6a4.ts.net"
+from ai_drone.settings import load_settings
+
+DEFAULT_PI_HOSTNAME = "seb-is-pm"
 DEFAULT_PI_USERNAME = "seb"
 DEFAULT_PI_USB_IP = "192.168.7.2"
 DEFAULT_PI_HOTSPOT_IP = "192.168.4.1"
 DEFAULT_HOST_USB_IP = "192.168.7.1"
 DEFAULT_PI_USB_PORT_HINT = "Pi Zero 2 WH micro-USB port labeled USB, not PWR IN"
 DEFAULT_PI_AP_SSID = "AI-Drone-Zero"
-DEFAULT_DIRECT_SSH_CONFIG = os.devnull
+DEFAULT_DIRECT_SSH_CONFIG = None
+REMOTE_UV = 'PATH="$HOME/.local/bin:$PATH" uv'
 
 
 @dataclass(frozen=True)
@@ -49,14 +51,6 @@ class ConnectionTarget:
 
 def _env(environ: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if environ is None else environ
-
-
-def _direct_ssh_config(environ: Mapping[str, str]) -> str | None:
-    """Resolve SSH config for direct Pi links that must bypass broken user config."""
-
-    if "SSH_CONFIG" in environ:
-        return environ["SSH_CONFIG"] or None
-    return DEFAULT_DIRECT_SSH_CONFIG
 
 
 def ssh_base_command(ssh_config: str | None) -> list[str]:
@@ -133,37 +127,24 @@ def preferred_pi_addresses(target: ConnectionTarget) -> tuple[str, ...]:
 
 def resolve_deploy_target(
     environ: Mapping[str, str] | None = None,
-    *,
-    ping: Callable[[str], bool] | None = None,
-    system: str | None = None,
 ) -> DeployTarget:
     values = _env(environ)
-    connection_target = resolve_connection_target(values)
-    pi_user = connection_target.pi_user
-    probe = ping if ping is not None else lambda host: ping_host(host, system)
-
-    explicit_host = values.get("PI_HOST")
-    if explicit_host:
-        ssh_target, user, address = split_ssh_target(explicit_host, pi_user)
-    else:
-        address = next(
-            (
-                candidate
-                for candidate in preferred_pi_addresses(connection_target)
-                if probe(candidate)
-            ),
-            connection_target.pi_hostname,
-        )
-        user = pi_user
-        ssh_target = f"{user}@{address}"
-
-    project_dir = values.get("PI_DIR", f"/home/{user}/ai-drone")
+    settings = load_settings(environ=values).connection
+    _, default_user, default_address = split_ssh_target(
+        settings.host, DEFAULT_PI_USERNAME
+    )
+    host = values.get("PI_HOST") or values.get("PI_HOSTNAME") or default_address
+    ssh_target, user, address = split_ssh_target(
+        host, values.get("PI_USER", default_user)
+    )
     return DeployTarget(
         ssh_target=ssh_target,
         user=user,
         address=address,
-        project_dir=project_dir,
-        ssh_config=connection_target.ssh_config,
+        project_dir=values.get("PI_DIR")
+        or settings.project_dir
+        or f"/home/{user}/ai-drone",
+        ssh_config=values.get("SSH_CONFIG", settings.ssh_config) or None,
     )
 
 
@@ -171,16 +152,17 @@ def resolve_connection_target(
     environ: Mapping[str, str] | None = None,
 ) -> ConnectionTarget:
     values = _env(environ)
+    target = resolve_deploy_target(values)
     timeout = int(values.get("TIMEOUT_SECONDS", "180"))
     return ConnectionTarget(
         pi_ip=values.get("PI_IP", DEFAULT_PI_USB_IP),
         host_ip=values.get("HOST_IP", DEFAULT_HOST_USB_IP),
-        pi_user=values.get("PI_USER", DEFAULT_PI_USERNAME),
-        pi_hostname=values.get("PI_HOSTNAME", DEFAULT_PI_HOSTNAME),
+        pi_user=target.user,
+        pi_hostname=target.address,
         port_hint=values.get("PI_USB_PORT_HINT", DEFAULT_PI_USB_PORT_HINT),
         usb_iface=values.get("USB_IFACE") or None,
         timeout_seconds=timeout,
         ap_ssid=values.get("PI_AP_SSID", DEFAULT_PI_AP_SSID),
         ap_ip=values.get("PI_AP_IP", DEFAULT_PI_HOTSPOT_IP),
-        ssh_config=_direct_ssh_config(values),
+        ssh_config=target.ssh_config,
     )

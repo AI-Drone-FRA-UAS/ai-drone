@@ -8,7 +8,7 @@
       lassen.
     </p>
 
-    <p class="hinweis-kasten"><b>Historische Demonstration, August 2026.</b> Die beschriebenen Abwürfe sind keine aktuelle Funktionsfreigabe. Kamera, Servo und Mechanik werden separat geprüft. Für den gepflegten Betrieb gelten <a href="abwurf.html">Servo-Dokumentation</a> und die neuesten Hardwareaufzeichnungen.</p>
+    <p class="hinweis-kasten"><b>Historische Demonstration, August 2026.</b> Die beschriebenen Abwürfe sind keine aktuelle Funktionsfreigabe. Kamera, Servo und Mechanik werden separat geprüft. Für den gepflegten Betrieb gelten <a href="betrieb.html#servo-and-tag-triggered-release">Servo-Dokumentation</a> und die neuesten Hardwareaufzeichnungen.</p>
 
     <p>
       Die damalige Demonstration zeigte <b>Kamera → Erkennung → Aktuator</b>. Die nach unten
@@ -88,10 +88,10 @@
 
     <h2 id="kommandos"><a class="anker" href="#kommandos" aria-hidden="true">#</a>Kommandos</h2>
 
-    <p>Der gepflegte Aufzeichnungsbefehl ist <code>drone-inspect</code>. Auf dem
-      Pi zeigt <code>uv run drone-inspect --help</code> die aktuellen Aufnahmeoptionen.
+    <p>Der gepflegte Aufzeichnungsbefehl ist <code>drone record</code>. Auf dem
+      Pi zeigt <code>uv run drone record --help</code> die aktuellen Aufnahmeoptionen.
       Die Standardinspektion bleibt disarmiert und sendet keine Servo-Kommandos.</p>
-    <p><code>drone-tag-servo-record</code> ist ein separates Werkzeug mit ausdrücklichen
+    <p><code>drone tag-servo-record</code> ist ein separates Werkzeug mit ausdrücklichen
       Bestätigungen und begrenzten Pulsen. Es implementiert weder Flugnavigation noch
       automatisches Armieren. Die alten Missionsbranches bleiben im
       <a href="https://github.com/AI-Drone-FRA-UAS/ai-drone/blob/main/notes/archive/README.md">Quellarchiv</a> erhalten.</p>

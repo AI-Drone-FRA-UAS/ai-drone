@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
@@ -119,12 +120,34 @@ def require_ardupilot_heartbeat(
     )
 
 
+def _drain_disarmed_messages(
+    connection: Any,
+    *,
+    system_id: int,
+    component_id: int | None,
+    deadline: float,
+    observe: Callable[[Any], None] | None,
+) -> None:
+    message_type = None if observe else "HEARTBEAT"
+    while time.monotonic() < deadline:
+        queued = connection.recv_match(type=message_type, blocking=False)
+        if queued is None:
+            return
+        if observe:
+            observe(queued)
+        if is_armed_vehicle_heartbeat(
+            queued, system_id=system_id, component_id=component_id
+        ):
+            raise RuntimeError("Vehicle reported ARMED")
+
+
 def require_fresh_disarmed_heartbeat(
     connection: Any,
     *,
     system_id: int,
     component_id: int | None = None,
     timeout: float,
+    observe: Callable[[Any], None] | None = None,
 ) -> HeartbeatMessage:
     """Drain queued heartbeats, then require a new disarmed vehicle heartbeat.
 
@@ -136,26 +159,26 @@ def require_fresh_disarmed_heartbeat(
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("heartbeat timeout must be finite and greater than zero")
 
-    while True:
-        queued = connection.recv_match(type="HEARTBEAT", blocking=False)
-        if queued is None:
-            break
-        if is_armed_vehicle_heartbeat(
-            queued,
-            system_id=system_id,
-            component_id=component_id,
-        ):
-            raise RuntimeError("Vehicle reported ARMED")
-
     deadline = time.monotonic() + timeout
+    _drain_disarmed_messages(
+        connection,
+        system_id=system_id,
+        component_id=component_id,
+        deadline=deadline,
+        observe=observe,
+    )
+    message_type = None if observe else "HEARTBEAT"
+    started = time.monotonic()
     while (remaining := deadline - time.monotonic()) > 0:
         heartbeat = connection.recv_match(
-            type="HEARTBEAT",
+            type=message_type,
             blocking=True,
             timeout=remaining,
         )
         if heartbeat is None:
             break
+        if observe:
+            observe(heartbeat)
         if not is_vehicle_message(
             heartbeat,
             system_id=system_id,
@@ -166,5 +189,13 @@ def require_fresh_disarmed_heartbeat(
             continue
         if heartbeat_is_armed(heartbeat):
             raise RuntimeError("Vehicle reported ARMED")
+        received = getattr(heartbeat, "_received_monotonic", time.monotonic())
+        if (
+            isinstance(received, bool)
+            or not isinstance(received, int | float)
+            or not math.isfinite(received)
+            or not started <= received <= time.monotonic()
+        ):
+            continue
         return heartbeat
     raise TimeoutError("No fresh disarmed vehicle heartbeat received")

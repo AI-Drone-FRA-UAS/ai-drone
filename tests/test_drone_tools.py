@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from ai_drone.cli import servo
+from ai_drone.mount import parse_servo_input, pulse_us
 from ai_drone.platform import is_raspberry_pi
 
 
@@ -19,12 +20,12 @@ def test_platform_detection_rejects_non_pi(tmp_path) -> None:
 
 
 def test_servo_input_parsing() -> None:
-    assert servo._target_value_from_input("1500us", min_us=900, max_us=2100) == 0.0
-    assert servo._target_value_from_input("30deg", min_us=900, max_us=2100) == 0.5
-    assert servo._target_value_from_input("-0.25", min_us=900, max_us=2100) == -0.25
+    assert parse_servo_input("1500us", min_us=900, max_us=2100) == 0.0
+    assert parse_servo_input("30deg", min_us=900, max_us=2100) == 0.5
+    assert parse_servo_input("-0.25", min_us=900, max_us=2100) == -0.25
 
-    with pytest.raises(ValueError, match=r"between -1\.0 and 1\.0"):
-        servo._target_value_from_input("nan", min_us=900, max_us=2100)
+    with pytest.raises(ValueError, match="must be finite"):
+        parse_servo_input("nan", min_us=900, max_us=2100)
 
 
 @pytest.mark.parametrize(
@@ -138,11 +139,9 @@ def test_servo_initializes_only_after_exact_confirmation(monkeypatch) -> None:
 def test_asymmetric_pulse_commands_and_reported_width_agree(
     minimum, maximum, requested, normalized
 ):
-    value = servo._target_value_from_input(
-        f"{requested}us", min_us=minimum, max_us=maximum
-    )
+    value = parse_servo_input(f"{requested}us", min_us=minimum, max_us=maximum)
     assert value == pytest.approx(normalized)
-    assert servo._pulse_us(value, min_us=minimum, max_us=maximum) == requested
+    assert pulse_us(value, min_us=minimum, max_us=maximum) == requested
 
 
 def test_asymmetric_pulse_commands_match_gpiozero_mock_pwm_output():
@@ -158,9 +157,7 @@ def test_asymmetric_pulse_commands_match_gpiozero_mock_pwm_output():
         pin_factory=factory,
     ) as output:
         for requested in (900, 1200, 1500, 1800, 2200):
-            output.value = servo._target_value_from_input(
-                f"{requested}us", min_us=900, max_us=2200
-            )
+            output.value = parse_servo_input(f"{requested}us", min_us=900, max_us=2200)
             assert factory.pin(12).state / factory.pin(12).frequency == pytest.approx(
                 requested / 1_000_000
             )

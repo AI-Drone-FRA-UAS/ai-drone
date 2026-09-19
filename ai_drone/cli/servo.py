@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import sys
 import time
-from pathlib import Path
+from typing import Any
 
+from ai_drone.mount import (
+    ABSOLUTE_MAX_PULSE_US,
+    ABSOLUTE_MIN_PULSE_US,
+    DEFAULT_MAX_PULSE_US,
+    DEFAULT_MIN_PULSE_US,
+    SERVO_GPIO_PIN,
+    ServoProcessLock,
+    create_servo,
+    parse_servo_input,
+    pulse_us,
+)
 from ai_drone.platform import is_raspberry_pi
 
 ACTUATION_CONFIRMATION = "SERVO_CLEAR"
-SERVO_GPIO_PIN = 12
-ABSOLUTE_MIN_PULSE_US = 750
-ABSOLUTE_MAX_PULSE_US = 2250
-_LOCK_PATH = Path("/tmp/ai-drone-bcm12-servo.lock")
 
 WIRING_DIAGRAM = """
 [Raspberry Pi Zero 2 WH Header (40 Pins)]
@@ -33,68 +39,6 @@ budget, wiring, protection, and transient behavior have first been validated.
 """
 
 
-class ServoProcessLock:
-    """Prevent cooperating ai-drone processes from sharing BCM12."""
-
-    def __init__(self, path: Path = _LOCK_PATH) -> None:
-        import fcntl
-
-        self._fcntl = fcntl
-        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-        self._handle = os.fdopen(descriptor, "r+")
-        try:
-            self._fcntl.flock(
-                self._handle.fileno(),
-                self._fcntl.LOCK_EX | self._fcntl.LOCK_NB,
-            )
-        except BaseException as error:
-            self._handle.close()
-            if isinstance(error, BlockingIOError):
-                raise RuntimeError(
-                    f"payload servo GPIO {SERVO_GPIO_PIN} is already owned by another "
-                    "ai-drone process"
-                ) from error
-            raise
-
-    def close(self) -> None:
-        if self._handle.closed:
-            return
-        try:
-            self._fcntl.flock(self._handle.fileno(), self._fcntl.LOCK_UN)
-        finally:
-            self._handle.close()
-
-
-def _target_value_from_input(
-    value: str,
-    *,
-    min_us: int,
-    max_us: int,
-) -> float:
-    command = value.strip().lower()
-    if command.endswith("us"):
-        pulse_us = int(command.removesuffix("us").strip())
-        if not min_us <= pulse_us <= max_us:
-            raise ValueError(f"pulse width must be between {min_us} and {max_us}us")
-        # gpiozero interpolates across one interval, even for asymmetric limits.
-        return 2 * (pulse_us - min_us) / (max_us - min_us) - 1
-
-    if command.endswith("deg"):
-        degrees = float(command.removesuffix("deg").strip())
-        if not math.isfinite(degrees) or not -60.0 <= degrees <= 60.0:
-            raise ValueError("angle must be between -60 and +60 degrees")
-        return degrees / 60.0
-
-    target = float(command)
-    if not math.isfinite(target) or not -1.0 <= target <= 1.0:
-        raise ValueError("value must be between -1.0 and 1.0")
-    return target
-
-
-def _pulse_us(value: float, *, min_us: int, max_us: int) -> int:
-    return round(min_us + (value + 1) * (max_us - min_us) / 2)
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Control a 9g micro servo motor using BCM GPIO 12 on Raspberry Pi."
@@ -109,13 +53,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-us",
         type=int,
-        default=900,
+        default=DEFAULT_MIN_PULSE_US,
         help="Minimum pulse width in microseconds (default: 900)",
     )
     parser.add_argument(
         "--max-us",
         type=int,
-        default=2100,
+        default=DEFAULT_MAX_PULSE_US,
         help="Maximum pulse width in microseconds (default: 2100)",
     )
     parser.add_argument(
@@ -164,6 +108,59 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--sweep-step must be finite and greater than 0 and at most 1")
 
 
+def _center(servo: Any, args: argparse.Namespace) -> None:
+    midpoint = pulse_us(0.0, min_us=args.min_us, max_us=args.max_us)
+    print(f"Moving to the configured midpoint ({midpoint}us). Press Ctrl-C to release.")
+    servo.value = 0.0
+    while True:
+        time.sleep(1)
+
+
+def _sweep(servo: Any, args: argparse.Namespace) -> None:
+    print("Sweeping servo between min and max. Press Ctrl-C to stop.")
+    value = 0.0
+    direction = 1
+    while True:
+        servo.value = value
+        width_us = pulse_us(value, min_us=args.min_us, max_us=args.max_us)
+        sys.stdout.write(f"\rPosition: {value:6.2f} | Pulse: {width_us:4d}us")
+        sys.stdout.flush()
+
+        value += direction * args.sweep_step
+        if value >= 1.0:
+            value = 1.0
+            direction = -1
+        elif value <= -1.0:
+            value = -1.0
+            direction = 1
+        time.sleep(args.sweep_delay)
+
+
+def _manual(servo: Any, args: argparse.Namespace) -> None:
+    print("Enter values like 0.0, 1500us, -30deg, or exit.")
+    while True:
+        try:
+            raw_value = input("servo> ")
+        except (KeyboardInterrupt, EOFError):
+            print()
+            break
+        if raw_value.strip().lower() in {"exit", "quit", "q"}:
+            break
+        try:
+            value = parse_servo_input(
+                raw_value,
+                min_us=args.min_us,
+                max_us=args.max_us,
+            )
+        except ValueError as error:
+            print(f"Error: {error}")
+            continue
+
+        width_us = pulse_us(value, min_us=args.min_us, max_us=args.max_us)
+        print(f"Moving to value={value:.2f}, pulse={width_us}us")
+        servo.value = value
+
+
 def main(arguments: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(arguments)
@@ -172,29 +169,17 @@ def main(arguments: list[str] | None = None) -> int:
     if not is_raspberry_pi():
         print("ERROR: This command must be run on a Raspberry Pi.", file=sys.stderr)
         print(
-            "Run it via 'uv run drone-deploy --run servo -- --mode <mode> "
+            "Run it via 'uv run python scripts/servo.py --mode <mode> "
             f"--confirm-actuation {ACTUATION_CONFIRMATION}' from the laptop.",
             file=sys.stderr,
         )
         print(f"Wiring details for reference:\n{WIRING_DIAGRAM}", file=sys.stderr)
         return 1
 
-    try:
-        from gpiozero import Servo  # ty: ignore[unresolved-import]
-    except ImportError:
-        print("ERROR: gpiozero is not installed on this Pi.", file=sys.stderr)
-        print("Install it with: sudo apt install python3-gpiozero", file=sys.stderr)
-        return 1
-
     process_lock = None
     try:
         process_lock = ServoProcessLock()
-        servo = Servo(
-            args.pin,
-            min_pulse_width=args.min_us / 1_000_000.0,
-            max_pulse_width=args.max_us / 1_000_000.0,
-            initial_value=None,
-        )
+        servo = create_servo(args.pin, min_us=args.min_us, max_us=args.max_us)
     except BaseException as error:
         if process_lock is not None:
             process_lock.close()
@@ -216,57 +201,7 @@ def main(arguments: list[str] | None = None) -> int:
             f"{WIRING_DIAGRAM}"
         )
 
-        if args.mode == "center":
-            midpoint = _pulse_us(0.0, min_us=args.min_us, max_us=args.max_us)
-            print(
-                f"Moving to the configured midpoint ({midpoint}us). Press Ctrl-C to release."
-            )
-            servo.value = 0.0
-            while True:
-                time.sleep(1)
-
-        if args.mode == "sweep":
-            print("Sweeping servo between min and max. Press Ctrl-C to stop.")
-            value = 0.0
-            direction = 1
-            while True:
-                servo.value = value
-                pulse_us = _pulse_us(value, min_us=args.min_us, max_us=args.max_us)
-                sys.stdout.write(f"\rPosition: {value:6.2f} | Pulse: {pulse_us:4d}us")
-                sys.stdout.flush()
-
-                value += direction * args.sweep_step
-                if value >= 1.0:
-                    value = 1.0
-                    direction = -1
-                elif value <= -1.0:
-                    value = -1.0
-                    direction = 1
-                time.sleep(args.sweep_delay)
-
-        if args.mode == "manual":
-            print("Enter values like 0.0, 1500us, -30deg, or exit.")
-            while True:
-                try:
-                    raw_value = input("servo> ")
-                except (KeyboardInterrupt, EOFError):
-                    print()
-                    break
-                if raw_value.strip().lower() in {"exit", "quit", "q"}:
-                    break
-                try:
-                    value = _target_value_from_input(
-                        raw_value,
-                        min_us=args.min_us,
-                        max_us=args.max_us,
-                    )
-                except ValueError as error:
-                    print(f"Error: {error}")
-                    continue
-
-                pulse_us = _pulse_us(value, min_us=args.min_us, max_us=args.max_us)
-                print(f"Moving to value={value:.2f}, pulse={pulse_us}us")
-                servo.value = value
+        {"center": _center, "sweep": _sweep, "manual": _manual}[args.mode](servo, args)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

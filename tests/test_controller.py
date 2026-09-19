@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 import pytest
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
-from ai_drone import DroneController, FlightSafetyError
 from ai_drone.cli import control
 from ai_drone.flight.controller import (
     ATTITUDE_TARGET_MASK,
@@ -18,6 +17,8 @@ from ai_drone.flight.controller import (
     GUIDED_TAKEOFF_CLIMB_FRACTION,
     MAX_PHYSICAL_ALTITUDE_M,
     REQUIRED_NOGPS_LOITER_PARAMETERS,
+    DroneController,
+    FlightSafetyError,
 )
 
 
@@ -1051,6 +1052,56 @@ def test_stop_callback_requests_land_after_takeoff() -> None:
     connection.arducopter_disarm.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "method",
+    [
+        "wait_for_optical_flow",
+        "wait_for_attitude",
+        "wait_for_no_rc_input",
+        "verify_battery_before_arming",
+    ],
+)
+def test_preflight_sample_waits_remain_bounded(monkeypatch, method) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550", min_battery_voltage=14.4)
+    elapsed = [0.0]
+    polls = []
+
+    def sleep(duration):
+        elapsed[0] += duration
+
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(time, "sleep", sleep)
+    monkeypatch.setattr(
+        controller, "update_telemetry", lambda: polls.append(elapsed[0])
+    )
+
+    with pytest.raises(FlightSafetyError, match="no fresh"):
+        getattr(controller, method)(timeout=0.1)
+
+    assert polls == [0.0, 0.05]
+    assert elapsed[0] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("owned, landing", [(False, False), (True, True)])
+def test_telemetry_guards_only_command_an_owned_flight_before_landing(
+    owned, landing
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550", min_battery_voltage=14.4)
+    connection = MagicMock()
+    connection.recv_match.return_value = None
+    controller.connection = connection
+    controller._flight_started_by_controller = owned
+    controller._landing_commanded = landing
+    controller.flight_mode = "LOITER"
+    controller.current_altitude = 1.5
+
+    controller.update_telemetry()
+
+    connection.mav.set_mode_send.assert_not_called()
+    connection.arducopter_arm.assert_not_called()
+    connection.arducopter_disarm.assert_not_called()
+
+
 def test_flight_confirmation_is_checked_before_device_access(monkeypatch) -> None:
     monkeypatch.setattr(
         control,
@@ -1133,7 +1184,12 @@ def test_hover_cli_runs_guided_nogps_takeoff_loiter_hold_and_land(
     def termination_event():
         yield stop
 
+    @contextmanager
+    def operator_link(_args):
+        yield lambda: True, lambda: False
+
     monkeypatch.setattr(control, "_flight_session", flight_session)
+    monkeypatch.setattr(control, "_operator_link", operator_link)
     monkeypatch.setattr(control, "_termination_event", termination_event)
     monkeypatch.setattr(
         control,

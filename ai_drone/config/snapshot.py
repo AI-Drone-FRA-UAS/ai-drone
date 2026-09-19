@@ -74,50 +74,39 @@ def _json_integer(item: dict[str, Any], field: str, position: int) -> int:
     return value
 
 
+def _record_from_json(item: dict[str, Any], position: int) -> ParameterRecord:
+    name = item.get("name")
+    if not isinstance(name, str) or PARAMETER_NAME_PATTERN.fullmatch(name) is None:
+        raise ValueError(f"Snapshot parameter {position} has an invalid ArduPilot name")
+    raw_value = item.get("value")
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
+        raise ValueError(f"Snapshot parameter {position} value must be a JSON number")
+    value = float(raw_value)
+    if not math.isfinite(value):
+        raise ValueError("Snapshot contains a non-finite parameter value")
+    param_type = _json_integer(item, "param_type", position)
+    index = _json_integer(item, "index", position)
+    count = _json_integer(item, "count", position)
+    if not MIN_MAV_PARAM_TYPE <= param_type <= MAX_MAV_PARAM_TYPE:
+        raise ValueError(
+            f"Snapshot parameter {position} param_type must be between "
+            f"{MIN_MAV_PARAM_TYPE} and {MAX_MAV_PARAM_TYPE}"
+        )
+    if index < 0:
+        raise ValueError(f"Snapshot parameter {position} index must not be negative")
+    if not 1 <= count <= MAX_PARAMETER_COUNT:
+        raise ValueError(
+            f"Snapshot parameter {position} count must be between 1 and "
+            f"{MAX_PARAMETER_COUNT}"
+        )
+    return ParameterRecord(
+        name=name, value=value, param_type=param_type, index=index, count=count
+    )
+
+
 def records_from_json(items: list[dict[str, Any]]) -> list[ParameterRecord]:
     """Validate and reconstruct records from a remote export bundle."""
-
-    records: list[ParameterRecord] = []
-    for position, item in enumerate(items):
-        name = item.get("name")
-        if not isinstance(name, str) or PARAMETER_NAME_PATTERN.fullmatch(name) is None:
-            raise ValueError(
-                f"Snapshot parameter {position} has an invalid ArduPilot name"
-            )
-        raw_value = item.get("value")
-        if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
-            raise ValueError(
-                f"Snapshot parameter {position} value must be a JSON number"
-            )
-        value = float(raw_value)
-        if not math.isfinite(value):
-            raise ValueError("Snapshot contains a non-finite parameter value")
-        param_type = _json_integer(item, "param_type", position)
-        index = _json_integer(item, "index", position)
-        count = _json_integer(item, "count", position)
-        if not MIN_MAV_PARAM_TYPE <= param_type <= MAX_MAV_PARAM_TYPE:
-            raise ValueError(
-                f"Snapshot parameter {position} param_type must be between "
-                f"{MIN_MAV_PARAM_TYPE} and {MAX_MAV_PARAM_TYPE}"
-            )
-        if index < 0:
-            raise ValueError(
-                f"Snapshot parameter {position} index must not be negative"
-            )
-        if not 1 <= count <= MAX_PARAMETER_COUNT:
-            raise ValueError(
-                f"Snapshot parameter {position} count must be between 1 and "
-                f"{MAX_PARAMETER_COUNT}"
-            )
-        records.append(
-            ParameterRecord(
-                name=name,
-                value=value,
-                param_type=param_type,
-                index=index,
-                count=count,
-            )
-        )
+    records = [_record_from_json(item, position) for position, item in enumerate(items)]
 
     expected = len(records)
     if not records:
@@ -139,6 +128,28 @@ def records_from_json(items: list[dict[str, Any]]) -> list[ParameterRecord]:
             f"Snapshot is incomplete: received {expected}, announced {sorted(announced)}"
         )
     return records
+
+
+def _completed_parameters(
+    by_index: dict[int, ParameterRecord],
+) -> list[ParameterRecord]:
+    records = list(by_index.values())
+    if len({record.name for record in records}) != len(records):
+        raise RuntimeError("Flight controller returned duplicate parameter names")
+    return sorted(records, key=lambda record: record.name)
+
+
+def _request_missing_parameters(
+    connection: Any,
+    expected: int,
+    by_index: dict[int, ParameterRecord],
+    system: int,
+    component: int,
+    batch: int,
+) -> None:
+    missing = [index for index in range(expected) if index not in by_index]
+    for index in missing[:batch]:
+        connection.mav.param_request_read_send(system, component, b"", index)
 
 
 def download_all_parameters(
@@ -179,11 +190,8 @@ def download_all_parameters(
             component_id=target_component,
         ):
             message_type = message.get_type()
-            if message_type == "HEARTBEAT":
-                if heartbeat_is_armed(message):
-                    raise RuntimeError(
-                        "Vehicle became ARMED; parameter download aborted."
-                    )
+            if message_type == "HEARTBEAT" and heartbeat_is_armed(message):
+                raise RuntimeError("Vehicle became ARMED; parameter download aborted.")
             elif message_type == "PARAM_VALUE":
                 count = int(message.param_count)
                 index = int(message.param_index)
@@ -200,22 +208,17 @@ def download_all_parameters(
                 last_parameter = now
 
         if expected is not None and len(by_index) == expected:
-            records = list(by_index.values())
-            if len({record.name for record in records}) != expected:
-                raise RuntimeError(
-                    "Flight controller returned duplicate parameter names"
-                )
-            return sorted(records, key=lambda record: record.name)
+            return _completed_parameters(by_index)
 
         if expected is not None and now - last_parameter >= retry_after:
-            missing = [index for index in range(expected) if index not in by_index]
-            for index in missing[:retry_batch]:
-                connection.mav.param_request_read_send(
-                    target_system,
-                    target_component,
-                    b"",
-                    index,
-                )
+            _request_missing_parameters(
+                connection,
+                expected,
+                by_index,
+                target_system,
+                target_component,
+                retry_batch,
+            )
             last_parameter = now
 
     if expected is None:

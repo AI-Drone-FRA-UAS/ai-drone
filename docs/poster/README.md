@@ -4,7 +4,7 @@ Archivierte Präsentation, Stand August 2026, übernommen aus main bei
 `24d3bff0ad19c074be443ac5249e1b31c73d6d80`. Die PDF-Dateien bleiben unverändert.
 Ihre Firmware-, Funk-, Servo- und Flugbeschreibungen sind keine aktuellen
 Betriebsanweisungen. Der aktuelle Stand steht in der [Konfiguration](../DRONE_CONFIGURATION.md)
-und im [Flugtestverfahren](../PI_MAVLINK_CONTROL.md).
+und im [Flugtestverfahren](../OPERATIONS.md#takeoff-loiter-and-landing).
 
 `plakat.html` ist die Quelle: eine einzelne HTML-Datei, gesetzt für **A1 hoch
 (594 × 841 mm)**, ohne externe Abhängigkeiten. Daraus entstehen vier Druckstände:
@@ -106,6 +106,6 @@ sollte es mindestens 1600 px breit sein.
 ## Quellen des Inhalts
 
 Der Text stammt aus `docs/drone-project.md`, `docs/DRONE_CONFIGURATION.md`,
-`docs/APRILTAG_MISSION.md`, `docs/FRAME_AND_3D_PRINTS.md`, dem
+`docs/SOFTWARE_ARCHITECTURE.md#remaining-stages`, `docs/FRAME_AND_3D_PRINTS.md`, dem
 AprilTag-Durchsatztest in `state/2026-08-18/camera-apriltag-benchmark.json` und
 dem heute [archivierten Flugprotokoll](../../notes/archive/preflight-and-nogps-takeoff/README.md).

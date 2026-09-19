@@ -16,69 +16,22 @@ from ai_drone.mount import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="drone-mount",
+        prog="scripts/mount.py",
         description="Direct payload mount control (open / close / set).",
     )
-    subparsers = parser.add_subparsers(
-        dest="action",
-        required=True,
-        help="Mount action to perform",
-    )
-
-    open_parser = subparsers.add_parser(
-        "open",
-        help="Open the payload mount (servo -> 0.0)",
-    )
-    open_parser.add_argument(
-        "--settle",
-        "-s",
-        type=float,
-        default=DEFAULT_SETTLE_S,
-        help=f"Settle time in seconds (default: {DEFAULT_SETTLE_S})",
-    )
-    open_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Test without moving physical hardware",
-    )
-
-    close_parser = subparsers.add_parser(
-        "close",
-        help="Close the payload mount (servo -> -1.0)",
-    )
-    close_parser.add_argument(
-        "--settle",
-        "-s",
-        type=float,
-        default=DEFAULT_SETTLE_S,
-        help=f"Settle time in seconds (default: {DEFAULT_SETTLE_S})",
-    )
-    close_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Test without moving physical hardware",
-    )
-
-    set_parser = subparsers.add_parser(
-        "set",
-        help="Set the servo to a specific normalized position or pulse width",
-    )
-    set_parser.add_argument(
-        "value",
-        help="Target position (-1.0 to 1.0, e.g. '0.0', '1500us', '-30deg')",
-    )
-    set_parser.add_argument(
-        "--settle",
-        "-s",
-        type=float,
-        default=DEFAULT_SETTLE_S,
-        help=f"Settle time in seconds (default: {DEFAULT_SETTLE_S})",
-    )
-    set_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Test without moving physical hardware",
-    )
+    commands = parser.add_subparsers(dest="action", required=True)
+    for name, help_text in (
+        ("open", "open the mount (servo -> 0.0)"),
+        ("close", "close the mount (servo -> -1.0)"),
+        ("set", "set a normalized position, pulse width, or angle"),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        if name == "set":
+            command.add_argument("value", help="e.g. 0.0, 1500us, or -30deg")
+        command.add_argument("--settle", "-s", type=float, default=DEFAULT_SETTLE_S)
+        command.add_argument(
+            "--dry-run", action="store_true", help="no hardware movement"
+        )
 
     return parser
 

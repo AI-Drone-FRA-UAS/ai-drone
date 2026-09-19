@@ -5,10 +5,13 @@ import shlex
 import shutil
 import subprocess
 import tarfile
+import time
+from functools import partial
 from pathlib import Path
 
 import pytest
 
+from ai_drone.cli import deploy as deploy_pi
 from ai_drone.link import deploy
 from ai_drone.link.targets import DeployTarget
 
@@ -31,15 +34,11 @@ def _plan(
     project_dir: str = "/home/seb/ai-drone",
     *,
     user: str = "seb",
-    sync_method: str = "rsync",
     dry_run: bool = False,
 ) -> deploy.DeployPlan:
     return deploy.DeployPlan(
         target=_target(project_dir, user=user),
-        mode=None,
-        extra_args=(),
         dry_run=dry_run,
-        sync_method=sync_method,
     )
 
 
@@ -52,14 +51,13 @@ def _write_file(root: Path, relative: str, content: str = "content\n") -> Path:
 
 def _write_runtime_source(root: Path) -> None:
     _write_file(root, "README.md", "# ai-drone\n")
+    _write_file(root, "drone.example.toml", "[runtime]\n")
     _write_file(root, "pyproject.toml", "[project]\nname = 'ai-drone'\n")
     _write_file(root, "uv.lock", "version = 1\n")
     _write_file(root, "ai_drone/__init__.py", "")
     _write_file(root, "ai_drone/runtime.py", "VALUE = 1\n")
-    _write_file(root, "scripts/ai-drone-network", "#!/bin/sh\n")
-    _write_file(root, "scripts/ai-drone-network.service", "[Service]\n")
+    _write_file(root, "scripts/network.py", "# network helper\n")
     _write_file(root, "scripts/usb0-static.service", "[Service]\n")
-    _write_file(root, "scripts/setup-pi-dual-network.sh", "#!/bin/sh\n")
     _write_file(root, "scripts/setup-pi-hotspot.sh", "#!/bin/sh\n")
 
 
@@ -71,10 +69,6 @@ def _write_deployment_metadata(root: Path, deployment_id: str = DEPLOYMENT_ID) -
     (root / deploy.SENTINEL_NAME).write_text(
         f"{deploy.SENTINEL_PREFIX}{deployment_id}\n"
     )
-
-
-def _run_cleanup(root: Path, deployment_id: str = DEPLOYMENT_ID) -> int:
-    return deploy._cleanup_entry(deployment_id, root)
 
 
 @pytest.mark.parametrize(
@@ -143,7 +137,7 @@ def test_invalid_remote_directory_is_rejected_before_sync(
     monkeypatch.setattr(deploy.subprocess, "run", unexpected_run)
 
     with pytest.raises(ValueError, match="PI_DIR"):
-        deploy.sync_project(_plan("/home/seb"))
+        deploy._deploy_transaction(_plan("/home/seb"))
 
     assert called is False
 
@@ -166,59 +160,6 @@ def test_remote_preflight_checks_realpath_type_and_owner() -> None:
         subprocess.run(["sh", "-n", "-c", shell_command[2]], check=True)
 
 
-@pytest.mark.parametrize("sync_method", ["rsync", "tar"])
-def test_remote_preflight_runs_before_sync_without_network(
-    tmp_path: Path, sync_method: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _write_runtime_source(tmp_path)
-    calls: list[list[str]] = []
-
-    def fake_run(
-        command: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(command))
-        return subprocess.CompletedProcess(command, 0)
-
-    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
-
-    deploy.sync_project(_plan(sync_method=sync_method), tmp_path)
-
-    assert calls[0][:2] == ["ssh", "seb@drone"]
-    assert "realpath -m" in calls[0][-1]
-    if sync_method == "rsync":
-        assert calls[1][0] == "rsync"
-    else:
-        assert "tar -xzf" in calls[1][-1]
-        assert "_cleanup_entry" in calls[2][-1]
-
-
-@pytest.mark.parametrize(
-    ("sync_method", "transport_marker"),
-    [("rsync", "rsync -az"), ("tar", "tar -xzf")],
-)
-def test_dry_run_shows_preflight_before_transport(
-    tmp_path: Path,
-    sync_method: str,
-    transport_marker: str,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _write_runtime_source(tmp_path)
-
-    def unexpected_run(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("dry-run must not execute subprocesses")
-
-    monkeypatch.setattr(deploy.subprocess, "run", unexpected_run)
-
-    deploy.sync_project(
-        _plan(sync_method=sync_method, dry_run=True),
-        tmp_path,
-    )
-
-    output = capsys.readouterr().out
-    assert output.index("realpath -m") < output.index(transport_marker)
-
-
 def test_rejects_unsafe_remote_user_before_building_shell_commands() -> None:
     target = DeployTarget(
         ssh_target="pilot@drone",
@@ -232,23 +173,11 @@ def test_rejects_unsafe_remote_user_before_building_shell_commands() -> None:
         deploy._validated_remote_project_dir(target)
 
 
-def test_root_install_uses_root_home_for_uv() -> None:
-    target = DeployTarget(
-        ssh_target="root@drone",
-        user="root",
-        address="drone",
-        project_dir="/root/ai-drone",
-        ssh_config=None,
-    )
-    plan = deploy.DeployPlan(target, None, (), False, "tar")
-
-    assert "PATH=/root/.local/bin:$PATH" in deploy.install_command(plan)[-1]
-
-
 def test_runtime_payload_is_allowlisted_and_omits_secrets(tmp_path: Path) -> None:
     _write_runtime_source(tmp_path)
     _write_file(tmp_path, ".env", "ROOT_SECRET=1\n")
     _write_file(tmp_path, ".env.production", "ROOT_SECRET=2\n")
+    _write_file(tmp_path, "drone.toml", "local settings\n")
     _write_file(tmp_path, "ai_drone/.env", "PACKAGE_SECRET=1\n")
     _write_file(tmp_path, "ai_drone/.env.local", "PACKAGE_SECRET=2\n")
     _write_file(tmp_path, "ai_drone/__pycache__/runtime.pyc")
@@ -265,10 +194,9 @@ def test_runtime_payload_is_allowlisted_and_omits_secrets(tmp_path: Path) -> Non
 
     assert paths >= deploy.REQUIRED_RUNTIME_PATHS
     assert "ai_drone/runtime.py" in paths
-    assert "scripts/ai-drone-network" in paths
-    assert "scripts/ai-drone-network.service" in paths
+    assert "drone.example.toml" in paths
+    assert "scripts/network.py" in paths
     assert "scripts/usb0-static.service" in paths
-    assert "scripts/setup-pi-dual-network.sh" in paths
     assert "scripts/setup-pi-hotspot.sh" in paths
     assert not any(".env" in part for path in paths for part in Path(path).parts)
     assert "ai_drone/__pycache__" not in paths
@@ -277,79 +205,7 @@ def test_runtime_payload_is_allowlisted_and_omits_secrets(tmp_path: Path) -> Non
     assert "scripts/not-deployed.sh" not in paths
     assert "requirements-raspi.txt" not in paths
     assert "artifacts" not in paths
-
-
-def test_rsync_uses_the_same_allowlist_and_protects_remote_state(
-    tmp_path: Path,
-) -> None:
-    command = deploy.rsync_command(_plan(), tmp_path)
-    rules = [
-        command[index + 1]
-        for index, argument in enumerate(command[:-1])
-        if argument == "--filter"
-    ]
-
-    assert command[:4] == ["rsync", "-az", "--delete", "-e"]
-    assert "protect artifacts" in rules
-    assert "protect .venv" in rules
-    assert "protect .git" in rules
-    assert "protect .env" in rules
-    assert "protect .env.*" in rules
-    assert "hide .env" in rules
-    assert "hide .env.*" in rules
-    assert "show /ai_drone/***" in rules
-    assert "show /pyproject.toml" in rules
-    assert "show /uv.lock" in rules
-    assert "show /scripts/ai-drone-network" in rules
-    assert "show /scripts/ai-drone-network.service" in rules
-    assert "show /scripts/usb0-static.service" in rules
-    assert "show /scripts/setup-pi-dual-network.sh" in rules
-    assert rules[-1] == "hide /***"
-    assert command[-1] == "seb@drone:/home/seb/ai-drone/"
-
-
-@pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync is not installed")
-def test_rsync_filters_delete_nonruntime_files_but_preserve_remote_state(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source"
-    destination = tmp_path / "destination"
-    _write_runtime_source(source)
-    _write_file(source, ".env", "SOURCE_SECRET=1\n")
-    _write_file(source, "ai_drone/.env.local", "SOURCE_SECRET=2\n")
-    _write_file(source, "docs/not-deployed.md")
-    _write_file(source, "scripts/not-deployed.sh")
-
-    stale_paths = [
-        _write_file(destination, "docs/stale.md"),
-        _write_file(destination, "scripts/stale.sh"),
-        _write_file(destination, "ai_drone/stale.py"),
-    ]
-    preserved_paths = [
-        _write_file(destination, ".env", "REMOTE_SECRET=1\n"),
-        _write_file(destination, "ai_drone/.env.local", "REMOTE_SECRET=2\n"),
-        _write_file(destination, ".venv/pyvenv.cfg"),
-        _write_file(destination, ".git/config"),
-        _write_file(destination, "artifacts/recording.bin"),
-        _write_file(destination, "ai_drone/__pycache__/runtime.pyc"),
-    ]
-    command = ["rsync", "-a", "--delete"]
-    for rule in deploy._rsync_filter_rules():
-        command.extend(["--filter", rule])
-    command.extend([f"{source}/", f"{destination}/"])
-
-    subprocess.run(command, check=True)
-
-    assert all(not path.exists() for path in stale_paths)
-    assert all(path.exists() for path in preserved_paths)
-    assert (destination / ".env").read_text() == "REMOTE_SECRET=1\n"
-    assert (destination / "ai_drone/.env.local").read_text() == "REMOTE_SECRET=2\n"
-    assert (destination / "ai_drone/runtime.py").is_file()
-    assert (destination / "scripts/ai-drone-network").is_file()
-    assert (destination / "scripts/ai-drone-network.service").is_file()
-    assert (destination / "scripts/usb0-static.service").is_file()
-    assert not (destination / "docs/not-deployed.md").exists()
-    assert not (destination / "scripts/not-deployed.sh").exists()
+    assert "drone.toml" not in paths
 
 
 def test_tar_archive_contains_only_runtime_payload_and_bound_metadata(
@@ -374,8 +230,8 @@ def test_tar_archive_contains_only_runtime_payload_and_bound_metadata(
         archive.unlink(missing_ok=True)
 
     assert names >= deploy.REQUIRED_RUNTIME_PATHS
-    assert "scripts/ai-drone-network" in names
-    assert "scripts/ai-drone-network.service" in names
+    assert "scripts/network.py" in names
+    assert "drone.example.toml" in names
     assert "scripts/usb0-static.service" in names
     assert "ai_drone/.env.production" not in names
     assert "docs/private-notes.md" not in names
@@ -389,72 +245,6 @@ def test_tar_archive_contains_only_runtime_payload_and_bound_metadata(
     assert sentinel == f"{deploy.SENTINEL_PREFIX}{DEPLOYMENT_ID}\n"
 
 
-@pytest.mark.skipif(shutil.which("python3") is None, reason="python3 is not installed")
-def test_tar_cleanup_command_runs_from_the_uploaded_runtime(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    destination = tmp_path / "destination"
-    _write_runtime_source(source)
-    _write_file(source, "ai_drone/link/__init__.py", "")
-    shutil.copy2(Path(deploy.__file__), source / "ai_drone" / "link" / "deploy.py")
-    shutil.copy2(
-        Path(deploy.__file__).with_name("targets.py"),
-        source / "ai_drone" / "link" / "targets.py",
-    )
-    archive = deploy._create_sync_archive(source, DEPLOYMENT_ID)
-    try:
-        destination.mkdir()
-        with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(destination, filter="data")
-    finally:
-        archive.unlink(missing_ok=True)
-    stale = _write_file(destination, "docs/stale.md")
-    artifact = _write_file(destination, "artifacts/recording.bin")
-
-    completed = subprocess.run(
-        shlex.split(deploy._cleanup_script(DEPLOYMENT_ID)),
-        cwd=destination,
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert not stale.exists()
-    assert artifact.is_file()
-    assert not (destination / deploy.MANIFEST_NAME).exists()
-    assert not (destination / deploy.SENTINEL_NAME).exists()
-
-
-def test_valid_tar_cleanup_deletes_stale_source_but_preserves_remote_state(
-    tmp_path: Path,
-) -> None:
-    _write_runtime_source(tmp_path)
-    _write_deployment_metadata(tmp_path)
-    stale_paths = [
-        _write_file(tmp_path, "docs/stale.md"),
-        _write_file(tmp_path, "tests/stale.py"),
-        _write_file(tmp_path, "scripts/stale.sh"),
-        _write_file(tmp_path, "ai_drone/stale.py"),
-    ]
-    preserved_paths = [
-        _write_file(tmp_path, ".env", "SECRET=1\n"),
-        _write_file(tmp_path, "ai_drone/.env.local", "SECRET=2\n"),
-        _write_file(tmp_path, ".venv/pyvenv.cfg"),
-        _write_file(tmp_path, ".git/config"),
-        _write_file(tmp_path, "artifacts/recording.bin"),
-        _write_file(tmp_path, "ai_drone/__pycache__/runtime.pyc"),
-    ]
-
-    completed = _run_cleanup(tmp_path)
-
-    assert completed == 0
-    assert all(not path.exists() for path in stale_paths)
-    assert all(path.exists() for path in preserved_paths)
-    assert (tmp_path / "ai_drone/runtime.py").is_file()
-    assert not (tmp_path / deploy.MANIFEST_NAME).exists()
-    assert not (tmp_path / deploy.SENTINEL_NAME).exists()
-
-
 @pytest.mark.parametrize(
     "failure",
     [
@@ -466,8 +256,8 @@ def test_valid_tar_cleanup_deletes_stale_source_but_preserves_remote_state(
         "incomplete_manifest",
     ],
 )
-def test_tar_cleanup_refuses_invalid_or_missing_metadata_without_deleting(
-    tmp_path: Path, failure: str, capsys: pytest.CaptureFixture[str]
+def test_staged_payload_refuses_invalid_or_missing_metadata(
+    tmp_path: Path, failure: str
 ) -> None:
     _write_runtime_source(tmp_path)
     _write_deployment_metadata(tmp_path)
@@ -492,18 +282,13 @@ def test_tar_cleanup_refuses_invalid_or_missing_metadata_without_deleting(
             manifest["paths"].remove("pyproject.toml")
         manifest_path.write_text(json.dumps(manifest))
 
-    completed = _run_cleanup(tmp_path)
-    captured = capsys.readouterr()
-
-    assert completed == 2
-    assert "Refusing deployment cleanup" in captured.err
+    with pytest.raises(deploy.DeploymentPayloadError):
+        deploy._manifest_paths(tmp_path, DEPLOYMENT_ID)
     assert stale.is_file()
     assert (tmp_path / "ai_drone/runtime.py").is_file()
 
 
-def test_tar_cleanup_rejects_unsafe_manifest_path_before_deleting(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_staged_payload_rejects_unsafe_manifest_path(tmp_path: Path) -> None:
     _write_runtime_source(tmp_path)
     _write_deployment_metadata(tmp_path)
     stale = _write_file(tmp_path, "docs/must-survive.md")
@@ -512,11 +297,8 @@ def test_tar_cleanup_rejects_unsafe_manifest_path_before_deleting(
     manifest["paths"].append("../outside")
     manifest_path.write_text(json.dumps(manifest))
 
-    completed = _run_cleanup(tmp_path)
-    captured = capsys.readouterr()
-
-    assert completed == 2
-    assert "unsafe path" in captured.err
+    with pytest.raises(deploy.DeploymentPayloadError, match="unsafe path"):
+        deploy._manifest_paths(tmp_path, DEPLOYMENT_ID)
     assert stale.is_file()
 
 
@@ -525,3 +307,513 @@ def test_repo_root_points_at_the_actual_repository() -> None:
     assert (deploy.REPO_ROOT / "pyproject.toml").is_file()
     assert (deploy.REPO_ROOT / "ai_drone" / "__init__.py").is_file()
     assert Path(deploy.__file__).resolve().parents[1] == deploy.REPO_ROOT / "ai_drone"
+
+
+@pytest.fixture
+def maintenance_update(tmp_path, monkeypatch):
+    from ai_drone import platform
+    from ai_drone.cli import power
+    from ai_drone.mavlink import remote
+
+    source = tmp_path / "new-source"
+    stage = tmp_path / "stage"
+    project = tmp_path / "installed-old-version"
+    _write_runtime_source(source)
+    _write_file(source, "scripts/setup_runtime.py", "# new installer\n")
+    stage.mkdir(mode=0o700)
+    archive = deploy._create_sync_archive(source, DEPLOYMENT_ID)
+    with tarfile.open(archive) as bundle:
+        bundle.extractall(stage, filter="data")
+    archive.unlink()
+    _write_runtime_source(project)
+    _write_file(project, "ai_drone/runtime.py", "OLD_VERSION = 1\n")
+    _write_file(project, "legacy.py", "old source\n")
+    _write_file(project, ".venv/lib/dependency.py", "old dependency\n")
+    _write_file(project, ".venv/pyvenv.cfg", "old config\n")
+    _write_file(project, ".env", "credentials\n")
+    _write_file(project, "ai_drone/.env", "nested credentials\n")
+    _write_file(project, "drone.toml", "per-machine configuration\n")
+    _write_file(project, "artifacts/recording.bin", "camera recording\n")
+    _write_file(project, "drone-music-currently-from-00m17s.wav", "tone recording\n")
+    _write_file(project, "media/34_fuller_less_ambience.wav", "tone reference\n")
+    _write_file(
+        project, "drone-tone-handover-backup-20260909.tar.gz", "recovery archive\n"
+    )
+    _write_file(
+        project, "drone-tone-handover-backup-20260909.sha256", "archive checksum\n"
+    )
+    _write_file(project, "state/2026-09-09/startup-tone.md", "ESC recovery evidence\n")
+    runtime = {
+        "status": "disarmed",
+        "armed": False,
+        "fresh": True,
+        "source_known": True,
+        "system_id": 1,
+        "component_id": 1,
+        "updated_monotonic": power.time.monotonic(),
+        "heartbeat_age_s": 0.1,
+        "control_client": None,
+        "network_busy": False,
+        "clients": 1,
+        "maintenance": False,
+        "closed": False,
+        "error": None,
+        "network_error": None,
+        "socket": "/run/ai-drone/vehicle.sock",
+    }
+    state: dict = {
+        "running": True,
+        "events": [],
+        "runtime": runtime,
+        "project": project,
+        "stage": stage,
+    }
+
+    def snapshot():
+        state["events"].append("snapshot")
+        return {
+            "complete": True,
+            "packages": [],
+            "package_database_ok": True,
+            "hardware": (
+                [{"device": "/dev/ttyAMA0", "runtime": True}]
+                if state["running"]
+                else []
+            ),
+            "walk": {"ActiveState": "inactive"},
+            "runtime": state["runtime"] if state["running"] else None,
+        }
+
+    def service(action):
+        state["events"].append(action)
+        state["running"] = action == "start"
+
+    def request(_socket, request, **_kwargs):
+        state["events"].append(request)
+        return state["runtime"] if request == {"status": True} else request
+
+    monkeypatch.setattr(platform, "is_raspberry_pi", lambda: True)
+    monkeypatch.setattr(power, "_pi_snapshot", snapshot)
+    monkeypatch.setattr(
+        power,
+        "_probe_fc",
+        lambda _device: {"status": "disarmed", "heartbeat_age_s": 0.1},
+    )
+    monkeypatch.setattr(
+        deploy_pi,
+        "_runtime_service_state",
+        lambda **_kwargs: "active" if state["running"] else "inactive",
+    )
+    monkeypatch.setattr(deploy_pi, "_runtime_service", service)
+    monkeypatch.setattr(remote, "runtime_request", request)
+    monkeypatch.setattr(
+        deploy_pi,
+        "_install_local",
+        lambda project, **_: state["events"].append("install"),
+    )
+    return state
+
+
+def apply_update(state):
+    deploy_pi._apply_staged_update(
+        state["stage"], state["project"], DEPLOYMENT_ID, offline=True
+    )
+
+
+def assert_local_state_preserved(project):
+    assert (project / ".env").read_text() == "credentials\n"
+    assert (project / "ai_drone/.env").read_text() == "nested credentials\n"
+    assert (project / "drone.toml").read_text() == "per-machine configuration\n"
+    assert (project / "artifacts/recording.bin").read_text() == "camera recording\n"
+    assert (
+        project / "drone-music-currently-from-00m17s.wav"
+    ).read_text() == "tone recording\n"
+    assert (
+        project / "media/34_fuller_less_ambience.wav"
+    ).read_text() == "tone reference\n"
+    assert (
+        project / "drone-tone-handover-backup-20260909.tar.gz"
+    ).read_text() == "recovery archive\n"
+    assert (
+        project / "drone-tone-handover-backup-20260909.sha256"
+    ).read_text() == "archive checksum\n"
+    assert (
+        project / "state/2026-09-09/startup-tone.md"
+    ).read_text() == "ESC recovery evidence\n"
+
+
+def test_transaction_updates_old_checkout_after_gate_and_restarts_runtime(
+    maintenance_update,
+):
+    state = maintenance_update
+    apply_update(state)
+    project = state["project"]
+    assert (project / "ai_drone/runtime.py").read_text() == "VALUE = 1\n"
+    assert not (project / "legacy.py").exists()
+    assert (project / "scripts/setup_runtime.py").is_file()
+    assert_local_state_preserved(project)
+    assert state["events"] == [
+        "snapshot",
+        {"maintenance": True},
+        "stop",
+        "snapshot",
+        "snapshot",
+        "install",
+        "start",
+        {"status": True},
+    ]
+    assert not list(project.parent.glob(".ai-drone-rollback-*"))
+
+
+def test_failed_install_restores_source_environment_and_restarts_old_runtime(
+    maintenance_update, monkeypatch
+):
+    state = maintenance_update
+
+    def fail(project, **_):
+        (project / ".venv/lib/dependency.py").unlink()
+        _write_file(project, ".venv/lib/new-dependency.py", "partly installed\n")
+        _write_file(project, ".venv/pyvenv.cfg", "new config\n")
+        raise RuntimeError("dependency installation failed")
+
+    monkeypatch.setattr(deploy_pi, "_install_local", fail)
+    with pytest.raises(RuntimeError, match="dependency installation failed"):
+        apply_update(state)
+    project = state["project"]
+    assert (project / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+    assert (project / "legacy.py").read_text() == "old source\n"
+    assert (project / ".venv/lib/dependency.py").read_text() == "old dependency\n"
+    assert (project / ".venv/pyvenv.cfg").read_text() == "old config\n"
+    assert not (project / ".venv/lib/new-dependency.py").exists()
+    assert_local_state_preserved(project)
+    assert "start" in state["events"]
+    assert {"maintenance": False} in state["events"]
+    (backup,) = project.parent.glob(".ai-drone-rollback-*")
+    assert backup.stat().st_mode & 0o777 == 0o700
+    assert (backup / ".venv/lib/dependency.py").read_text() == "old dependency\n"
+    assert not (backup / "drone.toml").exists()
+    assert not (backup / "artifacts").exists()
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ({"armed": True}, "armed"),
+        ({"fresh": False}, "stale or unknown"),
+        ({"clients": 2}, "runtime client"),
+        ({"control_client": "owner"}, "control or network"),
+        ({"network_busy": True}, "control or network"),
+        ({"maintenance": True}, "existing maintenance"),
+    ],
+)
+def test_transaction_blocks_unsafe_runtime_before_stop_or_source_mutation(
+    maintenance_update, change, reason
+):
+    state = maintenance_update
+    state["runtime"].update(change)
+    with pytest.raises(RuntimeError, match=reason):
+        apply_update(state)
+    assert state["events"] == ["snapshot"]
+    assert (state["project"] / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+
+
+def test_transaction_refuses_insufficient_rollback_space_before_maintenance(
+    maintenance_update, monkeypatch
+):
+    state = maintenance_update
+    monkeypatch.setattr(
+        deploy_pi.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(1, 1, 0)
+    )
+    with pytest.raises(RuntimeError, match="insufficient free space"):
+        apply_update(state)
+    assert state["events"] == ["snapshot"]
+
+
+def test_legacy_install_without_runtime_still_requires_fresh_disarmed_fc(
+    maintenance_update, monkeypatch
+):
+    from ai_drone.cli import power
+
+    state = maintenance_update
+    state["running"] = False
+    monkeypatch.setattr(power, "_probe_fc", lambda _: {"status": "unavailable"})
+    with pytest.raises(RuntimeError, match="disarmed state"):
+        apply_update(state)
+    assert state["events"] == ["snapshot"]
+
+
+def test_legacy_install_without_runtime_does_not_start_a_new_service(
+    maintenance_update,
+):
+    state = maintenance_update
+    state["running"] = False
+    apply_update(state)
+    assert state["events"] == ["snapshot", "snapshot", "snapshot", "install"]
+
+
+def test_service_stop_failure_releases_latch_and_leaves_source_untouched(
+    maintenance_update, monkeypatch
+):
+    state = maintenance_update
+
+    def service(action):
+        state["events"].append(action)
+        if action == "stop":
+            raise RuntimeError("stop failed")
+
+    monkeypatch.setattr(deploy_pi, "_runtime_service", service)
+    with pytest.raises(RuntimeError, match="stop failed"):
+        apply_update(state)
+    assert state["events"] == [
+        "snapshot",
+        {"maintenance": True},
+        "stop",
+        "start",
+        {"status": True},
+        {"maintenance": False},
+    ]
+    assert (state["project"] / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+
+
+def test_restart_failure_preserves_backup_for_recovery(maintenance_update, monkeypatch):
+    state = maintenance_update
+
+    def service(action):
+        if action == "start":
+            raise RuntimeError("restart failed")
+        state["running"] = False
+
+    monkeypatch.setattr(deploy_pi, "_runtime_service", service)
+    with pytest.raises(RuntimeError, match="restart failed"):
+        apply_update(state)
+    (backup,) = state["project"].parent.glob(".ai-drone-rollback-*")
+    assert (backup / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+
+
+def test_staged_deploy_bootstraps_uploaded_code_not_old_cwd_package(
+    tmp_path, monkeypatch
+):
+    _write_runtime_source(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        deploy.subprocess, "run", lambda command, **kwargs: calls.append(command)
+    )
+    deploy._deploy_transaction(_plan(), tmp_path)
+    assert "realpath -m" in calls[0][-1]
+    assert "umask 077; mkdir" in calls[1][-1]
+    assert "tar -xzf" in calls[1][-1]
+    bootstrap = calls[2][-1]
+    assert "PYTHONPATH=/tmp/ai-drone-deploy-" in bootstrap
+    assert "--python /home/seb/ai-drone/.venv/bin/python python -P -c" in bootstrap
+    assert "_transaction_entry" in bootstrap
+    assert "from ai_drone.cli.deploy import _transaction_entry" in bootstrap
+    assert "--no-project --no-config --offline" in bootstrap
+
+
+def test_transaction_preview_never_executes(tmp_path, monkeypatch, capsys):
+    _write_runtime_source(tmp_path)
+    monkeypatch.setattr(
+        deploy.subprocess, "run", lambda *_args, **_: pytest.fail("executed")
+    )
+    deploy._deploy_transaction(_plan(dry_run=True), tmp_path)
+    output = capsys.readouterr().out
+    assert "verify disarmed idle state" in output
+    assert "_transaction_entry" in output
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_dependency_install_uses_uv_offline_and_preserves_pi_system_packages(
+    tmp_path, monkeypatch, configured
+):
+    if configured:
+        _write_file(
+            tmp_path, ".venv/pyvenv.cfg", "include-system-site-packages = true\n"
+        )
+    calls = []
+    monkeypatch.setattr(deploy_pi.shutil, "which", lambda _: "/home/seb/.local/bin/uv")
+    monkeypatch.setattr(
+        deploy.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)),
+    )
+    deploy_pi._install_local(tmp_path, offline=True)
+    commands = [command for command, _kwargs in calls]
+    assert commands[-1] == [
+        "/home/seb/.local/bin/uv",
+        "sync",
+        "--locked",
+        "--python",
+        ".venv/bin/python",
+        "--no-dev",
+        "--group",
+        "raspi",
+        "--offline",
+    ]
+    assert all(kwargs == {"cwd": tmp_path, "check": True} for _, kwargs in calls)
+    if configured:
+        assert len(commands) == 1
+    else:
+        assert commands[0] == [
+            "/home/seb/.local/bin/uv",
+            "venv",
+            "--clear",
+            "--python",
+            "/usr/bin/python3",
+            "--system-site-packages",
+            ".venv",
+        ]
+
+
+def test_arming_during_backup_prevents_source_mutation(maintenance_update, monkeypatch):
+    from ai_drone.cli import power
+
+    state = maintenance_update
+    observations = iter(
+        [
+            {"status": "disarmed", "heartbeat_age_s": 0.1},
+            {"status": "armed", "heartbeat_age_s": 0.1},
+        ]
+    )
+    monkeypatch.setattr(power, "_probe_fc", lambda _: next(observations))
+    with pytest.raises(RuntimeError, match="disarmed state"):
+        apply_update(state)
+    assert "install" not in state["events"]
+    assert "start" in state["events"]
+    assert (state["project"] / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+
+
+def test_failed_rollback_keeps_runtime_stopped_and_preserves_backup(
+    maintenance_update, monkeypatch
+):
+    state = maintenance_update
+    copy = deploy_pi._copy_paths
+
+    def copy_paths(source, destination, paths):
+        if source.name.startswith(".ai-drone-rollback-"):
+            raise OSError("restore failed")
+        return copy(source, destination, paths)
+
+    def install(*_args, **_kwargs):
+        raise RuntimeError("installation failed")
+
+    monkeypatch.setattr(deploy_pi, "_copy_paths", copy_paths)
+    monkeypatch.setattr(deploy_pi, "_install_local", install)
+    with pytest.raises(OSError, match="restore failed"):
+        apply_update(state)
+    assert "start" not in state["events"]
+    (backup,) = state["project"].parent.glob(".ai-drone-rollback-*")
+    assert (backup / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"fresh": False},
+        {"source_known": False},
+        {"component_id": 2},
+        {"closed": True},
+        {"error": "FC reader stopped"},
+        {"network_error": "policy initialization failed"},
+        {"heartbeat_age_s": 3},
+        {"heartbeat_age_s": -0.1},
+        {"heartbeat_age_s": float("nan")},
+        {"heartbeat_age_s": True},
+        {"updated_monotonic": float("inf")},
+        {"updated_monotonic": -100},
+    ],
+)
+def test_unhealthy_restart_preserves_backup_and_never_stops_new_clients(
+    maintenance_update, monkeypatch, failure
+):
+    state = maintenance_update
+    service = deploy_pi._runtime_service
+
+    def restart(action):
+        service(action)
+        if action == "start":
+            # Type=simple start succeeded, but its new process is not healthy.
+            state["runtime"].update(failure)
+            state["runtime"]["clients"] = 4
+            state["runtime"]["control_client"] = "new-control-owner"
+
+    monkeypatch.setattr(deploy_pi, "_runtime_service", restart)
+    monkeypatch.setattr(
+        deploy_pi,
+        "_wait_runtime_ready",
+        partial(deploy_pi._wait_runtime_ready, timeout=0.01),
+    )
+    with pytest.raises(RuntimeError, match="did not report healthy FC telemetry"):
+        apply_update(state)
+    assert state["events"].count("stop") == 1
+    assert state["events"].count("start") == 1
+    assert state["running"] is True
+    assert (state["project"] / "ai_drone/runtime.py").read_text() == "VALUE = 1\n"
+    (backup,) = state["project"].parent.glob(".ai-drone-rollback-*")
+    assert backup.stat().st_mode & 0o777 == 0o700
+    assert (backup / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
+    assert (backup / ".venv/lib/dependency.py").read_text() == "old dependency\n"
+
+
+def test_ready_restart_accepts_new_armed_controller_without_operator(
+    maintenance_update, monkeypatch
+):
+    state = maintenance_update
+    service = deploy_pi._runtime_service
+
+    def restart(action):
+        service(action)
+        if action == "start":
+            state["runtime"].update(
+                armed=True,
+                status="armed",
+                clients=4,
+                control_client="new-control-owner",
+                operator_alive=False,
+            )
+
+    monkeypatch.setattr(deploy_pi, "_runtime_service", restart)
+    apply_update(state)
+    assert state["events"].count("stop") == 1
+    assert state["events"].count("start") == 1
+    assert not list(state["project"].parent.glob(".ai-drone-rollback-*"))
+
+
+def test_restart_readiness_waits_for_rpc_and_active_service(
+    maintenance_update, monkeypatch
+):
+    from ai_drone.mavlink import remote
+
+    state = maintenance_update
+    requests = iter(
+        [ConnectionRefusedError("booting"), state["runtime"], state["runtime"]]
+    )
+    services = iter(["inactive", "active"])
+
+    def status(_socket, request, *, timeout):
+        assert request == {"status": True}
+        assert 0 < timeout <= 1
+        reply = next(requests)
+        if isinstance(reply, Exception):
+            raise reply
+        return {**reply, "updated_monotonic": time.monotonic()}
+
+    monkeypatch.setattr(remote, "runtime_request", status)
+    monkeypatch.setattr(deploy_pi, "_runtime_service_state", lambda **_: next(services))
+    deploy_pi._wait_runtime_ready(state["runtime"]["socket"], timeout=1)
+    assert next(requests, None) is None
+    assert next(services, None) is None
+
+
+def test_restart_readiness_rejects_a_stale_status_even_with_fresh_flag(
+    maintenance_update, monkeypatch
+):
+    from ai_drone.mavlink import remote
+
+    status = {
+        **maintenance_update["runtime"],
+        "updated_monotonic": time.monotonic() - 1.8,
+        "heartbeat_age_s": 0.3,
+    }
+    monkeypatch.setattr(remote, "runtime_request", lambda *_args, **_kwargs: status)
+    with pytest.raises(RuntimeError, match="did not report healthy FC telemetry"):
+        deploy_pi._wait_runtime_ready("unused", timeout=0.01)

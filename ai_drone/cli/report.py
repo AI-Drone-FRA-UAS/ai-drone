@@ -96,7 +96,7 @@ def build_report(
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "recording", type=Path, help="directory produced by drone-inspect or drone-walk"
+        "recording", type=Path, help="directory produced by drone record or drone walk"
     )
     parser.add_argument("--output-dir", type=Path, help="defaults to RECORDING/review")
     parser.add_argument(

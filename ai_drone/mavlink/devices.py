@@ -7,7 +7,7 @@ from pathlib import Path
 STABLE_FLIGHT_CONTROLLER_DEVICE = Path(
     "/dev/serial/by-id/usb-ArduPilot_FlywooF745_200023000451333436353531-if00"
 )
-NETWORK_ENDPOINT_PREFIXES = ("udp:", "tcp:", "tcpin:", "udpout:", "tcpout:")
+NETWORK_ENDPOINT_PREFIXES = ("udp:", "tcp:", "tcpin:", "udpout:", "tcpout:", "unix:")
 
 
 def is_network_endpoint(value: str) -> bool:
@@ -84,6 +84,12 @@ def resolve_mavlink_endpoint(
         value = str(requested)
         if is_network_endpoint(value):
             return value
+    elif include_pi_uart:
+        from ai_drone.settings import load_settings
+
+        shared = Path(load_settings().runtime.socket)
+        if shared.is_socket():
+            return f"unix:{shared}"
     return str(
         find_serial_device(
             requested,

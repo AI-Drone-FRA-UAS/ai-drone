@@ -6,7 +6,7 @@
     <h1>KI-Drohne mit AprilTag-Abwurf</h1>
     <p class="hero-text">
       Von der FPV-Renndrohne zur GPS-freien Indoor-Plattform: ArduPilot als Autopilot,
-      ein Raspberry Pi als Companion-Computer, AprilTag-Erkennung auf der Kamera und ein
+      ein Raspberry Pi als Companion-Computer, AprilTag-Erkennung auf dem Pi und ein
       servogesteuerter Lastenabwurf — mit den Flugversuchen, die dahin geführt haben.
     </p>
     <div class="hero-knoepfe">
@@ -22,7 +22,7 @@
   </div>
 </section>
 
-<section class="band"><div class="band-inner"><p class="hinweis-kasten"><b>Dokumentation konsolidiert am 07.09.2026.</b> Die Betriebsanleitungen beschreiben den gepflegten Code. Fotos, Abwurf-Demonstration und Unfallberichte stammen aus August. Den aktuellen Hardwarestand und offene Prüfungen nennt die <a href="konfiguration.html">Konfigurationsseite</a>; ein autonomer Navigationsflug ist nicht nachgewiesen.</p></div>
+<section class="band"><div class="band-inner"><p class="hinweis-kasten"><b>Dokumentation geprüft am 17.09.2026.</b> Der neue Code und sein Boot-Dienst waren beim letzten Pi-Check am 16.09. noch nicht installiert. Einzelne disarmierte Aufnahmen liefen aus einem Testverzeichnis. Der <a href="eduroam.html#deployment-status">Installationsstand</a> trennt diese Nachweise von ausstehenden Prüfungen. Fotos, Abwurf-Demonstration und Unfallberichte stammen aus August; ein autonomer Navigationsflug ist nicht nachgewiesen.</p></div>
   <div class="band-inner">
     <p class="augenbraue">Ausgangslage</p>
     <h2>Eine Renndrohne, die nur der Pilot fliegen kann</h2>
@@ -65,6 +65,7 @@
 
         <g stroke="var(--linie)" stroke-width="2" fill="none" marker-end="url(#pfeil)">
           <path d="M165 110 V141 H380 V166" />
+          <path d="M70 110 V338" />
           <!-- Kein belegter RC-Empfänger im aktuellen Aufbau. -->
           <path d="M380 276 V310 H155 V338" />
           <path d="M280 382 H341" />
@@ -74,7 +75,8 @@
 
         <g font-family="Inter, sans-serif" font-size="11" fill="var(--text-leise)"
            font-weight="600" letter-spacing=".04em">
-          <text x="272" y="135">USB · MAVLink</text>
+          <text x="230" y="135">USB · MAVLink (Wartung)</text>
+          <text x="82" y="225">WLAN · SSH</text>
           <text x="592" y="135">kein aktiver RC-Link</text>
           <text x="196" y="304">UART4 · MAVLink 2</text>
           <text x="292" y="374">GPIO</text>
@@ -90,7 +92,7 @@
         <text x="60" y="73" font-family="Inter, sans-serif" font-size="12"
               fill="var(--text-leise)">QGroundControl · MAVProxy</text>
         <text x="60" y="92" font-family="Inter, sans-serif" font-size="12"
-              fill="var(--text-leise)">drone-inspect · FC-USB</text>
+              fill="var(--text-leise)">drone connect · SSH über WLAN</text>
 
         <!-- Fernsteuerung -->
         <rect x="630" y="24" width="250" height="86" rx="10"
@@ -183,7 +185,7 @@
         </p>
         <span class="karte-mehr">Backends, Durchsatz und Grenzen →</span>
       </a>
-      <a class="karte" href="abwurf.html">
+      <a class="karte" href="betrieb.html#servo-and-tag-triggered-release">
         <span class="karte-marke">Nutzlast</span>
         <h3>Abwurf auf Kommando</h3>
         <p>
@@ -237,8 +239,9 @@
       <div class="status-zeile">
         <span class="status-punkt">✓</span>
         <span><b>Netzanbindung im Feld</b>
-          Tailscale bei vorhandenem Internet oder der eigene Hotspot. Erreichbarkeit
-          ist vom aktuellen Netzprofil abhängig und wird vor jedem Einsatz geprüft.</span>
+          Beim Check am 16.09. blieb eduroam aktiv; automatischer Hotspot-Start wurde
+          deaktiviert. Der neue Dienst für FC-abhängigen WLAN-Wechsel ist noch zu
+          installieren. Hotspot-Wechsel und Neustart-Wiederherstellung sind offen.</span>
       </div>
       <div class="status-zeile offen">
         <span class="status-punkt">○</span>
@@ -272,81 +275,14 @@
       Die ergänzenden Präsentationsseiten kennzeichnen historische Versuche separat.
     </p>
     <div class="karten">
-      <a class="karte" href="ziele.html">
-        <span class="karte-marke">Projekt</span>
-        <h3>Ziele und Hardware</h3>
-        <p>Die fünf Teilziele der Projektarbeit, die gestellte Ausrüstung und die vollständige Spezifikation des Drohnenaufbaus.</p>
-      </a>
-      <a class="karte" href="apriltag.html">
-        <span class="karte-marke">Projekt</span>
-        <h3>AprilTag-Erkennung und Abwurf</h3>
-        <p>Warum ein geometrischer Marker statt eines neuronalen Netzes, die zwei Backends, der gemessene Durchsatz und wie der Abwurf freigegeben wird.</p>
-      </a>
-      <a class="karte" href="flugversuche.html">
-        <span class="karte-marke">Fliegen</span>
-        <h3>Flugversuche und Absturz</h3>
-        <p>Jeder Startversuch, das Video des Absturzes, die drei gemessenen Ursachen und was daraus im Code geworden ist.</p>
-      </a>
-      <a class="karte" href="architektur.html">
-        <span class="karte-marke">Projekt</span>
-        <h3>Softwarearchitektur</h3>
-        <p>Welcher Code auf welchem Rechner läuft, jedes Kommando, die Umgebungsvariablen und die Testsuite.</p>
-      </a>
-      <a class="karte" href="konfiguration.html">
-        <span class="karte-marke">Hardware</span>
-        <h3>Drohnenkonfiguration</h3>
-        <p>Der verifizierte Stand des Flight Controllers: serielle Ports, Sensorparameter und die beiden Kamerapfade.</p>
-      </a>
-      <a class="karte" href="abwurf.html">
-        <span class="karte-marke">Hardware</span>
-        <h3>Abwurfmechanismus</h3>
-        <p>Servokennwerte, die drei Ansteuerungswege, die mechanischen Randbedingungen und die offene Parametrierung.</p>
-      </a>
-      <a class="karte" href="rahmen.html">
-        <span class="karte-marke">Hardware</span>
-        <h3>Rahmen und 3D-Druck</h3>
-        <p>Die Druckteile im Repository mit Maßen, Material und den Slicer-Einstellungen, mit denen sie gedruckt wurden.</p>
-      </a>
-      <a class="karte" href="mavlink.html">
-        <span class="karte-marke">Fliegen</span>
-        <h3>MAVLink-Steuerung</h3>
-        <p>Der <code>DroneController</code>, Geschwindigkeiten im Body-Frame, die Wächter und die Sicherheitsregeln.</p>
-      </a>
-      <a class="karte" href="verbindung.html">
-        <span class="karte-marke">Fliegen</span>
-        <h3>Laptop ↔ Drohne</h3>
-        <p>Die vollständige USB-Verbindungssequenz, stabile Gerätepfade, MAVProxy-Kommandos und das Herunterfahren.</p>
-      </a>
-      <a class="karte" href="pi-usb-ssh.html">
-        <span class="karte-marke">Raspberry Pi</span>
-        <h3>USB und SSH</h3>
-        <p>Den USB-Gadget-Link und SSH auf einem frischen Pi in Betrieb nehmen, inklusive Fehlersuche am Kabelweg.</p>
-      </a>
-      <a class="karte" href="eduroam.html">
-        <span class="karte-marke">Raspberry Pi</span>
-        <h3>eduroam und Tailscale</h3>
-        <p>Wie der Pi auf dem Campus automatisch ins Hochschulnetz kommt und von überall über Tailscale erreichbar bleibt.</p>
-      </a>
-      <a class="karte" href="hotspot.html">
-        <span class="karte-marke">Raspberry Pi</span>
-        <h3>Hotspot als Rückfallebene</h3>
-        <p>Der eigene Access Point <code>AI-Drone-Zero</code>, die Priorisierung gegenüber bekannten WLANs und die Internetfreigabe vom Mac.</p>
-      </a>
-      <a class="karte" href="session-19-06.html">
-        <span class="karte-marke">Protokolle</span>
-        <h3>Inbetriebnahme</h3>
-        <p>Das vollständige Protokoll der MAVLink- und UART-Inbetriebnahme: jedes Kommando, jeder Fehler, jede Lösung.</p>
-      </a>
-      <a class="karte" href="servo-arduino.html">
-        <span class="karte-marke">Protokolle</span>
-        <h3>Servo am Arduino</h3>
-        <p>Die arduino-cli-Sketches, mit denen Stellbereich und Drehrichtung des Servos vermessen wurden.</p>
-      </a>
-      <a class="karte" href="doku-index.html">
-        <span class="karte-marke">Übersicht</span>
-        <h3>Index aller Dokumente</h3>
-        <p>Die vollständige Landkarte der Dokumentation im Repository, nach Aufgabe gruppiert — auch für alles, was hier keine eigene Karte hat.</p>
-      </a>
+      <a class="karte" href="readme.html"><h3>Einstieg</h3><p>Werkzeuge installieren und die passenden Anleitungen finden.</p></a>
+      <a class="karte" href="eduroam.html"><h3>Einrichtung und Netzwerk</h3><p>Gespeicherte WLANs, Tailscale, ausdrücklich gestarteter Hotspot und USB-Wiederherstellung.</p></a>
+      <a class="karte" href="betrieb.html"><h3>Betriebsanleitung</h3><p>Sensoren prüfen, Daten aufnehmen, Berichte erstellen und begrenzte Aktuatortests durchführen.</p></a>
+      <a class="karte" href="architektur.html"><h3>Entwicklung und Architektur</h3><p>Codegrenzen, Tests, Simulator und noch offene Arbeitsschritte.</p></a>
+      <a class="karte" href="konfiguration.html"><h3>Drohnenkonfiguration</h3><p>Verkabelung, UART-Zuordnung und überprüfbare Parameteraufnahmen.</p></a>
+      <a class="karte" href="rahmen.html"><h3>Rahmen und 3D-Druck</h3><p>Druckteile, Maße, Material und Slicer-Einstellungen.</p></a>
+      <a class="karte" href="firmware.html"><h3>Firmware und Simulator</h3><p>Build-Nachweise und die exakten Simulator-Abnahmekriterien.</p></a>
+      <a class="karte" href="flugversuche.html"><h3>Historische Flugversuche</h3><p>Archivierte Versuche, Ursachenanalyse und zugehörige Nachweise.</p></a>
     </div>
   </div>
 </section>

@@ -124,7 +124,7 @@ def test_status_still_inspects_usb_when_pi_unavailable(monkeypatch, capsys):
     assert "USB networking is not power proof" in output
     for choice in power.REMOVALS:
         assert f"{choice}: blocked (Pi status unavailable:" in output
-        assert f"drone-power prepare {choice}" in output
+        assert f"python scripts/power.py prepare {choice}" in output
 
 
 def test_status_missing_both_devices_is_blocked(monkeypatch, capsys):
@@ -627,3 +627,172 @@ def test_owners_fails_closed_on_incomplete_scan(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="incomplete"):
         power._owners()
+
+
+def runtime_status(**changes):
+    return {
+        "status": "disarmed",
+        "armed": False,
+        "fresh": True,
+        "source_known": True,
+        "system_id": 1,
+        "component_id": 1,
+        "heartbeat_age_s": 0.2,
+        "updated_monotonic": power.time.monotonic(),
+        "control_client": None,
+        "network_busy": False,
+        "clients": 1,
+        "maintenance": False,
+        "socket": "/run/ai-drone/vehicle.sock",
+        **changes,
+    }
+
+
+def shared_idle(**changes):
+    return {
+        **idle(),
+        "runtime": runtime_status(**changes),
+        "hardware": [{"device": "/dev/ttyAMA0", "runtime": True, "walk": False}],
+    }
+
+
+def test_known_runtime_owner_uses_shared_fresh_status_without_opening_uart(monkeypatch):
+    snapshot = shared_idle()
+    monkeypatch.setattr(power, "_pi_snapshot", lambda: snapshot)
+    monkeypatch.setattr(power, "_probe_fc", lambda *_: pytest.fail("opened owned UART"))
+    result = power._remote_action("fc")
+    assert result["status"] == "disarmed"
+    assert result["heartbeat_age_s"] >= 0.2
+
+
+@pytest.mark.parametrize(
+    "changes,reason",
+    [
+        ({"armed": True, "status": "armed"}, "armed"),
+        ({"fresh": False}, "stale or unknown"),
+        ({"source_known": False}, "stale or unknown"),
+        ({"system_id": 2}, "stale or unknown"),
+        ({"updated_monotonic": -10}, "stale or unknown"),
+        ({"heartbeat_age_s": 3}, "disarmed state"),
+        ({"control_client": "pilot"}, "control or network"),
+        ({"network_busy": True}, "control or network"),
+        ({"clients": 2}, "another runtime client"),
+        ({"clients": True}, "another runtime client"),
+        ({"clients": None}, "another runtime client"),
+    ],
+)
+def test_shared_runtime_unsafe_or_unknown_state_blocks_power(changes, reason):
+    with pytest.raises(RuntimeError, match=reason):
+        power._guard_idle(shared_idle(**changes))
+
+
+def test_runtime_owner_without_responsive_socket_is_still_busy():
+    snapshot = shared_idle()
+    snapshot["runtime"] = None
+    with pytest.raises(RuntimeError, match="hardware is busy"):
+        power._guard_idle(snapshot)
+
+
+def test_runtime_does_not_excuse_unrelated_hardware_owner():
+    snapshot = shared_idle()
+    snapshot["hardware"].append({"device": "/dev/video0", "walk": False})
+    with pytest.raises(RuntimeError, match="hardware is busy"):
+        power._guard_idle(snapshot)
+
+
+@pytest.mark.parametrize("action", ["idle", "shutdown"])
+def test_shared_final_action_acquires_maintenance_and_never_opens_uart(
+    monkeypatch, action
+):
+    calls = []
+    monkeypatch.setattr(power, "_pi_snapshot", lambda: shared_idle())
+    monkeypatch.setattr(power, "_probe_fc", lambda *_: pytest.fail("opened owned UART"))
+    monkeypatch.setattr(
+        power,
+        "runtime_request",
+        lambda _socket, request: calls.append(request) or request,
+    )
+    monkeypatch.setattr(
+        power,
+        "_run",
+        lambda command, **_: calls.append(command) or SimpleNamespace(returncode=0),
+    )
+    result = power._remote_action(action)
+    assert calls[0] == {"maintenance": True}
+    assert {"maintenance": False} not in calls
+    if action == "idle":
+        assert result == {"idle": True, "maintenance": True}
+    else:
+        assert calls[1] == ["sudo", "-n", "systemctl", "poweroff", "--no-block"]
+        assert result == {"shutdown_requested": True, "halt_confirmed": False}
+
+
+def test_shared_failed_shutdown_releases_acquired_maintenance(monkeypatch):
+    calls = []
+    monkeypatch.setattr(power, "_pi_snapshot", lambda: shared_idle())
+    monkeypatch.setattr(
+        power,
+        "runtime_request",
+        lambda _socket, request: calls.append(request) or request,
+    )
+    monkeypatch.setattr(
+        power, "_run", lambda *_args, **_: SimpleNamespace(returncode=1)
+    )
+    with pytest.raises(RuntimeError, match="rejected the shutdown"):
+        power._remote_action("shutdown")
+    assert calls == [{"maintenance": True}, {"maintenance": False}]
+
+
+def test_failed_maintenance_does_not_release_another_users_latch(monkeypatch):
+    calls = []
+    monkeypatch.setattr(power, "_pi_snapshot", lambda: shared_idle())
+
+    def request(_socket, value):
+        calls.append(value)
+        raise RuntimeError("maintenance already active")
+
+    monkeypatch.setattr(power, "runtime_request", request)
+    with pytest.raises(RuntimeError, match="already active"):
+        power._remote_action("idle")
+    assert calls == [{"maintenance": True}]
+
+
+def test_shared_final_check_refuses_new_arm_and_releases_latch(monkeypatch):
+    calls = []
+    snapshots = iter([shared_idle(), shared_idle(armed=True, status="armed")])
+    monkeypatch.setattr(power, "_pi_snapshot", lambda: next(snapshots))
+    monkeypatch.setattr(
+        power,
+        "runtime_request",
+        lambda _socket, request: calls.append(request) or request,
+    )
+    monkeypatch.setattr(power, "_run", lambda *_args, **_: pytest.fail("shutdown"))
+    with pytest.raises(RuntimeError, match="armed"):
+        power._remote_action("shutdown")
+    assert calls == [{"maintenance": True}, {"maintenance": False}]
+
+
+def test_runtime_status_reads_live_socket_and_preserves_original_observation(
+    tmp_path, monkeypatch
+):
+    socket = tmp_path / "vehicle.sock"
+    socket.touch()
+    monkeypatch.setattr(
+        power,
+        "load_settings",
+        lambda: SimpleNamespace(runtime=SimpleNamespace(socket=str(socket))),
+    )
+    expected = runtime_status()
+    calls = []
+    monkeypatch.setattr(
+        power,
+        "runtime_request",
+        lambda path, request, **kwargs: (
+            calls.append((path, request, kwargs)) or expected
+        ),
+    )
+    result = power._runtime_status()
+    assert result is not None
+    assert result["updated_monotonic"] == expected["updated_monotonic"]
+    assert result["socket"] == str(socket)
+    assert calls == [(str(socket), {"status": True}, {"timeout": 3})]

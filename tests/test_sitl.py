@@ -5,11 +5,14 @@ import math
 import os
 import signal
 import socket
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import closing, contextmanager, suppress
+from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -23,7 +26,9 @@ from ai_drone.cli import control as control_cli
 from ai_drone.cli import record as inspect_cli
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import heartbeat_is_armed
+from ai_drone.operator import create_token, presence_server, read_token
 from ai_drone.recording import request_message_intervals
+from ai_drone.settings import load_settings
 
 ARDUPILOT_COMMIT = "dbe792162d06cab66c3475fd5556bf7a120f119e"
 PARAMETERS = Path(__file__).parent / "sitl" / "copter.parm"
@@ -42,6 +47,125 @@ FORWARD_RANGE_PARAMETERS = {
 }
 
 pytestmark = pytest.mark.sitl
+
+
+@pytest.fixture(autouse=True)
+def operator_presence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Run the real authenticated endpoint independently of every CLI process."""
+    _ardupilot_root()
+    token = tmp_path / "operator.key"
+    create_token(token)
+    assert token.stat().st_mode & 0o777 == 0o600
+    server = presence_server("127.0.0.1", 0, read_token(token))
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.05},
+        name="sitl-operator-presence",
+        daemon=True,
+    )
+    thread.start()
+
+    def stop():
+        if thread.is_alive():
+            server.shutdown()
+            thread.join(timeout=2)
+        server.server_close()
+        assert not thread.is_alive(), "operator presence server did not stop"
+
+    # Linux Unix-socket paths are short; pytest's full test-name paths are not.
+    with tempfile.TemporaryDirectory(prefix="drone-sitl-") as runtime_directory:
+        directory = Path(runtime_directory)
+        config = tmp_path / "drone.toml"
+        config.write_text(
+            "[operator]\n"
+            f'endpoints = ["http://127.0.0.1:{server.server_port}"]\n'
+            f"token_file = {json.dumps(str(token.resolve()))}\n"
+            "interval = 0.2\ntimeout = 2.0\nrequest_timeout = 0.2\n"
+            "[runtime]\n"
+            f"socket = {json.dumps(str(directory / 'vehicle.sock'))}\n"
+            f"status = {json.dumps(str(directory / 'status.json'))}\n"
+            'device = "tcp:127.0.0.1:5760"\n'
+        )
+        monkeypatch.setenv("AI_DRONE_CONFIG", str(config.resolve()))
+        try:
+            yield stop
+        finally:
+            stop()
+
+
+def _python_command(module: str, *arguments: str) -> list[str]:
+    return [
+        "uv",
+        "run",
+        "--no-sync",
+        "--python",
+        sys.executable,
+        "python",
+        "-m",
+        module,
+        *arguments,
+    ]
+
+
+def _child_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    root = str(Path(__file__).resolve().parents[1])
+    previous = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join((root, previous)) if previous else root
+    environment["PYTHONUNBUFFERED"] = "1"
+    return environment
+
+
+def _cli_pid(process: subprocess.Popen[Any]) -> int:
+    """Signal the production Python CLI without terminating its uv supervisor."""
+    pending = [process.pid]
+    while pending:
+        pid = pending.pop()
+        try:
+            command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            if (
+                command
+                and b"python" in Path(os.fsdecode(command[0])).name.encode()
+                and b"ai_drone.cli.main" in command
+            ):
+                return pid
+            for task in Path(f"/proc/{pid}/task").glob("*/children"):
+                pending.extend(int(child) for child in task.read_text().split())
+        except FileNotFoundError:
+            continue
+    pytest.fail("production Python CLI is not running under its uv process")
+
+
+@contextmanager
+def _running_cli(tmp_path: Path, name: str, *arguments: str):
+    output = tmp_path / f"{name}.log"
+    with output.open("w") as handle:
+        process = subprocess.Popen(
+            _python_command("ai_drone.cli.main", *arguments),
+            cwd=tmp_path,
+            env=_child_environment(),
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            yield process, output
+        finally:
+            _stop_process(process)
+
+
+def _wait_for_cli(predicate, process, output: Path, *, timeout: float = 15.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            pytest.fail(
+                f"CLI exited with {process.returncode}: {output.read_text()[-4000:]}"
+            )
+        if predicate():
+            return
+        time.sleep(0.05)
+    pytest.fail(f"CLI did not become ready: {output.read_text()[-4000:]}")
 
 
 def _ardupilot_root() -> Path:
@@ -76,7 +200,7 @@ def _wait_for_tcp(process: subprocess.Popen[bytes], timeout: float = 30.0) -> No
     pytest.fail("SITL did not listen on TCP port 5760 within 30 seconds")
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
+def _stop_process(process: subprocess.Popen[Any]) -> None:
     if process.poll() is not None:
         return
     os.killpg(process.pid, signal.SIGTERM)
@@ -120,6 +244,7 @@ class _ExternalMavlinkSensors:
         self.flight_modes: list[str] = []
         self.armed_states: list[bool] = []
         self.flight_states: list[tuple[str, bool]] = []
+        self.flight_observations: list[tuple[float, str, bool]] = []
         self.altitudes_m: list[float] = []
         self.altitudes_by_mode: list[tuple[str | None, float]] = []
         self.ekf_by_mode: list[tuple[str | None, int]] = []
@@ -162,6 +287,7 @@ class _ExternalMavlinkSensors:
             self.flight_modes.clear()
             self.armed_states.clear()
             self.flight_states.clear()
+            self.flight_observations.clear()
             self.altitudes_m.clear()
             self.altitudes_by_mode.clear()
             self.ekf_by_mode.clear()
@@ -406,6 +532,7 @@ class _ExternalMavlinkSensors:
                 self.flight_modes.append(mode)
                 self.armed_states.append(armed)
                 self.flight_states.append((mode, armed))
+                self.flight_observations.append((time.monotonic(), mode, armed))
             elif message_type == "EKF_STATUS_REPORT":
                 self.ekf_by_mode.append((self._current_mode, int(message.flags)))
             elif message_type == "LOCAL_POSITION_NED":
@@ -441,35 +568,38 @@ class _ExternalMavlinkSensors:
                 self.status_by_mode.append((self._current_mode, text))
             self._condition.notify_all()
 
+    def _configure_streams(self, connection: Any) -> Any:
+        heartbeat = connection.wait_heartbeat(timeout=10)
+        if heartbeat is None:
+            raise TimeoutError("no heartbeat on SITL SERIAL1")
+        self.wire_protocol = str(connection.WIRE_PROTOCOL_VERSION)
+        if self.wire_protocol != "2.0":
+            raise RuntimeError(
+                f"SITL SERIAL1 negotiated MAVLink {self.wire_protocol}, not 2.0"
+            )
+        connection.target_system = heartbeat.get_srcSystem()
+        connection.target_component = heartbeat.get_srcComponent()
+        intervals = {
+            mavlink2.MAVLINK_MSG_ID_SIM_STATE: SENSOR_RATE_HZ,
+            mavlink2.MAVLINK_MSG_ID_HEARTBEAT: 10.0,
+            mavlink2.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
+            mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
+            mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
+        }
+        if self.forward_range_enabled:
+            intervals[mavlink2.MAVLINK_MSG_ID_DISTANCE_SENSOR] = SENSOR_RATE_HZ
+        request_message_intervals(connection, intervals)
+        return mavlink2.MAVLink(
+            connection,
+            srcSystem=254,
+            srcComponent=mavlink2.MAV_COMP_ID_ONBOARD_COMPUTER,
+        )
+
     def _run(self) -> None:
         connection = None
         try:
             connection = self._connect()
-            heartbeat = connection.wait_heartbeat(timeout=10)
-            if heartbeat is None:
-                raise TimeoutError("no heartbeat on SITL SERIAL1")
-            self.wire_protocol = str(connection.WIRE_PROTOCOL_VERSION)
-            if self.wire_protocol != "2.0":
-                raise RuntimeError(
-                    f"SITL SERIAL1 negotiated MAVLink {self.wire_protocol}, not 2.0"
-                )
-            connection.target_system = heartbeat.get_srcSystem()
-            connection.target_component = heartbeat.get_srcComponent()
-            intervals = {
-                mavlink2.MAVLINK_MSG_ID_SIM_STATE: SENSOR_RATE_HZ,
-                mavlink2.MAVLINK_MSG_ID_HEARTBEAT: 10.0,
-                mavlink2.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
-                mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
-                mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
-            }
-            if self.forward_range_enabled:
-                intervals[mavlink2.MAVLINK_MSG_ID_DISTANCE_SENSOR] = SENSOR_RATE_HZ
-            request_message_intervals(connection, intervals)
-            sender = mavlink2.MAVLink(
-                connection,
-                srcSystem=254,
-                srcComponent=mavlink2.MAV_COMP_ID_ONBOARD_COMPUTER,
-            )
+            sender = self._configure_streams(connection)
 
             ground_altitude_m = None
             last_state_at = time.monotonic()
@@ -849,24 +979,14 @@ def test_gcs_heartbeat_loss_in_loiter_lands_and_disarms(
         _assert_running_sitl_configuration(sensors)
         sensors.reset_observations()
 
-        repository_root = Path(__file__).resolve().parents[1]
-        environment = os.environ.copy()
-        prior_pythonpath = environment.get("PYTHONPATH")
-        environment["PYTHONPATH"] = (
-            str(repository_root)
-            if not prior_pythonpath
-            else os.pathsep.join((str(repository_root), prior_pythonpath))
-        )
-        command = [
-            sys.executable,
-            "-m",
+        command = _python_command(
             "ai_drone.cli.control",
             *_production_hover_arguments(duration=60.0),
-        ]
+        )
         hover_process = subprocess.Popen(
             command,
             cwd=tmp_path,
-            env=environment,
+            env=_child_environment(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -902,3 +1022,469 @@ def test_gcs_heartbeat_loss_in_loiter_lands_and_disarms(
             if hover_process.poll() is None:
                 os.killpg(hover_process.pid, signal.SIGKILL)
                 hover_process.wait(timeout=5.0)
+
+
+def test_shared_recording_survives_hangup_and_operator_loss_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operator_presence
+) -> None:
+    """Exercise the production Unix service, recorder and controller together."""
+    root = _ardupilot_root()
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings()
+    socket_path = Path(settings.runtime.socket)
+    status_path = Path(settings.runtime.status)
+    endpoint = f"unix:{socket_path}"
+    dataset = tmp_path / "shared-recording"
+
+    def runtime_ready():
+        try:
+            status = json.loads(status_path.read_text())
+            return (
+                socket_path.is_socket()
+                and status["fresh"]
+                and status["armed"] is False
+                and status["operator_alive"]
+                and status["wifi_required"] is False
+            )
+        except (OSError, ValueError, KeyError):
+            return False
+
+    with _running_sitl(root, tmp_path) as sensors:
+        _assert_running_sitl_configuration(sensors)
+        sensors.reset_observations()
+        with _running_cli(
+            tmp_path, "vehicle-runtime", "runtime", "serve", "--no-network"
+        ) as (runtime_process, runtime_output):
+            _wait_for_cli(runtime_ready, runtime_process, runtime_output)
+            with _running_cli(
+                tmp_path,
+                "passive-recording",
+                "record",
+                "--device",
+                endpoint,
+                "--allow-flight",
+                "--no-video",
+                "--duration",
+                "180",
+                "--output-dir",
+                str(dataset),
+            ) as (record_process, record_output):
+                _wait_for_cli(
+                    lambda: "READY:" in record_output.read_text(),
+                    record_process,
+                    record_output,
+                )
+                arguments = _production_hover_arguments(duration=120.0)
+                arguments[arguments.index("--device") + 1] = endpoint
+                arguments.extend(["--runtime-status", str(status_path), "--foreground"])
+                with _running_cli(
+                    tmp_path, "shared-control", "control", *arguments
+                ) as (control_process, control_output):
+                    sensors.wait_for_mode(
+                        "LOITER", timeout=60.0, process=control_process
+                    )
+                    hangup_at = time.monotonic()
+                    os.kill(_cli_pid(control_process), signal.SIGHUP)
+
+                    # Observe longer than the operator-loss timeout: closing the
+                    # terminal must neither expire presence nor end the flight.
+                    while time.monotonic() - hangup_at < settings.operator.timeout + 2:
+                        assert control_process.poll() is None, (
+                            control_output.read_text()
+                        )
+                        assert record_process.poll() is None, record_output.read_text()
+                        assert runtime_process.poll() is None, (
+                            runtime_output.read_text()
+                        )
+                        sensors.assert_healthy()
+                        with sensors._condition:
+                            assert sensors._current_armed is True
+                            assert sensors._current_mode == "LOITER"
+                        time.sleep(0.1)
+                    assert json.loads(status_path.read_text())["operator_alive"]
+
+                    operator_lost_at = time.monotonic()
+                    operator_presence()
+                    sensors.wait_for_mode("LAND", timeout=settings.operator.timeout + 3)
+                    sensors.wait_for_disarm(timeout=40.0)
+                    assert control_process.wait(timeout=10.0) == 1, (
+                        control_output.read_text()
+                    )
+                    control_exited_utc = time.time()
+                    assert "operator heartbeat lost" in control_output.read_text()
+                    result = sensors.assert_flight_result()
+                    assert result["max_horizontal_drift_m"] <= 0.5, result
+                    _assert_no_navigation_rejections(sensors)
+                    assert not any(
+                        "gcs failsafe" in text.casefold()
+                        for text in sensors.status_texts
+                    ), sensors.status_texts
+
+                    with sensors._condition:
+                        observations = list(sensors.flight_observations)
+                    landed_at = next(
+                        observed
+                        for observed, mode, _armed in observations
+                        if mode == "LAND"
+                    )
+                    latency = landed_at - operator_lost_at
+                    assert 0 <= latency <= settings.operator.timeout + 2.5
+                    assert any(
+                        hangup_at + settings.operator.timeout
+                        <= observed
+                        < operator_lost_at
+                        and mode == "LOITER"
+                        and armed
+                        for observed, mode, armed in observations
+                    )
+
+                    # Controller cleanup closes only its subscription. The
+                    # passive recorder must still receive newly arriving data.
+                    events = dataset / "telemetry.jsonl"
+                    size_at_control_exit = events.stat().st_size
+
+                    def recording_advanced():
+                        if events.stat().st_size <= size_at_control_exit:
+                            return False
+                        text = events.read_text()
+                        lines = text.splitlines()
+                        if not text.endswith("\n"):
+                            lines = lines[:-1]
+                        return bool(lines) and (
+                            datetime.fromisoformat(
+                                json.loads(lines[-1])["timestamp_utc"]
+                            ).timestamp()
+                            > control_exited_utc
+                        )
+
+                    _wait_for_cli(
+                        recording_advanced,
+                        record_process,
+                        record_output,
+                        timeout=3,
+                    )
+                    assert runtime_process.poll() is None
+                    os.kill(_cli_pid(record_process), signal.SIGINT)
+                    assert record_process.wait(timeout=10.0) == 1, (
+                        record_output.read_text()
+                    )
+
+                    manifest = json.loads((dataset / "manifest.json").read_text())
+                    assert manifest["ended_utc"]
+                    assert manifest["error"] == "interrupted by user"
+                    assert manifest["armed_abort"] is False
+                    assert manifest["safety"]["allow_flight"] is True
+                    assert manifest["safety"]["saw_armed"] is True
+                    assert manifest["safety"]["saw_disarmed_after_arm"] is True
+                    assert manifest["components"]["camera"]["status"] == "unavailable"
+                    assert manifest["components"]["flight_controller"]["status"] == "ok"
+                    records = [
+                        json.loads(line) for line in events.read_text().splitlines()
+                    ]
+                    assert any(
+                        datetime.fromisoformat(record["timestamp_utc"]).timestamp()
+                        > control_exited_utc
+                        for record in records
+                    ), "recorder received no new packet after controller exit"
+                    heartbeats = [
+                        record
+                        for record in records
+                        if record["message"] == "HEARTBEAT"
+                        and (record["source_system"], record["source_component"])
+                        == (1, 1)
+                    ]
+                    assert any(
+                        record["fields"]["base_mode"]
+                        & mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+                        for record in heartbeats
+                    )
+                    assert (
+                        not heartbeats[-1]["fields"]["base_mode"]
+                        & mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+                    )
+                    assert (dataset / "telemetry.tlog").stat().st_size > 0
+
+                    flight_manifest_paths = list(
+                        (tmp_path / "artifacts/flights").glob("*/manifest.json")
+                    )
+                    assert len(flight_manifest_paths) == 1
+                    flight_manifest = json.loads(flight_manifest_paths[0].read_text())
+                    assert flight_manifest["completed"] is False
+                    assert "operator heartbeat lost" in flight_manifest["error"]
+                    evidence = {
+                        "hangup_monotonic": hangup_at,
+                        "operator_lost_monotonic": operator_lost_at,
+                        "land_observed_monotonic": landed_at,
+                        "operator_loss_to_land_s": latency,
+                        "operator_timeout_s": settings.operator.timeout,
+                        "flight_observations": observations,
+                        "recorded_heartbeats": len(heartbeats),
+                        **result,
+                    }
+                    (tmp_path / "shared-operator-loss.json").write_text(
+                        json.dumps(evidence, indent=2) + "\n"
+                    )
+                    print(
+                        f"shared capture and operator-loss landing: {json.dumps(evidence)}"
+                    )
+
+
+def _set_sitl_parameter(connection: Any, name: str, value: float) -> None:
+    connection.mav.param_set_send(
+        connection.target_system,
+        connection.target_component,
+        name.encode("ascii"),
+        value,
+        mavlink.MAV_PARAM_TYPE_REAL32,
+    )
+    assert request_parameter(
+        connection, name, timeout=5, require_disarmed=False
+    ) == pytest.approx(value), name
+
+
+@contextmanager
+def _pilot_radio():
+    """Feed the pinned simulator's real UDP receiver, with centered sticks."""
+    # AP_RCProtocol_UDP.cpp accepts eight uint16 PWM values on port 5501.
+    # The mode switch uses this test's FLTMODE2/4/5 configuration.
+    mode_pwm = {"LOITER": 1700, "ALT_HOLD": 1500, "LAND": 1300}
+    frame = [b""]
+
+    def set_mode(mode: str) -> None:
+        frame[0] = struct.pack(
+            "<8H", 1500, 1500, 1500, 1500, mode_pwm[mode], 1000, 1000, 1800
+        )
+
+    set_mode("LOITER")
+    stop = threading.Event()
+    failures: list[Exception] = []
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as connection:
+
+        def transmit() -> None:
+            try:
+                while not stop.is_set():
+                    connection.sendto(frame[0], ("127.0.0.1", 5501))
+                    stop.wait(0.02)
+            except Exception as error:
+                failures.append(error)
+
+        thread = threading.Thread(target=transmit, name="sitl-pilot-radio", daemon=True)
+        thread.start()
+        try:
+            yield set_mode
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+            assert not thread.is_alive(), "SITL pilot radio did not stop"
+            assert not failures, failures
+
+
+def test_pilot_handoff_preserves_control_after_operator_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operator_presence
+) -> None:
+    """A real receiver owns the flight after explicit production handoff."""
+    root = _ardupilot_root()
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings()
+    socket_path = Path(settings.runtime.socket)
+    status_path = Path(settings.runtime.status)
+
+    def runtime_ready():
+        try:
+            status = json.loads(status_path.read_text())
+            return (
+                socket_path.is_socket()
+                and status["fresh"]
+                and status["armed"] is False
+                and status["operator_alive"]
+            )
+        except (OSError, ValueError, KeyError):
+            return False
+
+    def flight_events():
+        paths = list((tmp_path / "artifacts/flights").glob("*/events.jsonl"))
+        if not paths:
+            return []
+        assert len(paths) == 1
+        text = paths[0].read_text()
+        lines = text.splitlines()
+        if not text.endswith("\n"):
+            lines = lines[:-1]
+        return [json.loads(line) for line in lines]
+
+    with _running_sitl(root, tmp_path) as sensors:
+        _assert_running_sitl_configuration(sensors)
+        # SERIAL2 is independent of SERIAL0's production runtime and SERIAL1's
+        # sensors. This link sends parameter commands only, never GCS heartbeats.
+        with closing(
+            mavutil.mavlink_connection(
+                "tcp:127.0.0.1:5763",
+                source_system=253,
+                source_component=mavlink.MAV_COMP_ID_MISSIONPLANNER,
+            )
+        ) as pilot:
+            heartbeat = pilot.wait_heartbeat(timeout=10)
+            assert heartbeat is not None, "no heartbeat on SITL SERIAL2"
+            pilot.target_system = heartbeat.get_srcSystem()
+            pilot.target_component = heartbeat.get_srcComponent()
+            for name, value in {
+                "FLTMODE2": 9,  # radio switch -> LAND
+                "FLTMODE4": 2,  # radio switch -> ALT_HOLD
+                "FLTMODE5": 5,  # centered receiver starts in LOITER
+                "FLTMODE6": 5,  # SITL's first default receiver frame is also LOITER
+            }.items():
+                _set_sitl_parameter(pilot, name, value)
+            gcs_timeout = request_parameter(pilot, "FS_GCS_TIMEOUT")
+            sensors.reset_observations()
+            with _running_cli(
+                tmp_path, "pilot-runtime", "runtime", "serve", "--no-network"
+            ) as (runtime_process, runtime_output):
+                _wait_for_cli(runtime_ready, runtime_process, runtime_output)
+                arguments = _production_hover_arguments(duration=120)
+                arguments[arguments.index("--device") + 1] = f"unix:{socket_path}"
+                arguments.extend(["--runtime-status", str(status_path), "--foreground"])
+                with _running_cli(tmp_path, "pilot-control", "control", *arguments) as (
+                    control_process,
+                    control_output,
+                ):
+                    sensors.wait_for_mode("LOITER", timeout=60, process=control_process)
+                    _wait_for_cli(
+                        lambda: any(
+                            event["event"] == "loiter_started"
+                            for event in flight_events()
+                        ),
+                        control_process,
+                        control_output,
+                    )
+                    with sensors._condition:
+                        assert sensors.rc_channel_counts
+                        assert set(sensors.rc_channel_counts) == {0}
+                    requested_at = time.monotonic()
+                    request = subprocess.run(
+                        _python_command("ai_drone.cli.main", "control", "handoff"),
+                        cwd=tmp_path,
+                        env=_child_environment(),
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    assert request.returncode == 0, request.stdout + request.stderr
+                    _wait_for_cli(
+                        lambda: json.loads(status_path.read_text())["human_requested"],
+                        control_process,
+                        control_output,
+                    )
+
+                    # LOITER is already a pilot mode. Request first, then enable
+                    # real RC; fresh RC must confirm ownership before changing mode.
+                    with _pilot_radio() as pilot_mode:
+                        _set_sitl_parameter(pilot, "SIM_RC_FAIL", 0)
+                        _wait_for_cli(
+                            lambda: any(
+                                event["event"] == "control_owner"
+                                and event.get("owner") == "human"
+                                for event in flight_events()
+                            ),
+                            control_process,
+                            control_output,
+                            timeout=5,
+                        )
+                        handed_off_at = time.monotonic()
+                        pilot_mode("ALT_HOLD")
+                        sensors.wait_for_mode(
+                            "ALT_HOLD", timeout=5, process=control_process
+                        )
+                        operator_lost_at = time.monotonic()
+                        operator_presence()
+                        # Exceed both loss deadlines. Only the production
+                        # controller supplies the FC's GCS heartbeat here.
+                        hold_seconds = max(settings.operator.timeout, gcs_timeout) + 2
+                        while time.monotonic() - operator_lost_at < hold_seconds:
+                            assert control_process.poll() is None, (
+                                control_output.read_text()
+                            )
+                            assert runtime_process.poll() is None, (
+                                runtime_output.read_text()
+                            )
+                            sensors.assert_healthy()
+                            with sensors._condition:
+                                assert sensors._current_armed is True
+                                assert sensors._current_mode == "ALT_HOLD"
+                            time.sleep(0.1)
+                        assert not json.loads(status_path.read_text())["operator_alive"]
+                        pilot_land_at = time.monotonic()
+                        pilot_mode("LAND")
+                        sensors.wait_for_mode(
+                            "LAND", timeout=5, process=control_process
+                        )
+                        sensors.wait_for_disarm(timeout=40)
+                        assert control_process.wait(timeout=10) == 0, (
+                            control_output.read_text()
+                        )
+
+                    observations = list(sensors.flight_observations)
+                    assert all(
+                        mode != "LAND"
+                        for observed, mode, _armed in observations
+                        if requested_at <= observed < pilot_land_at
+                    ), observations
+                    _assert_subsequence(
+                        sensors.mode_transitions(),
+                        ["GUIDED_NOGPS", "LOITER", "ALT_HOLD", "LAND"],
+                    )
+                    assert any(count > 0 for count in sensors.rc_channel_counts)
+                    assert 0.45 <= max(sensors.altitudes_m) < 0.8
+                    pilot_altitudes = [
+                        altitude
+                        for mode, altitude in sensors.altitudes_by_mode
+                        if mode == "ALT_HOLD"
+                    ]
+                    assert pilot_altitudes and min(pilot_altitudes) >= 0.3
+                    _assert_no_navigation_rejections(sensors)
+                    assert not any(
+                        "gcs failsafe" in text.casefold()
+                        for text in sensors.status_texts
+                    ), sensors.status_texts
+                    assert "operator heartbeat lost" not in control_output.read_text()
+                    events = flight_events()
+                    owners = [
+                        event for event in events if event["event"] == "control_owner"
+                    ]
+                    assert [event["owner"] for event in owners] == [
+                        "autonomous",
+                        "human",
+                    ]
+                    assert owners[-1]["mode"] == "LOITER"
+                    assert owners[-1]["rc_channels"] > 0
+                    assert any(event["event"] == "pilot_disarmed" for event in events)
+                    assert not any(
+                        event["event"] == "landing_started" for event in events
+                    )
+                    manifests = list(
+                        (tmp_path / "artifacts/flights").glob("*/manifest.json")
+                    )
+                    assert len(manifests) == 1
+                    manifest = json.loads(manifests[0].read_text())
+                    assert manifest["completed"] is True
+                    assert manifest["error"] is None
+                    assert manifest["ended_utc"]
+                    assert (manifests[0].parent / "telemetry.tlog").stat().st_size > 0
+                    evidence = {
+                        "handoff_requested_monotonic": requested_at,
+                        "handoff_confirmed_monotonic": handed_off_at,
+                        "operator_lost_monotonic": operator_lost_at,
+                        "pilot_land_monotonic": pilot_land_at,
+                        "operator_timeout_s": settings.operator.timeout,
+                        "gcs_timeout_s": gcs_timeout,
+                        "operator_absent_hold_s": pilot_land_at - operator_lost_at,
+                        "flight_observations": observations,
+                        "control_owners": owners,
+                        "maximum_altitude_m": max(sensors.altitudes_m),
+                        "minimum_pilot_altitude_m": min(pilot_altitudes),
+                    }
+                    (tmp_path / "pilot-handoff.json").write_text(
+                        json.dumps(evidence, indent=2) + "\n"
+                    )
+                    print(
+                        f"pilot handoff survives operator loss: {json.dumps(evidence)}"
+                    )

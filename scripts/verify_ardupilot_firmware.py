@@ -146,7 +146,16 @@ def extract_feature_statuses(
     if not extractor.is_file():
         raise VerificationError(f"ArduPilot feature extractor not found: {extractor}")
 
-    command = [sys.executable, str(extractor), str(elf_path)]
+    command = [
+        "uv",
+        "run",
+        "--no-sync",
+        "--python",
+        sys.executable,
+        "python",
+        str(extractor),
+        str(elf_path),
+    ]
     if nm is not None:
         command.extend(("--nm", nm))
     try:
@@ -181,7 +190,11 @@ def load_apj_metadata(apj_path: Path) -> ApjMetadata:
 
     if not isinstance(document, dict):
         raise VerificationError(f"APJ document is not a JSON object: {apj_path}")
+    return _validated_apj_metadata(document)
 
+
+def _validated_apj_metadata(document: dict) -> ApjMetadata:
+    """Validate field types and declared format before decoding the payload."""
     board_id = document.get("board_id")
     git_identity = document.get("git_identity")
     image = document.get("image")
@@ -209,6 +222,19 @@ def load_apj_metadata(apj_path: Path) -> ApjMetadata:
     if magic != EXPECTED_MAGIC:
         raise VerificationError(f"APJ magic is {magic!r}, expected {EXPECTED_MAGIC!r}")
 
+    return ApjMetadata(
+        board_id=board_id,
+        git_identity=git_identity,
+        image_size=image_size,
+        image_maxsize=image_maxsize,
+        flash_total=flash_total,
+        summary=summary,
+        image=_decode_apj_image(image, image_size),
+    )
+
+
+def _decode_apj_image(image: str, image_size: int) -> bytes:
+    """Strictly decode the image and match its announced uncompressed length."""
     try:
         compressed_image = base64.b64decode(image, validate=True)
     except (binascii.Error, ValueError) as exc:
@@ -223,15 +249,7 @@ def load_apj_metadata(apj_path: Path) -> ApjMetadata:
             f"{len(decoded_image)} bytes, image_size is {image_size}"
         )
 
-    return ApjMetadata(
-        board_id=board_id,
-        git_identity=git_identity,
-        image_size=image_size,
-        image_maxsize=image_maxsize,
-        flash_total=flash_total,
-        summary=summary,
-        image=decoded_image,
-    )
+    return decoded_image
 
 
 def _require_exact_keys(
@@ -460,6 +478,62 @@ def manifest_errors(
     return errors
 
 
+def _apj_identity_errors(metadata: ApjMetadata) -> list[str]:
+    """Compare declared board, version and flash limits with the reviewed target."""
+    errors: list[str] = []
+    if metadata.board_id != EXPECTED_BOARD_ID:
+        errors.append(
+            f"APJ board_id is {metadata.board_id}, "
+            f"expected FlywooF745 id {EXPECTED_BOARD_ID}"
+        )
+    if metadata.git_identity != EXPECTED_GIT_IDENTITY:
+        errors.append(
+            f"APJ git_identity is {metadata.git_identity!r}, "
+            f"expected {EXPECTED_GIT_IDENTITY!r}"
+        )
+    if metadata.image_maxsize != MAX_IMAGE_SIZE:
+        errors.append(
+            f"APJ image_maxsize is {metadata.image_maxsize}, expected {MAX_IMAGE_SIZE}"
+        )
+    if metadata.flash_total != MAX_IMAGE_SIZE:
+        errors.append(
+            f"APJ flash_total is {metadata.flash_total}, expected {MAX_IMAGE_SIZE}"
+        )
+    if metadata.summary != EXPECTED_SUMMARY:
+        errors.append(
+            f"APJ summary is {metadata.summary!r}, expected {EXPECTED_SUMMARY!r}"
+        )
+    if metadata.image_size > MAX_IMAGE_SIZE:
+        errors.append(
+            f"APJ image_size is {metadata.image_size} bytes, limit is {MAX_IMAGE_SIZE}"
+        )
+    return errors
+
+
+def _image_consistency_errors(apj_image: bytes, binary_image: bytes) -> list[str]:
+    """Require the same bytes and reviewed runtime identity in both payloads."""
+    errors: list[str] = []
+    if apj_image != binary_image:
+        errors.append("APJ decompressed image does not match arducopter.bin")
+    if EXPECTED_RUNTIME_VERSION_BANNER not in binary_image:
+        errors.append(
+            "arducopter.bin does not contain runtime version banner "
+            f"{EXPECTED_RUNTIME_VERSION_BANNER.decode('ascii')!r}"
+        )
+    if EXPECTED_RUNTIME_VERSION_BANNER not in apj_image:
+        errors.append(
+            "APJ payload does not contain runtime version banner "
+            f"{EXPECTED_RUNTIME_VERSION_BANNER.decode('ascii')!r}"
+        )
+    if FORBIDDEN_RUNTIME_VERSION_BANNER in binary_image:
+        errors.append(
+            "arducopter.bin contains forbidden 'abcdef' runtime version banner"
+        )
+    if FORBIDDEN_RUNTIME_VERSION_BANNER in apj_image:
+        errors.append("APJ payload contains forbidden 'abcdef' runtime version banner")
+    return errors
+
+
 def verify_build(
     ardupilot_root: Path,
     build_dir: Path,
@@ -501,51 +575,12 @@ def verify_build(
             f"could not read ArduCopter BIN {bin_path}: {exc}"
         ) from exc
 
-    errors = [*reviewed_manifest_errors, *feature_errors(statuses)]
-    if metadata.board_id != EXPECTED_BOARD_ID:
-        errors.append(
-            f"APJ board_id is {metadata.board_id}, "
-            f"expected FlywooF745 id {EXPECTED_BOARD_ID}"
-        )
-    if metadata.git_identity != EXPECTED_GIT_IDENTITY:
-        errors.append(
-            f"APJ git_identity is {metadata.git_identity!r}, "
-            f"expected {EXPECTED_GIT_IDENTITY!r}"
-        )
-    if metadata.image_maxsize != MAX_IMAGE_SIZE:
-        errors.append(
-            f"APJ image_maxsize is {metadata.image_maxsize}, expected {MAX_IMAGE_SIZE}"
-        )
-    if metadata.flash_total != MAX_IMAGE_SIZE:
-        errors.append(
-            f"APJ flash_total is {metadata.flash_total}, expected {MAX_IMAGE_SIZE}"
-        )
-    if metadata.summary != EXPECTED_SUMMARY:
-        errors.append(
-            f"APJ summary is {metadata.summary!r}, expected {EXPECTED_SUMMARY!r}"
-        )
-    if metadata.image_size > MAX_IMAGE_SIZE:
-        errors.append(
-            f"APJ image_size is {metadata.image_size} bytes, limit is {MAX_IMAGE_SIZE}"
-        )
-    if metadata.image != binary_image:
-        errors.append("APJ decompressed image does not match arducopter.bin")
-    if EXPECTED_RUNTIME_VERSION_BANNER not in binary_image:
-        errors.append(
-            "arducopter.bin does not contain runtime version banner "
-            f"{EXPECTED_RUNTIME_VERSION_BANNER.decode('ascii')!r}"
-        )
-    if EXPECTED_RUNTIME_VERSION_BANNER not in metadata.image:
-        errors.append(
-            "APJ payload does not contain runtime version banner "
-            f"{EXPECTED_RUNTIME_VERSION_BANNER.decode('ascii')!r}"
-        )
-    if FORBIDDEN_RUNTIME_VERSION_BANNER in binary_image:
-        errors.append(
-            "arducopter.bin contains forbidden 'abcdef' runtime version banner"
-        )
-    if FORBIDDEN_RUNTIME_VERSION_BANNER in metadata.image:
-        errors.append("APJ payload contains forbidden 'abcdef' runtime version banner")
+    errors = [
+        *reviewed_manifest_errors,
+        *feature_errors(statuses),
+        *_apj_identity_errors(metadata),
+        *_image_consistency_errors(metadata.image, binary_image),
+    ]
     if errors:
         raise VerificationError(
             "firmware verification failed:\n- " + "\n- ".join(errors)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import Counter
@@ -66,18 +67,36 @@ class CaptureState:
             if self.worker_error is None:
                 self.worker_error = message
 
-    def observe_vehicle_state(self, *, armed: bool) -> None:
+    def heartbeat_is_current(self, observed_at: float) -> bool:
+        return (
+            math.isfinite(observed_at)
+            and 0 <= time.monotonic() - observed_at <= 2.5
+            and (
+                self.last_vehicle_heartbeat_monotonic is None
+                or observed_at > self.last_vehicle_heartbeat_monotonic
+            )
+        )
+
+    def observe_vehicle_state(
+        self, *, armed: bool, observed_at: float | None = None
+    ) -> bool:
         """Track selected-vehicle arm transitions from the telemetry worker."""
 
-        self.last_vehicle_heartbeat_monotonic = time.monotonic()
+        observed_at = time.monotonic() if observed_at is None else observed_at
+        if not self.heartbeat_is_current(observed_at):
+            return False
+        self.last_vehicle_heartbeat_monotonic = observed_at
         self.vehicle_heartbeat.set()
         if armed:
+            self.disarmed_heartbeat.clear()
             self.saw_armed = True
             self.last_vehicle_state = "armed"
-            return
-        if self.saw_armed:
-            self.saw_disarmed_after_arm = True
-        self.last_vehicle_state = "disarmed"
+        else:
+            if self.saw_armed:
+                self.saw_disarmed_after_arm = True
+            self.last_vehicle_state = "disarmed"
+            self.disarmed_heartbeat.set()
+        return True
 
     def set_stop_reason(self, reason: str) -> None:
         """Retain the first intentional or error stop reason."""

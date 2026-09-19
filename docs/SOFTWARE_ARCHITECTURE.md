@@ -1,80 +1,125 @@
-# Software architecture
+# Development and architecture
 
-The maintained implementation lives in `ai_drone/`. Historical flight experiments
-are preserved through the [branch archive](../notes/archive/README.md); they are
-not installed or deployed as operational flight tools.
+## Boundaries
 
-## Runtime responsibilities
-
-| Component | Responsibility |
+| Code | Responsibility |
 | --- | --- |
-| ArduPilot on FlywooF745 | Stabilization, EKF3 sensor fusion, flight modes and configured vehicle failsafes |
-| `ai_drone.flight.controller` | Guarded GuidedNoGPS climb, relative-position acquisition, Loiter hold and landing |
-| `ai_drone.mavlink.connection` | Shared lazy connection factory with the MAVLink 2 ArduPilot decoder; also accepts MAVLink 1 frames |
-| `ai_drone.cli.record` | Recording command options, hardware lifecycle and capture coordination |
-| `ai_drone.capture` | Capture state, telemetry/tag workers and source-filtered component reporting; independent of the CLI |
-| `ai_drone.vision.apriltags` | AprilTag IDs/corners and calibrated pose estimation on the Pi CPU |
-| `ai_drone.cli.servo` | Explicitly guarded payload-servo bench operation on BCM12 |
-| `ai_drone.cli.tag_servo_record` | Explicit armed-recording workflow with bounded tag-triggered servo pulses; it does not navigate or arm the FC |
-| `ai_drone.link` | Pi connection discovery and runtime deployment |
-| `ai_drone.config` | Source-filtered parameter snapshots and optional Git publication |
+| ArduPilot | Attitude control, EKF fusion, modes and vehicle failsafes |
+| `ai_drone.mavlink` | One physical reader, bounded subscriptions, private Unix-socket clients and command ownership |
+| `ai_drone.runtime`, `ai_drone.network` | Boot access service, fresh status, pure grounded Wi-Fi selection and NetworkManager adapter |
+| `ai_drone.operator` | Authenticated operator presence and optional supervised SSH reverse route |
+| `ai_drone.flight` | Guarded climb/Loiter/LAND, explicit human ownership and isolated flight logs |
+| `ai_drone.capture`, `ai_drone.vision` | Camera/tag/telemetry workers, health, calibration and pose estimation |
+| `ai_drone.settings`, `ai_drone.storage` | Frozen TOML defaults and storage decisions |
+| `ai_drone.mount` | Shared servo mapping, GPIO setup and exclusive actuator ownership |
+| `ai_drone.link`, `ai_drone.cli.deploy` | SSH, portable staged deployment, maintenance and source/environment rollback |
+| `ai_drone.config`, `ai_drone.transfer` | Verified FC snapshots and hashed dataset copies |
+| `ai_drone.cli`, `scripts/` | Explicit user workflows and maintenance adapters |
 
-The IMX500 supplies images over CSI. The maintained AprilTag path does not run
-neural inference on the camera accelerator. There is no maintained autonomous
-search, path planner, person-following loop or verified obstacle-avoidance mission.
-The intended forward MT-15 and downward MTF-01P have different roles; only the
-downward distance is used as flight altitude. See the newest [configuration
-record](DRONE_CONFIGURATION.md) for their actual reachability.
+Use small functions with explicit inputs for decisions. Keep clocks, files,
+networking, serial and GPIO at the edges; classes own resources and lifetimes.
+Keep hardware invariants and failure rationale in comments. Avoid compatibility
+layers and speculative frameworks.
 
-## Operator commands
+## Ownership and failures
 
-| Command | Purpose |
-| --- | --- |
-| `drone-connect` | Pi SSH through the supported connection transports |
-| `drone-deploy` | Maintenance deployment; optional allowlisted task through `--run` |
-| `drone-inspect` | Camera/MAVLink capture, disarmed by default |
-| `drone-servo` | Guarded servo bench test |
-| `drone-tag-servo-record` | Explicit armed tag/servo recording |
-| `drone-motor-test` | Guarded propeller-free motor bench test |
-| `drone-control hover` | Guarded takeoff, timed Loiter and LAND sequence |
-| `drone-config-sync` | Capture parameters through the Pi; `--no-sync` avoids deployment |
+The implemented Pi boot service owns the FC UART and sends no autonomous flight
+commands. [Installation remains pending](pi-networking.md#deployment-status).
+Consumers receive independent bounded queues with original receipt timestamps;
+slow consumers and failed log sinks cannot block the physical reader or refresh
+stale data. The local socket and status directory are private. A command lease
+excludes concurrent controllers and network maintenance. A camera and servo each
+retain one owner; separate checkouts never isolate hardware.
 
-Use `uv run <command> --help` for current options. Old commands such as
-`drone-console`, `drone-health`, `drone-deploy --picam` and standalone
-`mission_drop.py` are not the maintained interface. An actuator or flight command
-requires its documented physical checks and explicit confirmations; loading a
-module or viewing help does not authorize a flight.
+Detached recording and detached control share FC telemetry. Flight recording
+has its own endpoint, event queue and writer lifetime. Startup logging failure
+blocks a control run; later disk/queue failure marks the recording incomplete
+and preserves control. Capture stops video before consuming its log reserve;
+its final storage floor closes the dataset.
 
-## Environment and installation
+Operator presence uses fresh authenticated challenges to configured numeric
+Tailscale/LAN addresses or the responder's supervised SSH reverse route. Any
+healthy route suffices. Autonomous loss requests
+LAND; an explicit handoff additionally requires fresh RC channels and a pilot
+mode. Human ownership lasts until disarm and a new run; the onboard GCS heartbeat
+continues meanwhile. SSH terminal lifetime is not control ownership.
 
-`uv sync` installs the locked runtime. The `dev` group adds tests, lint and type
-checks; `raspi` adds OpenCV; `docs` adds the Markdown site renderer. The Pi uses a
-virtual environment with system site packages for apt-installed Picamera2,
-libcamera, gpiozero and native AprilTag. See [the project README](../README.md).
+Persistent NetworkManager autoconnect flags are disabled by the installer;
+a root-owned manifest retains eligible saved-client UUIDs. The policy initiates
+connections only with fresh disarmed FC status. It preserves working clients,
+rotates failed alternatives and never automatically activates an AP. Manual
+requests are queued in the access service, so SSH disconnect does not cancel them.
+An uncertain activation or asynchronous disconnect retains the command exclusion
+until NetworkManager confirms a terminal state. Unknown state cannot release it.
 
-Connection defaults are implemented in `ai_drone.link.targets`: the Pi user is
-`seb`, the Tailscale name is `seb-is-pm.tail59e6a4.ts.net`, and the fallback
-hotspot address is `192.168.4.1`. `PI_HOST`, `PI_USER`, `PI_DIR`, `PI_HOSTNAME`, `USB_IFACE` and
-`SSH_CONFIG` provide explicit overrides. A USB interface must be identified
-before the host adapter is configured. Use `SSH_CONFIG=/dev/null` for a direct
-Pi link on hosts with a broken SSH configuration. [Pi networking](pi-networking.md)
-describes the supported topology and the current installation procedure.
+## Checks
 
-## Validation boundary
+```bash
+uv sync --locked --group dev --group docs
+uv run --locked --group dev --group docs ruff format --check .
+uv run --locked --group dev --group docs ruff check .
+uv run --locked --group dev --group docs ruff check . --select C901 --ignore-noqa
+uv run --locked --group dev --group docs ty check .
+uv run --locked --group dev --group docs lint-imports
+uv run --locked --group dev --group docs deptry .
+uv run --locked --group dev --group docs pytest -q -m 'not sitl'
+uv run --locked --group dev --group docs python site/build.py
+git diff --check
+```
 
-Offline tests mock hardware transports. The opt-in pinned ArduCopter SITL tests
-exercise the production no-GPS hover sequence and GCS-link-loss recovery in a
-simulated vehicle. Neither demonstrates that real optical flow, compass
-calibration, sensor mounting, battery power or actuator motion is suitable for
-flight. Bench observations and firmware/parameter provenance belong in dated
-`state/` captures; follow [staged flight testing](PI_MAVLINK_CONTROL.md).
+Tests exercise observable behavior, concurrency and failure isolation. Loopback
+HTTP/Unix-socket tests require permission to create local sockets. Pi packages
+remain lazy; CI defines Python and laptop platform coverage. Commit dependency
+changes with `uv.lock`.
 
-## Language choice
+Ruff limits function complexity to 10, including tests. The separate `C901`
+check ignores inline suppressions. Treat the score as a prompt to separate
+responsibilities; it does not measure naming, side effects or overall clarity.
 
-Keep Python for companion orchestration and the existing native libraries for
-image processing, with ArduPilot C++ firmware handling flight timing. The
-measured failures were resource ownership, message validation and I/O deadlines;
-a language rewrite would still need to solve those problems and revalidate the
-same hardware boundaries. Profile a demonstrated bottleneck before replacing a
-component. The capture package split reduces coupling without changing the
-verified behavior.
+Flight changes also require the [exact pinned SITL gate](ARDUCOPTER_4_7_NOGPS_LOITER.md#exact-pinned-sitl-acceptance-gate):
+
+```bash
+ARDUPILOT_ROOT=/home/abaris/drone/ardupilot UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev pytest -m sitl -vv -s
+```
+
+Retain fresh test evidence; simulation does not establish physical readiness.
+The five cases cover downward/forward range coexistence, GCS-loss landing,
+shared recording through SSH hangup and operator-loss landing, and explicit
+pilot handoff that preserves pilot control after operator loss.
+The [answered questionnaire](CLEANUP_QUESTIONNAIRE.md) records the agreed scope.
+
+## Deploy and document
+
+Review and test source before `uv run drone deploy`; verify deployed files and
+start with disarmed checks. [Deployment](pi-networking.md#environment-and-deployment)
+uses private staging, an idle maintenance lease and source/environment rollback.
+Source deployment does not flash the FC or install
+system services. See [access setup and rollback](pi-networking.md#shared-access-service).
+`drone.toml` stays local. Preserve configuration in dated `state/`/`params/`
+records and raw data in ignored `artifacts/`. Transfer receipts verify hashes;
+source removal is a separate explicit operation that rechecks both copies.
+
+`site/build.py` renders maintained Markdown plus four presentation pages in
+`site/content/`; preview with `uv run --group docs python site/build.py --serve`.
+Output is ignored `site/_build/`, served on `http://127.0.0.1:8000/`. The Pages
+workflow publishes relevant `main` changes. Edit source Markdown and poster
+assets rather than generated HTML; keep historical results clearly dated.
+
+## Remaining stages
+
+When the Pi is available, validate staged deployment and service installation,
+then operator reachability, shared checks/recording and restart/rollback behavior.
+Test explicit hotspot on/off and reboot-to-client recovery with a verified alternate
+access route. September 16 staging captures do not substitute for these installed
+service checks; no new hardware or simulator runs are part of the local-only work.
+
+Validate camera focus/calibration and floor-tag poses at 1–3 m; start with
+measured 22.4 cm A3 `tag36h11` prints. RPM/ESC channels remain unavailable until
+the actual FC reports them. Resolve compass/pre-arm faults and retain the
+hover path's current safety gates, including its zero-RC-channel startup rule.
+
+The IMX500 supplies images; AprilTags run on the Pi CPU. Tag centering, payload
+approach, autonomous room search and forward-lidar obstacle avoidance are not
+implemented control modes. Downward flow/range and one forward beam do not form
+a complete obstacle map. Their physical prerequisites and supervised airborne
+validation remain separate work.

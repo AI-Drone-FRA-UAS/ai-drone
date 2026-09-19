@@ -1,0 +1,36 @@
+# Copy to drone.toml on each machine; local settings are never deployed.
+[connection]
+host = "seb@seb-is-pm"
+# project_dir = "/home/seb/ai-drone"  # Defaults to /home/<SSH user>/ai-drone.
+# ssh_config = "/path/to/ssh/config"  # Otherwise use normal OpenSSH settings.
+
+[recording]
+storage_reserve_mib = 256
+storage_warning_mib = 1024
+storage_stop_mib = 16
+storage_check_interval = 2
+
+[transfer]
+# destination = "/path/to/new/dataset"  # Must not already exist.
+
+# Configure these together on the Pi before autonomous control. Use the
+# operator laptop's numeric Tailscale/LAN addresses; any healthy route suffices.
+[operator]
+# endpoints = ["http://100.101.102.103:8787", "http://192.168.1.20:8787"]
+# token_file = "/home/seb/.config/ai-drone/operator.key"
+interval = 1
+timeout = 5
+request_timeout = 1
+# Optional on the laptop when the Pi cannot open a direct connection back.
+# ssh_host = "seb@seb-is-pm"
+remote_port = 18787
+# Then include "http://127.0.0.1:18787" in the Pi's endpoints above.
+
+# The Pi access service alone opens this physical FC device. Other workflows
+# use its Unix socket; recording and control are never started at boot.
+[runtime]
+device = "/dev/serial0"
+baud = 115200
+socket = "/run/ai-drone/vehicle.sock"
+status = "/run/ai-drone/status.json"
+network_profiles = "/etc/ai-drone/network-profiles.json"

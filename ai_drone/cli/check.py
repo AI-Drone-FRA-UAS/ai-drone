@@ -29,6 +29,7 @@ from ai_drone.mavlink.safety import (
     require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
 )
+from ai_drone.mavlink.shared import received_monotonic
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.recording import json_safe, request_message_intervals
 
@@ -57,6 +58,12 @@ FRESHNESS_S = 2.5
 def _resolve_check_endpoint(requested: str | None) -> str:
     if requested:
         return resolve_mavlink_endpoint(requested)
+    if is_raspberry_pi():
+        from ai_drone.settings import load_settings
+
+        shared = Path(load_settings().runtime.socket)
+        if shared.is_socket():
+            return f"unix:{shared}"
     if STABLE_FLIGHT_CONTROLLER_DEVICE.exists():
         return str(STABLE_FLIGHT_CONTROLLER_DEVICE)
     if is_raspberry_pi() and Path("/dev/serial0").exists():
@@ -102,8 +109,15 @@ class Observations:
             if kind == "DISTANCE_SENSOR"
             else kind
         )
+        now = time.monotonic()
+        received = received_monotonic(message, default=now)
+        if received > now or received < self.seen.get(key, -math.inf):
+            return
         self.latest[key] = fields
-        self.seen[key] = time.monotonic()
+        self.seen[key] = received
+        self._observe_diagnostics(kind, fields)
+
+    def _observe_diagnostics(self, kind: str, fields: dict[str, Any]) -> None:
         if (
             kind == "COMMAND_ACK"
             and fields.get("command") == mavlink.MAV_CMD_RUN_PREARM_CHECKS
@@ -267,16 +281,7 @@ def _range(observed: Observations, orientation: int, now: float) -> dict[str, An
     }
 
 
-def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, Any]:
-    now = time.monotonic()
-    observed.fresh("HEARTBEAT", now)
-    system = observed.fresh("SYS_STATUS", now) or {}
-    voltage = _finite(system.get("voltage_battery"))
-    battery = voltage / 1000 if voltage is not None and 0 < voltage < 65535 else None
-    if battery is None or battery < min_battery:
-        observed.errors.append(
-            f"Battery voltage {battery!r} V is missing or below {min_battery:g} V"
-        )
+def _imu_axes(observed: Observations, now: float) -> dict[str, list[float | None]]:
     imu = observed.fresh("RAW_IMU", now) or {}
     axes = {
         name: [_finite(imu.get(f"{axis}{name}")) for axis in "xyz"]
@@ -287,13 +292,10 @@ def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, 
             name != "gyro" and not any(values)
         ):
             observed.errors.append(f"RAW_IMU {name}: missing/invalid vector")
-    attitude = observed.fresh("ATTITUDE", now) or {}
-    angles = {name: _finite(attitude.get(name)) for name in ("roll", "pitch", "yaw")}
-    if any(value is None for value in angles.values()):
-        observed.errors.append("ATTITUDE: missing/invalid angles")
-    pressure = _finite((observed.fresh("SCALED_PRESSURE", now) or {}).get("press_abs"))
-    if pressure is None or pressure <= 0:
-        observed.errors.append("Barometer: missing/invalid pressure")
+    return axes
+
+
+def _flow_summary(observed: Observations, now: float) -> dict[str, float | None]:
     flow = observed.fresh("OPTICAL_FLOW", now) or {}
     quality = _finite(flow.get("quality"))
     if quality is None or not 0 <= quality <= 255:
@@ -307,6 +309,28 @@ def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, 
     }
     if any(value is None for value in velocity.values()):
         observed.errors.append("Optical flow: missing/invalid compensated velocity")
+    return {"quality": quality, **velocity}
+
+
+def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, Any]:
+    now = time.monotonic()
+    observed.fresh("HEARTBEAT", now)
+    system = observed.fresh("SYS_STATUS", now) or {}
+    voltage = _finite(system.get("voltage_battery"))
+    battery = voltage / 1000 if voltage is not None and 0 < voltage < 65535 else None
+    if battery is None or battery < min_battery:
+        observed.errors.append(
+            f"Battery voltage {battery!r} V is missing or below {min_battery:g} V"
+        )
+    axes = _imu_axes(observed, now)
+    attitude = observed.fresh("ATTITUDE", now) or {}
+    angles = {name: _finite(attitude.get(name)) for name in ("roll", "pitch", "yaw")}
+    if any(value is None for value in angles.values()):
+        observed.errors.append("ATTITUDE: missing/invalid angles")
+    pressure = _finite((observed.fresh("SCALED_PRESSURE", now) or {}).get("press_abs"))
+    if pressure is None or pressure <= 0:
+        observed.errors.append("Barometer: missing/invalid pressure")
+    flow = _flow_summary(observed, now)
     channels = (observed.fresh("RC_CHANNELS", now) or {}).get("chancount")
     if channels != 0:
         observed.errors.append(
@@ -328,10 +352,7 @@ def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, 
         "fc_health": _health(observed, system),
         "downward_range": _range(observed, 25, now),
         "forward_range": _range(observed, 0, now),
-        "optical_flow": {
-            "quality": quality,
-            **velocity,
-        },
+        "optical_flow": flow,
         "imu": {
             "acceleration_mg": axes["acc"],
             "gyro_mrad_s": axes["gyro"],
@@ -444,7 +465,7 @@ def _print_report(report: dict[str, Any]) -> None:
         for text in report[name]:
             print(f"{name}: {json.dumps(text, ensure_ascii=True)}")
     print(
-        "Camera and servo feedback are outside this check; use drone-walk for camera recording."
+        "Camera and servo feedback are outside this check; use drone walk for camera recording."
     )
 
 

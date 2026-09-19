@@ -13,20 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-drone-connect = "ai_drone.link.connect:main"
-drone-power = "ai_drone.cli.power:main"
-drone-check = "ai_drone.cli.check:main"
-drone-config-sync = "ai_drone.config.sync:main"
-drone-control = "ai_drone.cli.control:main"
-drone-deploy = "ai_drone.link.deploy:main"
-drone-inspect = "ai_drone.cli.record:main"
-drone-report = "ai_drone.cli.report:main"
-drone-walk = "ai_drone.cli.walk:main"
-drone-motor-test = "ai_drone.cli.motor_test:main"
-drone-servo = "ai_drone.cli.servo:main"
-drone-tag-servo-record = "ai_drone.cli.tag_servo_record:main"
-drone-mount = "ai_drone.cli.mount:main"
-drone_mount = "ai_drone.cli.mount:main"
+drone = "ai_drone.cli.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13"]
@@ -51,32 +38,20 @@ docs = [
 ]
 
 [tool.uv]
-# Runtime commands stay lightweight on the laptop. drone-deploy explicitly adds
-# the raspi group on the Pi; development tools are opt-in with --group dev.
+# Pi vision and development tools are opt-in groups.
 default-groups = []
 
 [tool.ruff]
 target-version = "py311"
-# attic/ holds retired code kept for reference only; it is not maintained,
-# linted, type-checked, tested, or deployed.
-extend-exclude = ["attic"]
 
 [tool.ruff.lint]
 select = ["B", "C90", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 20
-
-[tool.ty.src]
-exclude = ["attic"]
+max-complexity = 10
 
 [tool.deptry]
-# attic/ is retired reference code: excluded from ruff and ty, so exclude it here
-# too. The raspi and docs groups supply runtime imports for the Pi and site
-# renderer respectively; both remain opt-in installation groups.
-# aitrios-rpi-sample-apps/ is a vendored third-party sample tree (already in
-# deploy.EXCLUDE_NAMES); tests/ legitimately import the dev group.
-exclude = ["artifacts", "attic", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
+exclude = ["artifacts", "aitrios-rpi-sample-apps", "tests", "\\.venv"]
 non_dev_dependency_groups = ["raspi", "docs"]
 
 [tool.deptry.per_rule_ignores]
@@ -84,9 +59,7 @@ non_dev_dependency_groups = ["raspi", "docs"]
 #   pyserial, future - runtime requirements of pymavlink's serial transport.
 #   pillow - required by the Pi camera/JPEG path via Picamera2.
 DEP002 = ["pyserial", "future", "pillow"]
-# DEP001: Pi-native packages installed from Debian apt, not from PyPI, and
-# imported lazily inside Pi-only execution paths.  The Pi venv is created with
-# --system-site-packages so these resolve at runtime; see CLAUDE.md.
+# Native Pi packages come from apt and load only in hardware paths.
 DEP001 = ["picamera2", "gpiozero", "apriltag"]
 
 [tool.deptry.package_module_name_map]
