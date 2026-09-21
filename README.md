@@ -3,7 +3,7 @@
 Python tools for a Raspberry Pi Zero 2 W, FlywooF745 ArduPilot controller,
 IMX500 camera, MTF-01P optical flow/range sensor, forward MT-15 lidar and payload
 servo. Record sensors and AprilTags, inspect configuration, and test a guarded
-takeoff–Loiter–landing sequence. Autonomous tag approach and obstacle avoidance
+takeoff, bounded altitude hold, Loiter and landing. Autonomous tag approach and obstacle avoidance
 remain development work.
 
 ## Start
@@ -22,6 +22,11 @@ Copy [drone.example.toml](drone.example.toml) to `drone.toml` on each machine
 for local connection, recording, operator and runtime defaults. This file is ignored
 by Git and preserved by deployment. [Configuration and precedence](docs/OPERATIONS.md#local-settings)
 also cover `AI_DRONE_CONFIG` and `drone --config PATH`.
+
+Development uses standard Python 3.14; the Pi keeps its working 3.13 environment
+until native bindings and disarmed workload checks qualify a candidate. See
+[Python environments and rollback](docs/PYTHON_RUNTIME.md). Flight remains
+separate qualification work within the existing height limits.
 
 The new source and boot service were **not installed** at the last Pi check on
 September 16, 2026. See [deployment status](docs/pi-networking.md#deployment-status)

@@ -46,6 +46,9 @@ source_modules =
     ai_drone.runtime
     ai_drone.mount
     ai_drone.review
+    ai_drone.system
+    ai_drone.runtime_status
+    ai_drone.power_state
 forbidden_modules =
     ai_drone.cli
 
@@ -69,6 +72,9 @@ source_modules =
     ai_drone.settings
     ai_drone.storage
     ai_drone.mount
+    ai_drone.system
+    ai_drone.runtime_status
+    ai_drone.power_state
 forbidden_modules =
     ai_drone.cli
     ai_drone.capture
@@ -78,3 +84,37 @@ forbidden_modules =
     ai_drone.mavlink
     ai_drone.vision
     ai_drone.review
+
+[importlinter:contract:flight-core]
+name = Flight state and decisions cannot import effect owners
+type = forbidden
+source_modules =
+    ai_drone.flight.state
+    ai_drone.flight.phase
+    ai_drone.flight.limits
+    ai_drone.flight.params
+forbidden_modules =
+    ai_drone.flight.controller
+    ai_drone.flight.recording
+    ai_drone.flight.dataflash
+    ai_drone.flight.ownership
+    ai_drone.cli
+    ai_drone.capture
+    ai_drone.link
+    ai_drone.runtime
+    ai_drone.operator
+    ai_drone.vision
+    ai_drone.review
+
+[importlinter:contract:capture-decisions]
+name = Tag decisions cannot import capture resource owners
+type = forbidden
+source_modules =
+    ai_drone.capture.operations
+forbidden_modules =
+    ai_drone.capture.workers
+    ai_drone.capture.reporting
+    ai_drone.capture.manifest
+    ai_drone.cli
+    ai_drone.mount
+    ai_drone.vision

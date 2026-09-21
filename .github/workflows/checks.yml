@@ -70,7 +70,7 @@ jobs:
           cache-suffix: python-${{ matrix.python-version }}
 
       - name: Install locked development and documentation dependencies
-        run: uv sync --locked --group dev --group docs
+        run: uv sync --locked --group dev --group docs --group raspi
 
       - name: Check formatting
         run: uv run --locked --group dev --group docs ruff format --check .
@@ -80,6 +80,15 @@ jobs:
 
       - name: Check function complexity without suppressions
         run: uv run --locked --group dev --group docs ruff check . --select C901 --ignore-noqa
+
+      - name: Check exception and argument boundaries in extracted cores
+        run: >-
+          uv run --locked --group dev --group docs ruff check
+          ai_drone/flight/state.py ai_drone/flight/phase.py
+          ai_drone/flight/limits.py ai_drone/flight/params.py
+          ai_drone/runtime_status.py ai_drone/power_state.py
+          ai_drone/capture/operations.py ai_drone/transfer.py
+          --select BLE,ARG
 
       - name: Check types
         run: uv run --locked --group dev --group docs ty check .
@@ -91,7 +100,7 @@ jobs:
         run: uv run --locked --group dev --group docs deptry .
 
       - name: Run offline tests
-        run: uv run --locked --group dev --group docs pytest -q -m "not sitl"
+        run: uv run --locked --group dev --group docs --group raspi pytest -q -m "not sitl"
 
       - name: Build documentation
         if: matrix.python-version == '3.14'
