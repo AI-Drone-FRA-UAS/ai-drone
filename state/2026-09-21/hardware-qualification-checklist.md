@@ -30,8 +30,9 @@ never grants that authorization.
   Reboot-separated readback remains a
   distinct gate; no FC reboot/flash/parameter writes were performed in this task.
 - [ ] Keep the working Pi Python 3.13 environment selected until the separate
-  3.14 native ABI and acquisition gates pass. See the candidate report for the
-  five missing compatible native extension modules and development inputs.
+  3.14 native ABI and acquisition gates pass. Matching development inputs are
+  now extracted separately; the five ARM64 native bindings, bounded builds and
+  acquisition remain unqualified. See the candidate report for exact blockers.
 
 ## Disarmed sensor and hall survey
 
@@ -84,8 +85,8 @@ never grants that authorization.
   No physical confined-hall vertical-hold clearance has been demonstrated.
 - [ ] Qualify Loiter progressively at the named duration, floor/lighting and yaw
   disturbance envelope. The compass baseline does not resolve hall magnetic
-  interference: the final changing-field simulator trial completed with 117.937°
-  yaw-estimate drift despite only 1.313° of true heading motion. The inertial-yaw
+  interference: the final changing-field simulator trial completed with 117.938°
+  yaw-estimate drift despite only 1.762° of true heading motion. The inertial-yaw
   profile remains simulator-only; do not copy its
   parameter delta onto the aircraft without separate review and qualification.
 - [ ] Measure hold altitude error ≤0.10 m after 2 s settling, Loiter XY movement

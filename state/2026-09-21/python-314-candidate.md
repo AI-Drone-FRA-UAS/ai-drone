@@ -26,7 +26,7 @@ Installation completed, including an ARM64 source build of pymavlink 2.4.49.
 The initial sync took approximately 4 minutes 32 seconds. The interpreter reports
 `Py_GIL_DISABLED=0`; this is standard CPython, not a free-threaded experiment.
 
-## Executed import results
+## Initial executed import results
 
 | Module | Candidate result |
 | --- | --- |
@@ -48,8 +48,8 @@ No CPython 3.13 binary was copied, renamed or forced into the candidate.
 
 The five installed extension files have CPython 3.13 ARM64 suffixes.
 The installed libcamera library is 0.7.2, but `/usr/include/libcamera` and its
-pkg-config development metadata are absent. A matched 3.14 camera binding build
-therefore needs exact matching development inputs and a reproducible build for
+pkg-config development metadata were absent. A matched 3.14 camera binding build
+therefore needed exact matching development inputs and a reproducible build for
 that library version. Additional compatible pyKMS, lgpio, prctl and the project's
 native AprilTag API must also be supplied. No broad OS upgrade or native library
 replacement was attempted. This is a concrete native ABI/development-input gate,
@@ -140,6 +140,17 @@ or run on the Pi; it builds wheels only, sequentially, without installing them.
 All three kits and their source/hash/host-check evidence are retained under
 `artifacts/refactor-20260921/bundles/`. They are prepared review inputs, not a
 successful Pi native migration or an instruction to weaken resource limits.
+
+The original small-bindings kit had unbounded compilers. The separate final
+`rpi-native-small314-bounded-kit.tar.gz` (SHA-256
+`772cddc55f76049f07b4f1716ecec18b70e4be9dec850e25c765bde8f287e0ca`)
+adds 256 MiB virtual-memory and 300 s CPU/wall compiler/linker caps, a 360 s
+per-wheel deadline, O0/no-debug and GCC garbage-collection tuning. All three
+host builds passed under those exact limits, followed again by native imports
+and generated-tag17 recognition through the real project adapter. This bounded
+kit supersedes the original for any future reviewed candidate attempt; neither
+small-bindings kit was uploaded or executed on the Pi. ARM64 behavior and the
+explicit native-artifact deployment gate remain unqualified.
 
 ## Selection and rollback status
 
