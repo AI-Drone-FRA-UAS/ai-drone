@@ -39,8 +39,10 @@ dependency; any experimental firmware changes need a separate checkout.
 Keep software state, historical aircraft observations, simulator results, and
 present flight readiness distinct. This revision checks the prior plan against
 the relevant code, tests, dated evidence, pinned firmware source, and primary
-ArduPilot documentation. It does not claim another full-file audit or a new
-live-aircraft inspection.
+ArduPilot documentation. It does not claim another full-file audit or new
+live flight-controller or flight-performance validation. The separately scoped
+[Python readiness check](state/2026-09-21/python-314-readiness.md) records
+read-only live Pi interpreter and library observations.
 
 | Evidence | What it establishes | Limit |
 | --- | --- | --- |
@@ -408,6 +410,43 @@ the Stage 4 acceptance gate and section 8 hardware evidence.
 
 Exit: repeatable software baseline, explicit known failures, current acceptance
 contracts, and no ambiguous claim that green unit tests establish hall readiness.
+
+### Python 3.14 migration — separate compatibility gates
+
+The intended upgrade to **standard, GIL-enabled Python 3.14** is an explicit
+work item. It was absent from the original plan. The
+[September 21 readiness check](state/2026-09-21/python-314-readiness.md)
+records the live Pi inventory and isolated laptop experiment. Keep this as a
+separate migration from flight-policy changes; it does not replace the flight
+acceptance gates or block independent correctness repairs.
+
+- **Laptops and CI:** test 3.14 in an isolated uv environment, expand
+  `requires-python` only with passing dependency/application checks, regenerate
+  `uv.lock`, and add 3.14 to CI. Update the development default and relevant
+  commands deliberately. Keep syntax/lint targets compatible with the oldest
+  retained version; preserve a tested 3.13 route for the Pi during migration.
+- **Pi feasibility:** uv lists a compatible ARM64 3.14 interpreter, but the
+  deployed environment uses system Python 3.13.5 and apt-provided native
+  bindings. Installed libcamera, pyKMS, lgpio, prctl and AprilTag extensions
+  target CPython 3.13. `--system-site-packages` cannot bridge that ABI change.
+  Inventory all transitive native requirements and obtain/rebuild matching 3.14
+  ARM64 artifacts, including bindings for the installed libcamera version.
+- **Candidate and deployment:** prepare a separate uv-managed environment;
+  retain `/usr/bin/python3` and the working application environment. Update
+  deployment interpreter selection and validation so recovery cannot silently
+  choose the wrong minor version. Preserve source/environment rollback together.
+  Avoid broad OS/package upgrades as a shortcut to this migration.
+- **Pi acceptance:** require imports plus actual disarmed camera acquisition,
+  video/manifest finalization, AprilTag processing, GPIO-backend compatibility
+  without actuation, and read-only runtime telemetry. Measure memory, CPU,
+  camera throughput and control scheduling under representative load. Then run
+  the existing deployment/rollback gates before selecting 3.14 for service use.
+  Free-threaded Python is not part of the initial upgrade.
+
+Exit: record laptop/CI 3.14 support and Pi 3.14 qualification separately. A
+successful x86_64 test run or interpreter installation is not proof that the
+Pi's camera/GPIO stack works under 3.14. Until that gate passes, retain the Pi's
+working 3.13 runtime and an explicit outstanding migration item.
 
 ### Stage 1 — small correctness repairs before restructuring
 
