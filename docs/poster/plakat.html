@@ -79,7 +79,8 @@ h1{
 }
 .bereich-hero{ grid-area:hero; }
 .bereich-links{ grid-area:links; }
-.bereich-mitte{ grid-area:mitte; justify-content:space-between; }
+.bereich-mitte{ grid-area:mitte; justify-content:flex-start; }
+.tag-grafik{ display:block; width:100%; }
 .bereich-geschichte{
   grid-area:geschichte; justify-content:space-between;
   background:var(--flaeche); border-radius:2.5mm; padding:8mm 7mm;
@@ -120,11 +121,11 @@ code{
 .hero img{ width:100%; display:block; border-radius:2mm; }
 .hero svg{ position:absolute; inset:0; width:100%; height:100%; }
 .beschriftung{
-  font-size:25px; font-weight:700; fill:var(--blau); letter-spacing:.1px;
+  font-size:32px; font-weight:700; fill:var(--blau); letter-spacing:.1px;
   stroke:#ffffff; stroke-width:5.5px; paint-order:stroke fill;
   stroke-linejoin:round;
 }
-.beschriftung tspan.leise{ font-weight:400; font-size:20px; fill:#4a5b6b; }
+.beschriftung tspan.leise{ font-weight:400; font-size:23px; fill:#4a5b6b; }
 .fuehrung{ stroke:var(--blau); stroke-width:2.4; fill:none; }
 .fuehrung-halo{ stroke:#ffffff; stroke-width:6.5; fill:none; opacity:.85; }
 .punkt{ fill:var(--akzent); stroke:#ffffff; stroke-width:2; }
@@ -163,7 +164,9 @@ code{
 
 /* ---------------- Karten ---------------- */
 .karte{ background:var(--weiss); border-radius:2mm; padding:5mm; }
-.karte-warm{ background:#fdf0e4; }
+.karte-warm{ background:#fdf0e4; border-left:1.2mm solid var(--akzent); }
+.stand-label{ font-size:4mm; font-weight:700; letter-spacing:.25mm;
+  text-transform:uppercase; color:var(--blau); margin-bottom:3mm; }
 
 /* ---------------- Chronik ---------------- */
 table.chronik{ width:100%; border-collapse:collapse; }
@@ -200,7 +203,7 @@ ul.folgen li::before{
 /* ---------------- QR ---------------- */
 .qr-karte{ display:flex; gap:5mm; align-items:center; background:var(--weiss);
   border-radius:2mm; padding:5mm; }
-.qr-bild{ flex:none; width:58mm; height:58mm; }
+.qr-bild{ flex:none; width:58mm; height:58mm; padding:5.7mm; background:#fff; }
 .qr-bild svg{ width:100%; height:100%; display:block; }
 .qr-text{ font-size:5mm; line-height:1.32; }
 .qr-text b{ display:block; color:var(--blau); font-size:4.8mm; margin-bottom:1.5mm; }
@@ -227,8 +230,8 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
     <h1>KI-Drohne mit AprilTag-Abwurf</h1>
     <div class="kopf-unten">
       <div class="untertitel">
-        Eine FPV-Renndrohne wird zur Indoor-Plattform: sie fliegt ohne GPS,
-        erkennt Marker am Boden und lässt darüber eine Last fallen.
+        Vom CineWhoop zur Indoor-Plattform. Unser Ziel: ohne GPS fliegen,
+        AprilTags am Boden erkennen und gezielt eine Last abwerfen.
       </div>
       <div>
         <span>Team</span>
@@ -278,11 +281,24 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
           <text class="beschriftung" x="285" y="895" text-anchor="end">Motor im Duct
             <tspan class="leise" x="285" dy="30">4 × Emax 2004 · 3000 KV</tspan></text>
 
+          <!-- Kamera: schwarze Halterung links unter dem Rahmen. -->
+          <path class="fuehrung-halo" d="M790 1105 L455 1175 H300"/>
+          <path class="fuehrung" d="M790 1105 L455 1175 H300"/>
+          <circle class="punkt" cx="790" cy="1105" r="9"/>
+          <text class="beschriftung" x="285" y="1170" text-anchor="end">Kamera
+            <tspan class="leise" x="285" dy="32">IMX500</tspan></text>
+
+          <!-- MTF-01P: sichtbare silberne Gehäusekante neben dem blauen Servo. -->
+          <path class="fuehrung-halo" d="M900 1034 V1350 H710"/>
+          <path class="fuehrung" d="M900 1034 V1350 H710"/>
+          <circle class="punkt" cx="900" cy="1034" r="9"/>
+          <text class="beschriftung" x="695" y="1345" text-anchor="end">MTF-01P
+            <tspan class="leise" x="695" dy="32">LiDAR + optischer Fluss</tspan></text>
+
           <path class="fuehrung-halo" d="M1130 1040 V1350 H1290"/>
           <path class="fuehrung" d="M1130 1040 V1350 H1290"/>
           <circle class="punkt" cx="1130" cy="1040" r="9"/>
-          <text class="beschriftung" x="1305" y="1345">Kamera · MTF-01P · Servo
-            <tspan class="leise" x="1305" dy="30">alles unter dem Rahmen</tspan></text>
+          <text class="beschriftung" x="1305" y="1345">Servo</text>
         </svg>
       </div>
       <div class="bildtext">
@@ -296,10 +312,10 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
 
       <section>
         <div class="kennzahlen">
-          <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für die Navigation nötig</span></div>
+          <div class="kennzahl"><b>0×</b><span>GPS für das Indoor-Flugkonzept</span></div>
           <div class="kennzahl"><b>4.7.1</b><span>eigener ArduCopter-Build</span></div>
-          <div class="kennzahl"><b>52 Hz</b><span>Abstandsmessungen nach vorn</span></div>
-          <div class="kennzahl"><b>29 fps</b><span>ausgewertete Kamerabilder</span></div>
+          <div class="kennzahl"><b>52 Hz</b><span>MT-15: direkt gemessene Sensorrate</span></div>
+          <div class="kennzahl"><b>29 fps</b><span>Kameraauswertung im Sensortest</span></div>
         </div>
       </section>
 
@@ -308,7 +324,12 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
         <div class="kachel" style="flex:1">
           <img src="fotos/blick-von-unten.jpg" alt="Servo, MTF-01P und Kamera an der Unterseite"
                style="height:100%; object-fit:cover">
-          <svg viewBox="0 0 340 560" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <svg viewBox="0 0 340 560" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="1: Servo, 2: silberner MTF-01P-LiDAR, 3: schwarze Kamerahalterung">
+            <path class="fuehrung-halo" d="M247 150 H213 L166 175 M247 290 H222 L204 314 M247 430 H231 L210 420"/>
+            <path class="fuehrung" d="M247 150 H213 L166 175 M247 290 H222 L204 314 M247 430 H231 L210 420"/>
+            <circle class="punkt" cx="166" cy="175" r="4"/>
+            <circle class="punkt" cx="204" cy="314" r="4"/>
+            <circle class="punkt" cx="210" cy="420" r="4"/>
             <circle class="marke" cx="268" cy="150" r="21"/>
             <text class="marke-text" x="268" y="162">1</text>
             <circle class="marke" cx="268" cy="290" r="21"/>
@@ -331,7 +352,7 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
 
       <section>
         <h2 class="tuerkis">Tag erkannt → Last fällt</h2>
-        <svg class="tag-grafik" viewBox="0 0 820 560" xmlns="http://www.w3.org/2000/svg" role="img"
+        <svg class="tag-grafik" viewBox="0 0 820 520" xmlns="http://www.w3.org/2000/svg" role="img"
      aria-label="Die Kamera erkennt den Marker am Boden, danach öffnet die Halterung und die Last fällt">
   <defs>
     <linearGradient id="kegel" x1="0" y1="0" x2="0" y2="1">
@@ -379,12 +400,12 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
   <circle cx="26" cy="486" r="15" fill="#0d9488"/>
   <text x="26" y="492" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
   <text x="52" y="481" font-size="19" font-weight="700" fill="#0b3d67">Kamera erkennt Tag 3</text>
-  <text x="52" y="505" font-size="16" fill="#5b6a78">drei saubere Bilder hintereinander</text>
+  <text x="52" y="505" font-size="16" fill="#5b6a78">drei bestätigte Erkennungen in Folge</text>
 
   <circle cx="436" cy="486" r="15" fill="#e8710a"/>
   <text x="436" y="492" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
   <text x="462" y="481" font-size="19" font-weight="700" fill="#0b3d67">Halterung öffnet</text>
-  <text x="462" y="505" font-size="16" fill="#5b6a78">einmal pro Flug, danach verriegelt</text>
+  <text x="462" y="505" font-size="16" fill="#5b6a78">einmal pro Lauf, kein automatisches Schließen</text>
 </svg>
       </section>
 
@@ -408,8 +429,8 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
           <div class="teil"><img src="fotos/teil-fuesse.png" alt="Dämpferfüße"><span>Dämpferfüße</span></div>
         </div>
         <div class="bildtext">
-          PETG für die Gehäuse, TPU für die weichen Teile — die dämpfen die Schwingungen,
-          von denen der optische Fluss lebt.
+          PETG für feste Gehäuse, flexibles TPU zur Schwingungsdämpfung. Weniger Vibration
+          verbessert die Bedingungen für optischen Fluss und Lageschätzung.
         </div>
       </section>
 
@@ -419,10 +440,10 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
     <div class="bereich-geschichte spalte">
 
       <section>
-        <h2 class="blau">Erst im Simulator</h2>
+        <h2 class="blau">Firmware im Simulator</h2>
         <p>
-          Jeder Flugbefehl läuft zuerst gegen ein simuliertes Fluggerät — ArduPilot-SITL,
-          gebaut aus genau dem Commit, der auch an Bord liegt.
+          Die neue Firmware wurde zuerst in ArduPilot-SITL geprüft: einem simulierten
+          Fluggerät mit demselben Softwarestand wie an Bord.
         </p>
         <p class="klein">
           Drei Szenarien: Schweben auf optischem Fluss, beide Abstandssensoren gleichzeitig,
@@ -431,7 +452,7 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
       </section>
 
       <section>
-        <h2>Dann geflogen</h2>
+        <h2>Flugversuche im August</h2>
         <table class="chronik">
           <tr><td>20.08.</td><td>Erster Flug. Stieg über die befohlene Höhe und blieb oben — an der Leine gehalten, Akku gezogen.</td></tr>
           <tr><td>21.08.</td><td>Zwei Starts, kein Abheben: der Schub lag bei der Hälfte des Nötigen.</td></tr>
@@ -473,14 +494,14 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
           <div class="qr-bild"><svg viewBox="0 0 33 33" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" role="img" aria-label="QR-Code zum Video auf Instagram"><rect width="33" height="33" fill="#ffffff"/><path d="M0 0h7v1h-7zM8 0h2v1h-2zM11 0h1v1h-1zM13 0h4v1h-4zM18 0h1v1h-1zM20 0h1v1h-1zM22 0h1v1h-1zM26 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM8 1h1v1h-1zM10 1h8v1h-8zM20 1h2v1h-2zM26 1h1v1h-1zM32 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM11 2h4v1h-4zM16 2h3v1h-3zM20 2h3v1h-3zM24 2h1v1h-1zM26 2h1v1h-1zM28 2h3v1h-3zM32 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM9 3h1v1h-1zM13 3h2v1h-2zM16 3h1v1h-1zM19 3h2v1h-2zM23 3h2v1h-2zM26 3h1v1h-1zM28 3h3v1h-3zM32 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM9 4h1v1h-1zM13 4h1v1h-1zM15 4h1v1h-1zM17 4h2v1h-2zM26 4h1v1h-1zM28 4h3v1h-3zM32 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM12 5h2v1h-2zM15 5h3v1h-3zM21 5h2v1h-2zM24 5h1v1h-1zM26 5h1v1h-1zM32 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h7v1h-7zM14 7h3v1h-3zM18 7h1v1h-1zM23 7h2v1h-2zM1 8h1v1h-1zM6 8h4v1h-4zM11 8h3v1h-3zM16 8h2v1h-2zM22 8h1v1h-1zM24 8h2v1h-2zM31 8h2v1h-2zM2 9h4v1h-4zM9 9h2v1h-2zM12 9h4v1h-4zM18 9h2v1h-2zM21 9h1v1h-1zM23 9h1v1h-1zM28 9h3v1h-3zM0 10h2v1h-2zM3 10h1v1h-1zM6 10h1v1h-1zM8 10h1v1h-1zM10 10h4v1h-4zM15 10h2v1h-2zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h3v1h-3zM28 10h1v1h-1zM30 10h1v1h-1zM2 11h1v1h-1zM5 11h1v1h-1zM7 11h1v1h-1zM13 11h4v1h-4zM23 11h1v1h-1zM25 11h7v1h-7zM0 12h1v1h-1zM2 12h2v1h-2zM5 12h3v1h-3zM12 12h1v1h-1zM14 12h8v1h-8zM26 12h2v1h-2zM0 13h1v1h-1zM2 13h1v1h-1zM5 13h1v1h-1zM7 13h3v1h-3zM11 13h1v1h-1zM14 13h1v1h-1zM16 13h2v1h-2zM22 13h2v1h-2zM29 13h1v1h-1zM31 13h2v1h-2zM2 14h2v1h-2zM6 14h1v1h-1zM11 14h4v1h-4zM18 14h1v1h-1zM20 14h1v1h-1zM24 14h4v1h-4zM29 14h1v1h-1zM31 14h1v1h-1zM4 15h2v1h-2zM8 15h2v1h-2zM11 15h5v1h-5zM17 15h1v1h-1zM19 15h1v1h-1zM23 15h3v1h-3zM27 15h1v1h-1zM29 15h2v1h-2zM32 15h1v1h-1zM1 16h2v1h-2zM4 16h1v1h-1zM6 16h1v1h-1zM9 16h2v1h-2zM12 16h2v1h-2zM15 16h1v1h-1zM17 16h3v1h-3zM22 16h1v1h-1zM24 16h2v1h-2zM27 16h3v1h-3zM32 16h1v1h-1zM1 17h1v1h-1zM8 17h1v1h-1zM10 17h1v1h-1zM12 17h1v1h-1zM14 17h1v1h-1zM16 17h1v1h-1zM19 17h2v1h-2zM22 17h5v1h-5zM29 17h2v1h-2zM32 17h1v1h-1zM0 18h4v1h-4zM5 18h2v1h-2zM8 18h3v1h-3zM12 18h1v1h-1zM16 18h2v1h-2zM19 18h2v1h-2zM22 18h2v1h-2zM26 18h2v1h-2zM29 18h2v1h-2zM32 18h1v1h-1zM1 19h1v1h-1zM4 19h1v1h-1zM8 19h3v1h-3zM12 19h1v1h-1zM15 19h2v1h-2zM18 19h2v1h-2zM23 19h1v1h-1zM28 19h5v1h-5zM3 20h2v1h-2zM6 20h5v1h-5zM12 20h1v1h-1zM16 20h1v1h-1zM18 20h1v1h-1zM21 20h2v1h-2zM25 20h1v1h-1zM27 20h3v1h-3zM31 20h2v1h-2zM0 21h1v1h-1zM2 21h4v1h-4zM12 21h3v1h-3zM17 21h1v1h-1zM19 21h2v1h-2zM22 21h1v1h-1zM27 21h2v1h-2zM30 21h1v1h-1zM0 22h1v1h-1zM2 22h1v1h-1zM5 22h2v1h-2zM8 22h2v1h-2zM13 22h1v1h-1zM15 22h2v1h-2zM20 22h3v1h-3zM24 22h2v1h-2zM31 22h1v1h-1zM0 23h1v1h-1zM3 23h1v1h-1zM10 23h1v1h-1zM14 23h2v1h-2zM17 23h1v1h-1zM19 23h2v1h-2zM23 23h5v1h-5zM29 23h4v1h-4zM0 24h4v1h-4zM5 24h4v1h-4zM12 24h6v1h-6zM23 24h7v1h-7zM31 24h1v1h-1zM8 25h2v1h-2zM11 25h1v1h-1zM13 25h3v1h-3zM19 25h3v1h-3zM23 25h2v1h-2zM28 25h1v1h-1zM30 25h1v1h-1zM32 25h1v1h-1zM0 26h7v1h-7zM8 26h1v1h-1zM10 26h8v1h-8zM20 26h2v1h-2zM23 26h2v1h-2zM26 26h1v1h-1zM28 26h1v1h-1zM30 26h2v1h-2zM0 27h1v1h-1zM6 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM17 27h3v1h-3zM23 27h2v1h-2zM28 27h4v1h-4zM0 28h1v1h-1zM2 28h3v1h-3zM6 28h1v1h-1zM10 28h2v1h-2zM13 28h1v1h-1zM15 28h1v1h-1zM20 28h3v1h-3zM24 28h6v1h-6zM0 29h1v1h-1zM2 29h3v1h-3zM6 29h1v1h-1zM9 29h1v1h-1zM11 29h2v1h-2zM15 29h2v1h-2zM18 29h1v1h-1zM20 29h1v1h-1zM23 29h1v1h-1zM25 29h1v1h-1zM27 29h4v1h-4zM32 29h1v1h-1zM0 30h1v1h-1zM2 30h3v1h-3zM6 30h1v1h-1zM9 30h1v1h-1zM16 30h1v1h-1zM19 30h1v1h-1zM21 30h2v1h-2zM24 30h1v1h-1zM27 30h2v1h-2zM30 30h3v1h-3zM0 31h1v1h-1zM6 31h1v1h-1zM8 31h2v1h-2zM11 31h2v1h-2zM15 31h1v1h-1zM17 31h2v1h-2zM22 31h1v1h-1zM27 31h4v1h-4zM0 32h7v1h-7zM10 32h2v1h-2zM14 32h2v1h-2zM17 32h1v1h-1zM22 32h6v1h-6zM31 32h1v1h-1z" fill="#0b3d67"/></svg></div>
           <div class="qr-text">
             <b>Video vom Absturz</b>
-            13 Sekunden nichts, dann ein Zug nach oben — auf Instagram.
+            Der fehlgeschlagene Start im Video. QR-Code scannen und auf Instagram ansehen.
             <div class="qr-url">instagram.com/reel/DcbRrKNRIA_</div>
           </div>
         </div>
       </section>
 
       <section>
-        <h2>Drei Ursachen, gemessen</h2>
+        <h2>Drei Befunde aus den Tests</h2>
         <ol class="befunde">
           <li><b>Der Höhenfilter hatte keine Quelle.</b> Zwei Parameter widersprachen sich;
             gemeldet wurden <b>−10 000 m</b> und 38 m/s Sinken — im Stand auf dem Boden.</li>
@@ -503,16 +524,17 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
       </section>
 
       <section>
-        <h2 class="tuerkis">Wo wir stehen</h2>
+        <h2 class="tuerkis">Stand &amp; nächster Schritt</h2>
         <div class="karte karte-warm">
+          <div class="stand-label">Dokumentationsstand · September 2026</div>
           <p>
-            Erkennung und Abwurf laufen, die Sensorik nach unten und nach vorn ebenso.
-            Der erste Flug mit der neuen Firmware steht aus.
+            Tag-Erkennung und Servo-Ansteuerung sind implementiert; beide
+            Abstandssensoren liefern Messwerte. <b>Der Flugtest mit der neuen Firmware steht aus.</b>
           </p>
           <p class="klein">
-            Er ist gesperrt: Die Vorflugprüfung meldet ein abweichendes Magnetfeld
-            (<code>Check mag field</code>, rund 295 mG gegen 200 mG Schwelle). Die Prüfung
-            wird nicht umgangen — gesucht wird die Ursache.
+            Nächster Schritt: die Kompassabweichung klären. Die Vorflugprüfung
+            (<code>Check mag field</code>) meldet rund 295 mG Abweichung bei 200 mG
+            Schwelle und sperrt den Start.
           </p>
         </div>
       </section>
