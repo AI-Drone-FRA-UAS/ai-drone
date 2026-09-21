@@ -42,7 +42,8 @@ Vortrag frei geredet werden kann.
 | `fotos/abwurf-servo.jpg` | daraus der Zuschnitt für Abb. 2 |
 | `fotos/Bild von unten Lidar Servo Kamera.jpg` | Original der Unterseite |
 | `fotos/blick-von-unten.jpg` | daraus der Zuschnitt mit den drei Bauteilen |
-| `fotos/teil-*.png` | die STL-Ansichten, freigestellt und in die Plakatfarben gebracht |
+| `fotos/STL-Screenshot*.jpg` | unveränderte STL-Ansichten in dunklen Bildkacheln; alle Seitenflächen bleiben erhalten |
+| `fotos/teil-*.png` | frühere freigestellte Ableitungen, nicht mehr im Plakat verwendet |
 | `fotos/drohne-flug-*.jpg` | Flugaufnahmen, genutzt auf der Projektseite |
 
 Hand und Kabelbinder im Hauptbild wurden nicht übermalt, sondern
@@ -53,6 +54,11 @@ rekonstruiert. Damit die Füllung keine Farbe von Klett und Kabeln zieht, sind
 alle nicht-wandigen Pixel in der Nachbarschaft von der Farbquelle
 ausgenommen. Die abgeleiteten Dateien lassen sich aus den Originalen jederzeit
 neu erzeugen.
+
+Die STL-Ansichten verwenden die Original-Screenshots ohne Freistellmaske.
+Bei den früheren PNG-Ableitungen wurden dunkle Seitenflächen teilweise als
+Hintergrund entfernt. `object-fit: contain` zeigt die vollständigen Originale
+ohne Beschnitt.
 
 Der **QR-Code** ist als Pfad-SVG direkt im HTML eingebettet (kein externer
 Dienst, kein Bild-Asset) und zeigt auf das Video des Absturzes vom 21.08.2026
