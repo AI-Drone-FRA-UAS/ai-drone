@@ -3,7 +3,7 @@ name = "ai-drone"
 version = "0.1.0"
 description = "Raspberry Pi AI camera and ArduPilot sensor tools for the drone"
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "future>=1.0.0",
     "numpy>=2.3.5",
