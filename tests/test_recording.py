@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import io
 import json
+import operator
 import queue
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -1476,6 +1478,40 @@ def test_lifecycle_attempts_all_cleanup_before_finalization(tmp_path, monkeypatc
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["error"] == "partial startup"
     assert manifest["finalization_error"] == "summary unavailable"
+    assert len(manifest["errors"]) == 10
+
+
+def test_capture_snapshot_freezes_each_concurrent_first_seen_key():
+    state = CaptureState()
+    boundary = threading.Barrier(2, timeout=2)
+
+    def produce():
+        for index in range(8):
+            with state.lock:
+                state.telemetry_counts[str(index)] += 1
+                state.vehicle_telemetry_counts[str(index)] += 1
+            boundary.wait()
+            boundary.wait()
+
+    worker = threading.Thread(target=produce)
+    worker.start()
+    snapshots = []
+    for index in range(8):
+        boundary.wait()
+        snapshot = state.snapshot()
+        assert snapshot.telemetry_counts == snapshot.vehicle_telemetry_counts
+        assert len(snapshot.telemetry_counts) == index + 1
+        snapshots.append(snapshot)
+        boundary.wait()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert len(snapshots[0].telemetry_counts) == 1
+    with pytest.raises(TypeError):
+        operator.setitem(cast(Any, snapshots[0].telemetry_counts), "new", 1)
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, snapshots[0]).camera_frames = 42
+    assert not hasattr(snapshots[0], "lock")
+    assert not hasattr(snapshots[0], "vehicle_heartbeat")
 
 
 def test_capture_snapshot_is_coherent_and_owns_counter_copies():
@@ -1500,7 +1536,7 @@ def test_capture_snapshot_is_coherent_and_owns_counter_copies():
     assert sum(snapshot.telemetry_counts.values()) == 1000
     state.record_error("first")
     state.record_error("cleanup")
-    assert state.snapshot().errors == ["first", "cleanup"]
+    assert state.snapshot().errors == ("first", "cleanup")
     assert state.worker_error == "first"
 
 

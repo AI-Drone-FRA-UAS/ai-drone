@@ -6,7 +6,7 @@ import math
 import time
 from typing import Any
 
-from ai_drone.capture.state import CaptureState
+from ai_drone.capture.state import CaptureSnapshot, CaptureState
 from ai_drone.mavlink.safety import distance_sensor_valid, is_fresh
 
 _OBSERVATION_FRESHNESS_S = 2.0
@@ -16,7 +16,7 @@ def _observation_is_fresh(observed: float | None, now: float) -> bool:
     return is_fresh(observed, now, _OBSERVATION_FRESHNESS_S)
 
 
-def _heartbeat_status(state: CaptureState, observed_at: float) -> str:
+def _heartbeat_status(state: CaptureSnapshot, observed_at: float) -> str:
     if state.last_vehicle_heartbeat_monotonic is None:
         return "no_data"
     return (
@@ -55,7 +55,7 @@ def _observe_sensor_message(
 
 
 def _downward_range_summary(
-    state: CaptureState,
+    state: CaptureSnapshot,
     observed_at: float,
 ) -> tuple[int, float | None, str | None, bool]:
     """Choose one range telemetry format instead of adding duplicate reports."""
@@ -89,7 +89,7 @@ def _sample_status(samples: int, parent: str, *, fresh: bool = True) -> str:
     return "ok" if fresh else "stale"
 
 
-def _flow_status(state: CaptureState, parent: str, observed_at: float) -> str:
+def _flow_status(state: CaptureSnapshot, parent: str, observed_at: float) -> str:
     status = _sample_status(
         state.optical_flow_samples,
         parent,
@@ -103,7 +103,7 @@ def _flow_status(state: CaptureState, parent: str, observed_at: float) -> str:
 
 
 def _component_report(
-    state: CaptureState,
+    state: CaptureState | CaptureSnapshot,
     *,
     on_pi: bool,
     flight_controller: str,
@@ -179,7 +179,7 @@ def _component_report(
 
 
 def _print_live_status(
-    state: CaptureState,
+    state: CaptureState | CaptureSnapshot,
     *,
     tag_servo: bool = False,
     stop_after: int | None = None,

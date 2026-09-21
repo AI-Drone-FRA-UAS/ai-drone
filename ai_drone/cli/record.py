@@ -1562,21 +1562,23 @@ def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
 def _write_minimal_manifest(recording: _Recording, error: BaseException) -> None:
     if recording.paths.manifest.exists():
         return
+    state = recording.state.snapshot()
     manifest = {
         "schema": 1,
         "operation": recording.operation,
-        "error": recording.state.worker_error or str(error) or type(error).__name__,
+        "error": state.worker_error or str(error) or type(error).__name__,
         "finalization_error": str(error) or type(error).__name__,
-        "stop_reason": recording.state.stop_reason or "capture_failed",
+        **({"errors": list(state.errors)} if state.errors else {}),
+        "stop_reason": state.stop_reason or "capture_failed",
         "completed": False,
-        "armed_abort": recording.state.armed_abort,
+        "armed_abort": state.armed_abort,
         "started_utc": recording.started_utc.isoformat()
         if recording.started_utc
         else None,
         "ended_utc": recording.ended_utc.isoformat() if recording.ended_utc else None,
         "components": {
             "servo": {
-                "completed_commanded_pulses": recording.state.servo_pulses_completed,
+                "completed_commanded_pulses": state.servo_pulses_completed,
                 "feedback_available": False,
             }
         },
@@ -1618,14 +1620,18 @@ def run(
 
 
 def _finish_recording(recording: _Recording) -> int:
+    timestamp_summary = _safe_video_timestamp_summary(
+        recording.paths.video_timestamps, recording.state
+    )
+    state = recording.state.snapshot()
     actual_duration = max(0.0, recording.ended_monotonic - recording.started_monotonic)
-    if recording.state.stop_reason == "camera_stalled":
+    if state.stop_reason == "camera_stalled":
         recording.camera.status = "error"
         recording.details["camera"] = (
-            recording.state.worker_error or "camera frame acquisition stalled"
+            state.worker_error or "camera frame acquisition stalled"
         )
     components = _component_report(
-        recording.state,
+        state,
         on_pi=recording.on_pi,
         flight_controller=recording.flight.status,
         camera=recording.camera.status,
@@ -1647,12 +1653,12 @@ def _finish_recording(recording: _Recording) -> int:
         components["servo"] = {
             "status": (
                 "commanded"
-                if recording.state.servo_pulses_completed
+                if state.servo_pulses_completed
                 else ("ready" if recording.servo_session is not None else "unavailable")
             ),
             "gpio": 12,
             "feedback_available": False,
-            "completed_commanded_pulses": recording.state.servo_pulses_completed,
+            "completed_commanded_pulses": state.servo_pulses_completed,
         }
     files = {
         "video": recording.paths.video,
@@ -1665,9 +1671,6 @@ def _finish_recording(recording: _Recording) -> int:
         "first_frame": recording.paths.first_frame,
         "last_frame": recording.paths.last_frame,
     }
-    timestamp_summary = _safe_video_timestamp_summary(
-        recording.paths.video_timestamps, recording.state
-    )
     manifest = {
         "schema": 1,
         "operation": recording.operation,
@@ -1677,11 +1680,11 @@ def _finish_recording(recording: _Recording) -> int:
         if recording.started_utc
         else None,
         "ended_utc": recording.ended_utc.isoformat() if recording.ended_utc else None,
-        "completed": not recording.state.armed_abort
-        and recording.state.worker_error is None,
-        "armed_abort": recording.state.armed_abort,
-        "error": recording.state.worker_error,
-        "stop_reason": recording.state.stop_reason,
+        "completed": not state.armed_abort and state.worker_error is None,
+        "armed_abort": state.armed_abort,
+        "error": state.worker_error,
+        **({"errors": list(state.errors)} if state.errors else {}),
+        "stop_reason": state.stop_reason,
         "components": components,
         "storage": recording.storage.manifest()
         if recording.storage is not None
@@ -1689,9 +1692,9 @@ def _finish_recording(recording: _Recording) -> int:
         "safety": {
             "initial_vehicle_state": recording.flight.initial_vehicle_state,
             "allow_flight": recording.allow_flight,
-            "saw_armed": recording.state.saw_armed,
-            "saw_disarmed_after_arm": recording.state.saw_disarmed_after_arm,
-            "last_vehicle_state": recording.state.last_vehicle_state or "unavailable",
+            "saw_armed": state.saw_armed,
+            "saw_disarmed_after_arm": state.saw_disarmed_after_arm,
+            "last_vehicle_state": state.last_vehicle_state or "unavailable",
             "arming_skipchk": recording.flight.arming_skipchk,
             "mavlink_commands_never_sent": [
                 "arm",
@@ -1716,9 +1719,9 @@ def _finish_recording(recording: _Recording) -> int:
             "endpoint": recording.flight.endpoint,
             "baud": recording.args.baud,
             "requested_messages": recording.flight.requested_messages,
-            "message_counts": dict(sorted(recording.state.telemetry_counts.items())),
+            "message_counts": dict(sorted(state.telemetry_counts.items())),
             "vehicle_message_counts": dict(
-                sorted(recording.state.vehicle_telemetry_counts.items())
+                sorted(state.vehicle_telemetry_counts.items())
             ),
             "outbound": (
                 [
@@ -1746,19 +1749,19 @@ def _finish_recording(recording: _Recording) -> int:
         return 1
 
     print(
-        f"Finished in {actual_duration:.3f} s: camera={recording.state.camera_frames} frames, "
-        f"telemetry={sum(recording.state.telemetry_counts.values())} messages, "
-        f"tags={recording.state.tag_detections}, "
-        f"servo_pulses={recording.state.servo_pulses_completed}, "
-        f"stop_reason={recording.state.stop_reason or 'unspecified'}",
+        f"Finished in {actual_duration:.3f} s: camera={state.camera_frames} frames, "
+        f"telemetry={sum(state.telemetry_counts.values())} messages, "
+        f"tags={state.tag_detections}, "
+        f"servo_pulses={state.servo_pulses_completed}, "
+        f"stop_reason={state.stop_reason or 'unspecified'}",
         flush=True,
     )
     print(f"Manifest: {recording.paths.manifest}", flush=True)
-    if recording.state.armed_abort:
+    if state.armed_abort:
         print("ABORTED: the vehicle reported ARMED.", flush=True)
         return 3
-    if recording.state.worker_error is not None:
-        print(f"FAILED: {recording.state.worker_error}", flush=True)
+    if state.worker_error is not None:
+        print(f"FAILED: {state.worker_error}", flush=True)
         return 1
     return 0
 
