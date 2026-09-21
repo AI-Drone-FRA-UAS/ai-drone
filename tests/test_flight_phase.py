@@ -128,7 +128,7 @@ def test_passive_armed_observation_cannot_authorize_climb():
 
 def test_cleanup_cannot_resume_climb_or_use_ack_helper_to_bypass_command_policy():
     drone = controller_in(Landing(Flight("taking_off", 0.05)))
-    with pytest.raises(FlightSafetyError, match="arming by this controller"):
+    with pytest.raises(FlightSafetyError, match="landing is latched"):
         drone._write_command(Climb(0.3, 0.0))
     with pytest.raises(FlightSafetyError, match="only authorizes passive"):
         drone._send_command_long_and_wait_ack(
@@ -144,3 +144,13 @@ def test_written_is_not_an_arming_confirmation():
     assert isinstance(drone.phase, ArmPending)
     assert not drone.is_armed
     assert drone.command_attempts[-1].outcome == "written"
+
+
+@pytest.mark.parametrize("command", [Arm(), SetMode("GUIDED_NOGPS"), SetMode("LOITER")])
+def test_landing_latch_also_blocks_direct_arm_and_mode_writers(command):
+    drone = controller_in(Landing(Flight("taking_off", 0.05)))
+    before = drone.phase
+    with pytest.raises(FlightSafetyError, match="landing is latched"):
+        drone._write_command(command)
+    assert drone.phase is before
+    assert drone.connection.mock_calls == []

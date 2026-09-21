@@ -334,6 +334,16 @@ class DroneController:
         if self._human_control:
             raise HumanControlTaken("control was handed to the radio pilot")
 
+    def _require_mission_not_landing(self) -> None:
+        if self._landing_commanded:
+            raise FlightSafetyError(
+                "landing is latched; a failed mission cannot resume"
+            )
+
+    def _require_cleanup_completed(self) -> None:
+        if isinstance(self.phase, Landing):
+            self._require_mission_not_landing()
+
     def _write_command(self, command: Command) -> None:
         """The autonomous write boundary; heartbeat and passive requests are separate.
 
@@ -342,6 +352,10 @@ class DroneController:
         """
         self._resolve_control_ownership()
         self._require_autonomous_control()
+        if isinstance(command, Arm | Climb) or (
+            isinstance(command, SetMode) and command.name != "LAND"
+        ):
+            self._require_mission_not_landing()
         if isinstance(command, Disarm) and cleanup(self.phase) == "land":
             raise FlightSafetyError("refusing to force-disarm a flight; use land()")
         if (
@@ -940,6 +954,7 @@ class DroneController:
         self, timeout: float = 10.0, *, takeoff_gain_m: float | None = None
     ) -> None:
         self._require_autonomous_control()
+        self._require_cleanup_completed()
         self._require_operator()
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         self.update_telemetry()
@@ -1173,6 +1188,7 @@ class DroneController:
 
     def takeoff(self, target_alt: float, timeout: float = 15.0) -> None:
         self._require_autonomous_control()
+        self._require_cleanup_completed()
         target = finite_in_range(
             target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
         )
@@ -1261,6 +1277,7 @@ class DroneController:
         """Gate and confirm the GuidedNoGPS-to-Loiter handoff."""
 
         self._require_autonomous_control()
+        self._require_mission_not_landing()
         if not self.is_armed or not self._flight_started_by_controller:
             raise FlightSafetyError("Loiter transition requires a controller takeoff")
         self.phase = Flight("awaiting_loiter", self._ground_reference)
@@ -1280,6 +1297,7 @@ class DroneController:
         """Hold confirmed Loiter while enforcing flow, EKF, range and link gates."""
 
         self._require_autonomous_control()
+        self._require_mission_not_landing()
         finite_in_range(duration, "duration", minimum=0.1, maximum=30.0)
         self._require_profile_time(duration)
         if self.flight_mode != "LOITER":
