@@ -19,6 +19,7 @@ from ai_drone.cli import record
 from ai_drone.mavlink.devices import is_network_endpoint
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.settings import load_settings
+from ai_drone.system import namespace_to_flags, systemd_run_command, unit_state
 from ai_drone.validation import positive_finite
 
 UNIT = "ai-drone-walk.service"
@@ -67,19 +68,18 @@ def _validate_runtime(root: Path, python: Path) -> None:
 
 def _record_arguments(args: argparse.Namespace) -> list[str]:
     """Freeze validated defaults and overrides before changing process or cwd."""
-    arguments = []
-    for name, value in vars(args).items():
-        if name in {"tag_servo", "worker", "dry_run", "output_dir"} or value is None:
-            continue
-        option = "--tag-id" if name == "tag_ids" else f"--{name.replace('_', '-')}"
-        if isinstance(value, bool):
-            arguments.extend([option] if value else [])
-        elif name in {"resolution", "analysis_resolution"}:
-            arguments.extend([option, "x".join(map(str, value))])
-        else:
-            values = value if isinstance(value, list) else [value]
-            for item in values:
-                arguments.extend([option, str(item)])
+
+    def resolution(value: object) -> str:
+        if not isinstance(value, tuple):
+            raise ValueError("parsed resolution must be a width/height tuple")
+        return "x".join(map(str, value))
+
+    arguments = namespace_to_flags(
+        args,
+        exclude=frozenset({"tag_servo", "worker", "dry_run", "output_dir"}),
+        aliases={"tag_ids": "--tag-id"},
+        serializers={"resolution": resolution, "analysis_resolution": resolution},
+    )
     return [*arguments, "--output-dir", str(args.output_dir)]
 
 
@@ -93,31 +93,31 @@ def _launch_command(
     tag_servo: bool,
 ) -> list[str]:
     interpreter = _python_command(python)
-    return [
-        "sudo",
-        "-n",
-        "systemd-run",
-        f"--unit={UNIT}",
-        "--collect",
-        "--service-type=exec",
-        "--expand-environment=no",
-        f"--uid={uid}",
-        f"--gid={gid}",
-        f"--working-directory={root}",
-        "--setenv=PYTHONUNBUFFERED=1",
-        "--setenv=AI_DRONE_CONFIG=/dev/null",
-        f"--setenv=PATH={Path(interpreter[0]).parent}:{os.defpath}",
-        "--property=Restart=no",
-        "--property=KillSignal=SIGINT",
-        "--property=KillMode=mixed",
-        "--property=TimeoutStopSec=180",
-        *interpreter,
-        "-m",
-        "ai_drone.cli.walk",
-        "--worker",
-        *(["--tag-servo"] if tag_servo else []),
-        *arguments,
-    ]
+    return systemd_run_command(
+        UNIT,
+        [
+            *interpreter,
+            "-m",
+            "ai_drone.cli.walk",
+            "--worker",
+            *(["--tag-servo"] if tag_servo else []),
+            *arguments,
+        ],
+        uid=uid,
+        gid=gid,
+        directory=root,
+        environment={
+            "PYTHONUNBUFFERED": "1",
+            "AI_DRONE_CONFIG": "/dev/null",
+            "PATH": f"{Path(interpreter[0]).parent}:{os.defpath}",
+        },
+        properties={
+            "Restart": "no",
+            "KillSignal": "SIGINT",
+            "KillMode": "mixed",
+            "TimeoutStopSec": "180",
+        },
+    )
 
 
 def _python_command(python: Path) -> list[str]:
@@ -139,14 +139,12 @@ def _require_free_unit() -> None:
         check=False,
         timeout=10,
     )
-    properties = dict(
-        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
-    )
-    if properties.get("LoadState") == "not-found" and result.returncode in (0, 1):
+    state = unit_state(result)
+    if state.absent:
         return
-    if properties.get("LoadState") == "loaded":
+    if state.load == "loaded":
         raise ValueError(
-            f"{UNIT} already exists ({properties.get('ActiveState', 'unknown')}); "
+            f"{UNIT} already exists ({state.active}); "
             "the existing job will not be stopped or replaced"
         )
     raise ValueError(
