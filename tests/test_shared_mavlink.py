@@ -202,6 +202,31 @@ def test_reader_error_propagates_and_preserves_best_effort_write(link):
         hub.subscribe("late")
 
 
+def test_metrics_close_failure_cannot_retain_the_transport_send_lock(link):
+    wire, hub = link
+
+    def fail():
+        raise RuntimeError("metric close failed")
+
+    hub._transport_metrics = SimpleNamespace(close=fail)
+    hub._close_transport(0.1)
+    acquired = []
+
+    def try_lock():
+        success = hub._send_lock.acquire(timeout=0.1)
+        acquired.append(success)
+        if success:
+            hub._send_lock.release()
+
+    worker = threading.Thread(target=try_lock)
+    worker.start()
+    worker.join(timeout=1)
+    assert acquired == [True]
+    assert wire.closes == 1
+    hub._transport_metrics = None
+    hub._close_error = None
+
+
 def test_all_send_paths_are_serialized(link):
     wire, hub = link
     endpoints = [hub.subscribe(str(index)) for index in range(8)]

@@ -463,9 +463,11 @@ class SharedMavlink:
             self._reader.start()
         except BaseException:
             self._closed = True
-            if self._transport_metrics is not None:
-                self._transport_metrics.close()
-            self._raw.close()
+            try:
+                if self._transport_metrics is not None:
+                    self._transport_metrics.close()
+            finally:
+                self._raw.close()
             raise
 
     def subscribe(self, name: str, capacity: int = 512) -> MavlinkEndpoint:
@@ -620,9 +622,11 @@ class SharedMavlink:
             try:
                 self._raw.close()
             finally:
-                if self._transport_metrics is not None:
-                    self._transport_metrics.close()
-                self._send_lock.release()
+                try:
+                    if self._transport_metrics is not None:
+                        self._transport_metrics.close()
+                finally:
+                    self._send_lock.release()
         except BaseException as error:
             self._close_error = error
 
