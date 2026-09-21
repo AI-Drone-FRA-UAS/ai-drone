@@ -379,7 +379,12 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     def _cmd_handoff(_args: argparse.Namespace) -> int:
-        runtime_request(load_settings().runtime.socket, {"human": True})
+        response = runtime_request(load_settings().runtime.socket, {"human": True})
+        if (
+            not isinstance(response, dict)
+            or response.get("handoff_requested") is not True
+        ):
+            raise RuntimeError("runtime did not confirm the handoff request")
         return 0
 
     handoff.set_defaults(handler=_cmd_handoff)

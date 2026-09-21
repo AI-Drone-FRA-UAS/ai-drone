@@ -16,6 +16,50 @@ from ai_drone.flight.controller import FlightSafetyError, HumanControlTaken
 from ai_drone.settings import Settings
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        False,
+        None,
+        {},
+        [],
+        True,
+        {"handoff_requested": False},
+        {"handoff_requested": None},
+        {"handoff_requested": 0},
+        {"handoff_requested": 1},
+        {"handoff_requested": "true"},
+    ],
+)
+def test_handoff_requires_explicit_runtime_confirmation(monkeypatch, caplog, response):
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(control, "runtime_request", request)
+    monkeypatch.setattr(control, "load_settings", Settings)
+    monkeypatch.setattr(control, "_controller", lambda _: pytest.fail("FC opened"))
+    assert control.main(["handoff"]) == 1
+    request.assert_called_once_with(Settings().runtime.socket, {"human": True})
+    assert "runtime did not confirm the handoff request" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "response", [{"handoff_requested": True}, {"handoff_requested": True, "extra": 1}]
+)
+def test_handoff_accepts_confirmed_request_with_additive_fields(monkeypatch, response):
+    monkeypatch.setattr(control, "runtime_request", MagicMock(return_value=response))
+    monkeypatch.setattr(control, "load_settings", Settings)
+    assert control.main(["handoff"]) == 0
+
+
+def test_handoff_preserves_runtime_rejection_reason(monkeypatch, caplog):
+    reason = "pilot handoff requires an active airborne controller"
+    monkeypatch.setattr(
+        control, "runtime_request", MagicMock(side_effect=RuntimeError(reason))
+    )
+    monkeypatch.setattr(control, "load_settings", Settings)
+    assert control.main(["handoff"]) == 1
+    assert reason in caplog.text
+
+
 def test_pi_refuses_control_before_accessing_fc_without_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(control, "is_raspberry_pi", lambda: True)
     settings = Settings()
