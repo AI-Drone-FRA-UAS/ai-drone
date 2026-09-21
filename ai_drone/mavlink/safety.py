@@ -9,6 +9,46 @@ from typing import Any, Protocol
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.validation import json_int, json_number
+
+HEARTBEAT_MAX_AGE_S = 2.0
+
+
+def is_fresh(observed: float | None, now: float, max_age: float) -> bool:
+    """Inclusive receipt-age arithmetic; callers choose their own age policy."""
+    try:
+        at, current, limit = (
+            json_number(value, "freshness") for value in (observed, now, max_age)
+        )
+    except ValueError:
+        return False
+    return 0 <= current - at <= limit
+
+
+def distance_sensor_valid(message: Any, *, require_bounds: bool = False) -> bool:
+    """Validate wire range values; source, ID and orientation remain caller policy.
+
+    Zero bounds are unspecified for control; historical reports can require
+    explicit bounds. Quality zero is unknown, one invalid, 255 unavailable.
+    """
+    try:
+        current = json_int(message.current_distance, "current_distance")
+        minimum = json_int(message.min_distance, "min_distance")
+        maximum = json_int(message.max_distance, "max_distance")
+        quality = json_int(getattr(message, "signal_quality", 0), "signal_quality")
+    except (AttributeError, ValueError):
+        return False
+    return (
+        0 < current <= 65535
+        and 0 <= minimum <= 65535
+        and 0 <= maximum <= 65535
+        and 0 <= quality <= 255
+        and quality != 1
+        and (minimum == 0 or current >= minimum)
+        and (maximum == 0 or current <= maximum)
+        and (not require_bounds or minimum <= current <= maximum)
+    )
+
 
 class SourceMessage(Protocol):
     """The source-identification surface common to received MAVLink messages."""
