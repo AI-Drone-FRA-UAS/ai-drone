@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import socket
 import time
 from collections import deque
@@ -108,6 +109,9 @@ ATTITUDE_TARGET_MASK = (
 )
 GUIDED_HOLD_FIELD = 0.5
 GUIDED_TAKEOFF_CLIMB_FRACTION = 0.3
+MAGNETIC_YAW_RESET = re.compile(
+    r"EKF3 IMU[0-9]+ MAG[0-9]+ ground mag anomaly, yaw re-aligned"
+)
 
 COPTER_MODES = mavutil.mode_mapping_byname(mavlink.MAV_TYPE_QUADROTOR)
 
@@ -210,6 +214,7 @@ class DroneController:
         self._last_heartbeat_written: float | None = None
         self._arm_requested_at: float | None = None
         self._arm_request_finished_at: float | None = None
+        self._navigation_failure: str | None = None
         self._arm_status_text: deque[Sample[StatusText]] = deque(maxlen=32)
         self._arm_status_count = 0
         self._last_gcs_heartbeat_time: float | None = None
@@ -463,6 +468,7 @@ class DroneController:
         if isinstance(attempt.command, Arm):
             self._arm_requested_at = attempt.attempted_at
             self._arm_request_finished_at = None
+            self._navigation_failure = None
             self._arm_status_text.clear()
             self._arm_status_count = 0
         elif self._arm_request_finished_at is None and (
@@ -788,6 +794,9 @@ class DroneController:
             return
         if isinstance(observation.payload, StatusText):
             self._observe_arm_status(observation.payload, observation.received_at, now)
+            self._observe_navigation_status(
+                observation.payload, observation.received_at, now
+            )
             return
         previous = self.state
         self.state = observe(
@@ -822,6 +831,24 @@ class DroneController:
         )
         return f": {'; '.join(messages)}" if messages else ""
 
+    def _observe_navigation_status(
+        self, status: StatusText, received: float, now: float
+    ) -> None:
+        if (
+            not isinstance(self.phase, Flight)
+            or self._arm_requested_at is None
+            or self._arm_request_finished_at is None
+            or received <= self._arm_request_finished_at
+            or not is_fresh(received, now, NAVIGATION_SAMPLE_MAX_AGE_S)
+            or status.severity != mavlink.MAV_SEVERITY_WARNING
+            or MAGNETIC_YAW_RESET.fullmatch(status.text) is None
+        ):
+            return
+        # Pinned EKF3 reports this after an in-flight magnetic yaw reset. Latch
+        # its concrete failure, then let normal supervision resolve any queued
+        # human handoff before LAND. Healthy later flags cannot resume the flight.
+        self._navigation_failure = f"flight controller reported {status.text}"
+
     def update_telemetry(self, max_messages: int = 50) -> None:
         if isinstance(max_messages, bool) or not 1 <= max_messages <= 1_000:
             raise ValueError("max_messages must be between 1 and 1000")
@@ -853,7 +880,7 @@ class DroneController:
             self.altitude_is_fresh(),
             self.heartbeat_is_fresh(),
         )
-        reason = violation(
+        reason = self._navigation_failure or violation(
             self.limits,
             evidence,
             in_loiter=self.flight_mode == "LOITER",
