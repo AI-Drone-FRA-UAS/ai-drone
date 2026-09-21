@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import stat
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -24,7 +25,39 @@ DEFAULT_SETTLE_S = 0.5
 MOUNT_OPEN_VALUE = 0.0
 MOUNT_CLOSE_VALUE = -1.0
 
-_LOCK_PATH = Path("/run/ai-drone/bcm12-servo.lock")
+_LOCK_PATH = Path("/run/ai-drone-locks/bcm12-servo.lock")
+
+
+def _servo_lock_descriptor(path: Path) -> int:
+    """Open the one provisioned lock namespace without following symlinks."""
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise PermissionError("servo lock directory must be owned with mode 0700")
+        descriptor = os.open(
+            path.name,
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=directory,
+        )
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_nlink != 1
+            ):
+                raise PermissionError(
+                    "servo lock must be an owned private regular file"
+                )
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+    finally:
+        os.close(directory)
 
 
 def parse_servo_input(
@@ -78,17 +111,7 @@ class ServoProcessLock:
         import fcntl
 
         self._fcntl = fcntl
-        target_path = Path(path or _LOCK_PATH)
-        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(target_path, flags, 0o600)
-        except OSError:
-            if path is None:
-                target_path = Path("/tmp/ai-drone-bcm12-servo.lock")
-                descriptor = os.open(target_path, flags, 0o600)
-            else:
-                raise
+        descriptor = _servo_lock_descriptor(Path(path or _LOCK_PATH))
         self._handle = os.fdopen(descriptor, "r+")
         try:
             self._fcntl.flock(
