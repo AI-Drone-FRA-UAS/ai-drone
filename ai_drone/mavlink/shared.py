@@ -338,17 +338,12 @@ class MavlinkEndpoint:
     ) -> Any:
         return self.recv_match(type="HEARTBEAT", blocking=blocking, timeout=timeout)
 
-    def mode_mapping(self) -> dict[str, int]:
-        mapping = (
-            mavutil.mode_mapping_byname(self._heartbeat.type)
-            if self._heartbeat is not None
-            else None
-        )
-        if mapping is None:
-            mapping = mavutil.mode_mapping_byname(mavlink.MAV_TYPE_QUADROTOR)
-        if mapping is None:
-            raise SharedMavlinkError("vehicle mode mapping unavailable")
-        return dict(mapping)
+    def mode_mapping(self) -> dict[str, int] | None:
+        """Describe the observed vehicle; transport never invents a vehicle type."""
+        if self._heartbeat is None:
+            return None
+        mapping = mavutil.mode_mapping_byname(self._heartbeat.type)
+        return None if mapping is None else dict(mapping)
 
     def arducopter_arm(self) -> None:
         self._arm_disarm(1)

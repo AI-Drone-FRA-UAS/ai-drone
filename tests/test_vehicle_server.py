@@ -387,6 +387,52 @@ def test_live_socket_is_never_replaced_and_shutdown_keeps_hub_open(runtime):
     assert runtime.hub.status()["fresh"]
 
 
+def test_shutdown_timeout_retains_exclusion_until_handler_finishes(runtime):
+    connection = client(runtime)
+    entered, release = threading.Event(), threading.Event()
+
+    def handler(_request):
+        entered.set()
+        assert release.wait(2)
+        return {"done": True}
+
+    runtime.server._request_handler = handler
+    connection.send({"block": True})
+    assert entered.wait(1)
+    try:
+        with pytest.raises(TimeoutError, match="did not stop boundedly"):
+            runtime.server.close(timeout=0.02)
+        replacement = VehicleServer(runtime.server.path, runtime.hub, handler)
+        with pytest.raises(FileExistsError, match="already owned"):
+            replacement.start()
+    finally:
+        release.set()
+    runtime.server.close()
+    with VehicleServer(runtime.server.path, runtime.hub, handler):
+        pass
+
+
+def test_rejected_owner_disconnects_and_cannot_be_replaced_while_armed(runtime):
+    owner = client(runtime)
+    observe(runtime)
+    claim(owner)
+    assert runtime.physical.writes.get(timeout=1)[0] == "heartbeat_send"
+    observe(runtime, armed=True)
+    owner.send({"send": "param_set_send", "args": []})
+    with pytest.raises(RuntimeError, match="unsupported"):
+        receive(owner, "result")
+    wait_for(lambda: runtime.server.control_owner is None)
+    replacement = client(runtime)
+    claim(replacement)
+    with pytest.raises(RuntimeError, match="fresh disarmed"):
+        receive(replacement, "result")
+    assert runtime.physical.writes.empty()
+    observe(runtime)
+    grounded = client(runtime)
+    claim(grounded)
+    assert runtime.physical.writes.get(timeout=1)[0] == "heartbeat_send"
+
+
 def test_stale_owned_socket_is_recovered_under_exclusive_lock(runtime):
     runtime.server.close()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:

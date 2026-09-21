@@ -108,13 +108,10 @@ def test_endpoint_mode_tracks_its_heartbeat_not_a_faster_consumer(link):
     assert slow.mode_mapping()["LAND"] == 9
 
 
-def test_mode_mapping_defaults_to_arducopter_without_heartbeat(link):
+def test_mode_mapping_requires_observed_vehicle_identity(link):
     _wire, hub = link
     endpoint = hub.subscribe("test")
-    mapping = endpoint.mode_mapping()
-    assert isinstance(mapping, dict)
-    assert mapping["LAND"] == 9
-    assert mapping["GUIDED_NOGPS"] == 20
+    assert endpoint.mode_mapping() is None
 
 
 def test_status_requires_selected_fresh_ardupilot_source(link):

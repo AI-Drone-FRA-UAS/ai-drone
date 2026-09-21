@@ -333,6 +333,8 @@ class VehicleServer:
 
     def _request(self, peer: _Peer, request: dict[str, Any]) -> None:
         with self._lock:
+            if self._stopped.is_set():
+                raise RuntimeError("vehicle server is stopping")
             if set(request) == {"maintenance"}:
                 active = request["maintenance"]
                 if type(active) is not bool:
@@ -391,6 +393,9 @@ class VehicleServer:
                 if request is None and message is None:
                     self._stopped.wait(0.005)
         except Exception as error:
+            # A rejected request invalidates this peer, including its control
+            # lease. A replacement still has to prove fresh disarmed FC state;
+            # an armed vehicle relies on its existing FC-side GCS failsafe.
             if not self._stopped.is_set():
                 with suppress(Exception):
                     peer.wire.send({"error": str(error)}, timeout=2)
@@ -414,23 +419,47 @@ class VehicleServer:
             raise ValueError("close timeout must be finite and positive")
         deadline = time.monotonic() + timeout
         self._stopped.set()
-        with self._lock:
+        if not self._lock.acquire(timeout=max(0, deadline - time.monotonic())):
+            raise TimeoutError("vehicle server request did not stop boundedly")
+        try:
             if self._listener is not None:
                 self._listener.close()
             peers = list(self._peers.values())
+        finally:
+            self._lock.release()
+        errors = self._stop_peers(peers, deadline)
+        if errors:
+            for secondary in errors[1:]:
+                errors[0].add_note(f"Additional shutdown error: {secondary}")
+            # A handler can still be inside an external effect. Retain the lock
+            # and socket identity until a later close confirms quiescence.
+            raise errors[0]
+        try:
+            self._remove_socket()
+        finally:
+            self._release_socket()
+
+    def _stop_peers(self, peers: list[_Peer], deadline: float) -> list[BaseException]:
+        errors: list[BaseException] = []
         for peer in peers:
-            peer.wire.close()
-            peer.endpoint.close(timeout=max(0.001, deadline - time.monotonic()))
+            try:
+                peer.wire.close()
+            except BaseException as error:
+                errors.append(error)
+            try:
+                peer.endpoint.close(timeout=max(0.001, deadline - time.monotonic()))
+            except BaseException as error:
+                errors.append(error)
         threads = [self._thread, *(peer.thread for peer in peers)]
         for thread in threads:
             if thread is not None and thread.ident is not None:
-                thread.join(max(0, deadline - time.monotonic()))
-        try:
-            self._remove_socket()
-            if any(thread is not None and thread.is_alive() for thread in threads):
-                raise TimeoutError("vehicle server did not stop boundedly")
-        finally:
-            self._release_socket()
+                try:
+                    thread.join(max(0, deadline - time.monotonic()))
+                except BaseException as error:
+                    errors.append(error)
+        if any(thread is not None and thread.is_alive() for thread in threads):
+            errors.append(TimeoutError("vehicle server did not stop boundedly"))
+        return errors
 
     def __enter__(self) -> VehicleServer:
         return self.start()

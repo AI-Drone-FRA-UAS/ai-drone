@@ -58,6 +58,38 @@ class Activation:
     timeout_s: float = 45
 
 
+@dataclass(frozen=True)
+class SavedProfile:
+    uuid: str
+    autoconnect: bool
+    mode: str
+
+
+def parse_saved_profiles(document: object) -> tuple[SavedProfile, ...]:
+    """Parse the persisted eligibility policy before permitting network effects."""
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema")) is not int
+        or document["schema"] != 1
+        or not isinstance(document.get("profiles"), dict)
+    ):
+        raise ValueError("network profiles schema must be 1 with a profiles object")
+    profiles = []
+    for identifier, value in document["profiles"].items():
+        if not isinstance(identifier, str):
+            raise ValueError("network profile UUID must be a string")
+        identifier = _uuid(identifier)
+        if (
+            not isinstance(value, dict)
+            or type(value.get("autoconnect")) is not bool
+            or not isinstance(value.get("mode"), str)
+            or value["mode"] not in {"", "infrastructure", "ap", "adhoc", "mesh"}
+        ):
+            raise ValueError(f"invalid saved network profile {identifier}")
+        profiles.append(SavedProfile(identifier, value["autoconnect"], value["mode"]))
+    return tuple(profiles)
+
+
 Runner = Callable[[list[str]], str]
 
 

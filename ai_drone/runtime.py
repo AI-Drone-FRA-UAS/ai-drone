@@ -19,6 +19,7 @@ from ai_drone.network import (
     choose_network,
     fresh_disarmed,
     inhibit_autoconnect,
+    parse_saved_profiles,
     poll_activation,
     read_link,
     read_profiles,
@@ -75,21 +76,10 @@ class VehicleAccess:
                 )
             except (OSError, json.JSONDecodeError) as error:
                 raise ValueError(f"failed to read network profiles: {error}") from error
-            if (
-                not isinstance(document, dict)
-                or document.get("schema") != 1
-                or "profiles" not in document
-                or not isinstance(document["profiles"], dict)
-            ):
-                raise ValueError(
-                    "invalid network profiles file: schema must be 1 and profiles dict required"
-                )
             self._eligible = tuple(
-                identifier
-                for identifier, profile in document["profiles"].items()
-                if isinstance(profile, dict)
-                and profile.get("autoconnect") is True
-                and profile.get("mode") in {"", "infrastructure"}
+                profile.uuid
+                for profile in parse_saved_profiles(document)
+                if profile.autoconnect and profile.mode in {"", "infrastructure"}
             )
             if not self._eligible:
                 raise ValueError(

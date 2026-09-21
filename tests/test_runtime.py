@@ -151,6 +151,23 @@ def test_network_profiles_rejects_missing_or_invalid_schema(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "document",
+    [
+        {"schema": True, "profiles": {}},
+        {"schema": 1.0, "profiles": {}},
+        {"schema": 1, "profiles": []},
+        {"schema": 1, "profiles": {EDUROAM: {"autoconnect": True, "mode": []}}},
+        {"schema": 1, "profiles": {EDUROAM: {"autoconnect": 1, "mode": ""}}},
+        {"schema": 1, "profiles": {EDUROAM: {"mode": "infrastructure"}}},
+        {"schema": 1, "profiles": {"invalid": {"autoconnect": True, "mode": ""}}},
+    ],
+)
+def test_saved_network_policy_rejects_every_malformed_record(document):
+    with pytest.raises(ValueError):
+        network.parse_saved_profiles(document)
+
+
+@pytest.mark.parametrize(
     "armed,age", [(True, 0.1), (None, None), (False, 3), (False, float("nan"))]
 )
 def test_network_request_requires_fresh_disarmed_fc_before_reserving_the_lease(
