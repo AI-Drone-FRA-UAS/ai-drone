@@ -17,6 +17,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 from ai_drone.durability import IntervalSync
+from ai_drone.mavlink.connection import require_complete_writes
 from ai_drone.mavlink.metrics import attach_transport_metrics
 from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
 
@@ -230,6 +231,10 @@ class MavlinkEndpoint:
         self._log: _LogSink | None = None
         self.flightmode: str | None = None
         self.mav = _Sender(self)
+
+    @property
+    def write_confirmation(self) -> str:
+        return getattr(self._hub._raw, "write_confirmation", "physical")
 
     @property
     def target_system(self) -> int:
@@ -453,6 +458,7 @@ class SharedMavlink:
         self._log_overflows = 0
         self._discarded_messages = 0
         self._queue_peak = 0
+        require_complete_writes(self._raw)
         self._transport_metrics = attach_transport_metrics(
             self._raw, scope="shared_physical_connection"
         )

@@ -152,6 +152,11 @@ class _RemoteMav:
 
 
 class RemoteConnection:
+    @property
+    def write_confirmation(self) -> str:
+        """Submission to the local runtime is not a confirmed physical write."""
+        return "queued"
+
     def __init__(self, path: str | Path):
         self._wire = connect_socket(path)
         self._parser = mavlink.MAVLink(None)
