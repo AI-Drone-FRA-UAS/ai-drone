@@ -21,6 +21,7 @@ from ai_drone.flight.controller import (
     HumanControlTaken,
 )
 from ai_drone.flight.dataflash import latest_dataflash_log
+from ai_drone.flight.params import NAVIGATION_PROFILES
 from ai_drone.flight.recording import FlightRecorder
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.mavlink.shared import SharedMavlink
@@ -76,6 +77,7 @@ def _controller(args: argparse.Namespace) -> DroneController:
         baud=args.baud,
         max_altitude=args.max_alt,
         min_battery_voltage=args.min_battery,
+        navigation_profile=getattr(args, "navigation_profile", "flow-compass"),
     )
 
 
@@ -342,6 +344,12 @@ def _parser() -> argparse.ArgumentParser:
 def _flight_arguments(hover: argparse.ArgumentParser) -> None:
     hover.add_argument("--device", help="MAVLink serial path or network endpoint")
     hover.add_argument("--baud", type=int, default=115200)
+    hover.add_argument(
+        "--navigation-profile",
+        choices=tuple(NAVIGATION_PROFILES),
+        default="flow-compass",
+        help="reviewed compass baseline; experimental profile is restricted to isolated local SITL",
+    )
     hover.add_argument("--max-alt", type=float, default=MAX_AUTONOMOUS_CEILING_M)
     hover.add_argument("--takeoff-alt", type=float, default=0.5)
     hover.add_argument(

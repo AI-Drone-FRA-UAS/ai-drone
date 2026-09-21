@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
@@ -40,6 +41,9 @@ from ai_drone.flight.params import (
 )
 from ai_drone.flight.params import (
     REQUIRED_NOGPS_LOITER_PARAMETERS as REQUIRED_NOGPS_LOITER_PARAMETERS,
+)
+from ai_drone.flight.params import (
+    select_navigation_profile,
 )
 from ai_drone.flight.phase import (
     Arm,
@@ -134,10 +138,26 @@ class DroneController:
         operator_alive: Callable[[], bool] | None = None,
         human_takeover_requested: Callable[[], bool] | None = None,
         ownership_policy: OwnershipPolicy | None = None,
+        navigation_profile: str = "flow-compass",
     ) -> None:
         if isinstance(baud, bool) or not 1 <= baud <= 4_000_000:
             raise ValueError("baud must be between 1 and 4000000")
         self.device = self.find_device(device)
+        self.navigation_profile = select_navigation_profile(
+            navigation_profile,
+            self.device,
+            isolated_sitl=os.environ.get("AI_DRONE_ISOLATED_SITL") == "1",
+        )
+        self.profile_initialized_at = time.monotonic()
+        if self.navigation_profile.experimental:
+            raw_reference = os.environ.get("AI_DRONE_PROFILE_REFERENCE_MONOTONIC")
+            if raw_reference is not None:
+                self.profile_initialized_at = finite_in_range(
+                    float(raw_reference),
+                    "profile initialization",
+                    minimum=0.0,
+                    maximum=self.profile_initialized_at,
+                )
         self.baud = baud
         self.limits = FlightLimits(max_altitude, min_battery_voltage)
         self.target_system = target_system
@@ -597,6 +617,7 @@ class DroneController:
             self._enforce_flight_limits()
 
     def _enforce_flight_limits(self) -> None:
+        self._require_profile_time()
         evidence = FlightEvidence(
             self.current_altitude,
             self.local_position_altitude_aligned,
@@ -616,6 +637,20 @@ class DroneController:
         if reason is not None:
             self.emergency_stop()
             raise FlightSafetyError(reason)
+
+    def _require_profile_time(self, requested_duration: float = 0.0) -> None:
+        profile = self.navigation_profile
+        if profile.maximum_sequence_s is None:
+            return
+        remaining = profile.maximum_sequence_s - (
+            time.monotonic() - self.profile_initialized_at
+        )
+        if remaining < requested_duration + profile.landing_reserve_s:
+            if self._flight_started_by_controller:
+                self.emergency_stop()
+            raise FlightSafetyError(
+                f"{profile.name} experiment duration budget exhausted; {profile.landing_reserve_s:g} s reserved for LAND"
+            )
 
     def _poll(self, timeout: float) -> Iterator[None]:
         deadline = time.monotonic() + timeout
@@ -807,7 +842,7 @@ class DroneController:
     def verify_nogps_loiter_parameters(self) -> None:
         """Require the reviewed ArduCopter 4.7 no-GPS flight invariants."""
 
-        expected_parameters = dict(REQUIRED_NOGPS_LOITER_PARAMETERS)
+        expected_parameters = dict(self.navigation_profile.parameters)
         self._pump_gcs_heartbeat()
         forward_type = request_parameter(self._connection(), "RNGFND2_TYPE")
         if forward_type == 10.0:
@@ -1084,6 +1119,7 @@ class DroneController:
             target_alt, "target_alt", minimum=0.15, maximum=self.max_altitude
         )
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=60.0)
+        self._require_profile_time(timeout)
         if not self.is_armed:
             self.arm()
         if not self._armed_by_controller:
@@ -1187,6 +1223,7 @@ class DroneController:
 
         self._require_autonomous_control()
         finite_in_range(duration, "duration", minimum=0.1, maximum=3_600.0)
+        self._require_profile_time(duration)
         if self.flight_mode != "LOITER":
             raise FlightSafetyError("Loiter hold requires confirmed LOITER mode")
         deadline = time.monotonic() + duration
@@ -1213,6 +1250,7 @@ class DroneController:
         """
         self._require_autonomous_control()
         finite_in_range(duration, "duration", minimum=0.1, maximum=30.0)
+        self._require_profile_time(duration)
         if not isinstance(self.phase, Flight) or not self.is_armed:
             raise FlightSafetyError("altitude hold requires a controller takeoff")
         if self.flight_mode != "GUIDED_NOGPS":

@@ -1,6 +1,8 @@
 """Reviewed flight firmware and parameter invariants; no connection is initialized."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
@@ -60,3 +62,58 @@ FORWARD_RANGEFINDER_PARAMETERS: Mapping[str, float] = {
 
 EXPECTED_FIRMWARE_VERSION = (4, 7, 1)
 EXPECTED_FIRMWARE_COMMIT = b"dbe79216"
+
+
+@dataclass(frozen=True)
+class NavigationProfile:
+    name: str
+    parameters: Mapping[str, float]
+    experimental: bool = False
+    maximum_sequence_s: float | None = None
+    landing_reserve_s: float = 30.0
+
+
+FLOW_COMPASS = NavigationProfile(
+    "flow-compass", MappingProxyType(dict(REQUIRED_NOGPS_LOITER_PARAMETERS))
+)
+FLOW_INERTIAL_EXPERIMENTAL = NavigationProfile(
+    "flow-inertial-experimental",
+    MappingProxyType(
+        {
+            **REQUIRED_NOGPS_LOITER_PARAMETERS,
+            "EK3_SRC1_YAW": 0.0,
+            "COMPASS_USE": 0.0,
+            "COMPASS_USE2": 0.0,
+            "COMPASS_USE3": 0.0,
+        }
+    ),
+    experimental=True,
+    # An experiment stop condition, not a qualified aircraft duration.
+    maximum_sequence_s=120.0,
+)
+NAVIGATION_PROFILES = MappingProxyType(
+    {profile.name: profile for profile in (FLOW_COMPASS, FLOW_INERTIAL_EXPERIMENTAL)}
+)
+
+
+def select_navigation_profile(
+    name: str, endpoint: str, *, isolated_sitl: bool
+) -> NavigationProfile:
+    try:
+        profile = NAVIGATION_PROFILES[name]
+    except KeyError as error:
+        raise ValueError(f"unknown navigation profile {name!r}") from error
+    if profile.experimental:
+        fields = endpoint.split(":")
+        loopback_tcp = (
+            len(fields) == 3
+            and fields[:2] == ["tcp", "127.0.0.1"]
+            and fields[2].isascii()
+            and fields[2].isdigit()
+            and 1 <= int(fields[2]) <= 65535
+        )
+        if not isolated_sitl or not loopback_tcp:
+            raise ValueError(
+                "experimental navigation requires an isolated local SITL namespace and literal tcp:127.0.0.1:<port> endpoint"
+            )
+    return profile
