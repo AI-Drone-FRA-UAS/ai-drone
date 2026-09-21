@@ -1480,9 +1480,21 @@ def _write_minimal_manifest(recording: _Recording, error: BaseException) -> None
     manifest = {
         "schema": 1,
         "operation": recording.operation,
-        "error": str(error),
+        "error": recording.state.worker_error or str(error) or type(error).__name__,
+        "finalization_error": str(error) or type(error).__name__,
         "stop_reason": recording.state.stop_reason or "capture_failed",
         "completed": False,
+        "armed_abort": recording.state.armed_abort,
+        "started_utc": recording.started_utc.isoformat()
+        if recording.started_utc
+        else None,
+        "ended_utc": recording.ended_utc.isoformat() if recording.ended_utc else None,
+        "components": {
+            "servo": {
+                "completed_commanded_pulses": recording.state.servo_pulses_completed,
+                "feedback_available": False,
+            }
+        },
     }
     with suppress(OSError):
         atomic_write_text(
@@ -1515,7 +1527,7 @@ def run(
         finally:
             _close_recording(recording)
         return _finish_recording(recording)
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         _write_minimal_manifest(recording, error)
         print(f"FAILED: recording terminated unexpectedly: {error}", flush=True)
         return 1

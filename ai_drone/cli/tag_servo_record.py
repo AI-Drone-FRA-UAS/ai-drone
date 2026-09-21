@@ -34,6 +34,7 @@ from ai_drone.mount import (
     pulse_us,
 )
 from ai_drone.recording import json_safe, write_json_line
+from ai_drone.vision.apriltags import TagDetection
 
 ARMED_FLIGHT_CONFIRMATION = "ARMED_FLIGHT_TAG_SERVO_CLEAR"
 MAX_PULSE_DURATION_S = 2.0
@@ -413,6 +414,11 @@ class TagServoSession:
         self._scheduled_ids: set[int] = set()
         self._confirmed_ids: set[int] = set()
         self._completed_ids: set[int] = set()
+        self._attempted_ids: set[int] = set()
+        self._issued_ids: set[int] = set()
+        self._hold_completed_ids: set[int] = set()
+        self._detached_ids: set[int] = set()
+        self._interrupted_ids: set[int] = set()
         self._streaks: dict[int, int] = {}
         self._previous_qualifying_ids: set[int] = set()
         self._previous_capture_monotonic: float | None = None
@@ -518,8 +524,10 @@ class TagServoSession:
         allowed = self.config.allowed_tag_ids
         return allowed is None or tag_id in allowed
 
-    def _best_detection_by_id(self, detections: list[Any]) -> dict[int, Any]:
-        by_id: dict[int, Any] = {}
+    def _best_detection_by_id(
+        self, detections: list[TagDetection]
+    ) -> dict[int, TagDetection]:
+        by_id: dict[int, TagDetection] = {}
         for detection in detections:
             current = by_id.get(detection.tag_id)
             current_margin = (
@@ -538,7 +546,7 @@ class TagServoSession:
 
     def _quality_results(
         self,
-        by_id: dict[int, Any],
+        by_id: dict[int, TagDetection],
         *,
         fresh_frame: bool,
     ) -> tuple[set[int], dict[int, str]]:
@@ -554,9 +562,10 @@ class TagServoSession:
             elif detection.decision_margin < self.config.minimum_decision_margin:
                 reasons[tag_id] = "decision_margin_too_low"
             elif not fresh_frame:
-                reasons[tag_id] = "frame_stale"
+                reasons[tag_id] = "stale_frame"
             else:
                 qualifying.add(tag_id)
+                reasons[tag_id] = "qualifying"
         return qualifying, reasons
 
     def _advance_confirmation_streaks(
@@ -611,7 +620,7 @@ class TagServoSession:
     def observe(
         self,
         frame: AnalysisFrame,
-        detections: list[Any],
+        detections: list[TagDetection],
         tag_records: list[dict[str, Any]],
     ) -> None:
         """Update live state and enqueue at most one fresh confirmed trigger."""
@@ -644,6 +653,8 @@ class TagServoSession:
                 if not self._accepting or self.capture_stop.is_set():
                     return
                 if tag_id in self._completed_ids or tag_id in self._scheduled_ids:
+                    continue
+                if self.config.open_mount and tag_id in self._issued_ids:
                     continue
                 if (
                     self.config.stop_after is not None
@@ -848,10 +859,12 @@ class TagServoSession:
             ):
                 return False
             self._ever_commanded = True
+            self._attempted_ids.add(trigger.tag_id)
             try:
                 timing.active_commanded_utc = datetime.now(UTC).isoformat()
                 self._servo.value = self._active_value
                 timing.active_started = time.monotonic()
+                self._issued_ids.add(trigger.tag_id)
             except BaseException as error:
                 pulse_error = error
         try:
@@ -865,7 +878,24 @@ class TagServoSession:
             release_error = self._release_pulse(timing)
             if pulse_error is None:
                 pulse_error = release_error
+        with self._lock:
+            if completed_hold:
+                self._hold_completed_ids.add(trigger.tag_id)
+            else:
+                self._interrupted_ids.add(trigger.tag_id)
+            if timing.detached_utc is not None:
+                self._detached_ids.add(trigger.tag_id)
         self._record_pulse_commands(trigger, timing)
+        self._record_and_print(
+            "servo_pulse_outcome",
+            trigger,
+            command_attempted=True,
+            command_issued=timing.active_started is not None,
+            hold_completed=completed_hold,
+            pwm_detached=timing.detached_utc is not None,
+            interrupted=not completed_hold,
+            error=str(pulse_error) if pulse_error is not None else None,
+        )
         if pulse_error is not None:
             raise RuntimeError(
                 f"payload servo command failed: {pulse_error}"
@@ -1063,6 +1093,11 @@ class TagServoSession:
             "confirmed_tag_ids": list(self.state.confirmed_tag_ids),
             "completed_tag_ids": list(self.state.completed_servo_tag_ids),
             "completed_commanded_pulses": self.state.servo_pulses_completed,
+            "attempted_tag_ids": sorted(self._attempted_ids),
+            "issued_tag_ids": sorted(self._issued_ids),
+            "hold_completed_tag_ids": sorted(self._hold_completed_ids),
+            "pwm_detached_tag_ids": sorted(self._detached_ids),
+            "interrupted_tag_ids": sorted(self._interrupted_ids),
         }
 
 

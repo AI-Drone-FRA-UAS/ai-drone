@@ -372,6 +372,43 @@ def test_mount_opens_once_on_tag_three_and_keeps_recording(tmp_path, armed):
     assert session.manifest()["open_mount"] is True
 
 
+def test_interrupted_mount_hold_reports_issued_without_completed_hold(tmp_path):
+    session, state, stop, _lock, servo = _session(tmp_path, config=_mount_config())
+    try:
+        _observe(session, 3, 3)
+        _wait_for(lambda: bool(servo.actions))
+        stop.set()
+        _wait_for(lambda: not state.pending_servo_tag_ids)
+        manifest = session.manifest()
+        assert manifest["issued_tag_ids"] == [3]
+        assert manifest["hold_completed_tag_ids"] == []
+        assert manifest["interrupted_tag_ids"] == [3]
+        assert manifest["pwm_detached_tag_ids"] == [3]
+        assert manifest["completed_commanded_pulses"] == 0
+        assert servo.actions == [("value", MOUNT_OPEN_VALUE), ("detach", None)]
+    finally:
+        session.close()
+    events = [
+        json.loads(line) for line in (tmp_path / "servo.jsonl").read_text().splitlines()
+    ]
+    outcome = next(event for event in events if event["event"] == "servo_pulse_outcome")
+    assert outcome["command_issued"] is True
+    assert outcome["hold_completed"] is False
+
+
+@pytest.mark.parametrize("age, quality", [(0.0, "qualifying"), (10.0, "stale_frame")])
+def test_tag_quality_diagnostic_preserves_established_labels(tmp_path, age, quality):
+    session, _state, _stop, _lock, _servo = _session(tmp_path)
+    detection = _detection(3)
+    records = _records(detection)
+    try:
+        frame = replace(_frame(0), captured_monotonic=time.monotonic() - age)
+        session.observe(frame, [detection], records)
+        assert records[0]["actuation_quality"] == quality
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize(
     "reason", ["stale", "wrong_id", "hamming", "low_margin", "missing_margin"]
 )

@@ -1403,6 +1403,24 @@ def test_startup_interrupt_closes_flight_controller_and_writes_failure_manifest(
     assert "interrupted" in manifest["error"]
 
 
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("summary failed"), KeyboardInterrupt()]
+)
+def test_summary_failure_writes_minimal_manifest(tmp_path, monkeypatch, failure):
+    output = tmp_path / "summary-failure"
+    monkeypatch.setattr(inspect_cli, "_start_recording", lambda recording: None)
+    monkeypatch.setattr(inspect_cli, "_record_capture", lambda recording: None)
+
+    def fail(recording):
+        raise failure
+
+    monkeypatch.setattr(inspect_cli, "_finish_recording", fail)
+    assert run(["--output-dir", str(output)]) == 1
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["completed"] is False
+    assert manifest["finalization_error"] == (str(failure) or type(failure).__name__)
+
+
 class _UartRetryConnection:
     target_system = target_component = 1
     logfile = None

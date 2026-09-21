@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+    from ai_drone.vision.apriltags import TagDetection
+
 
 @dataclass
 class CaptureState:
@@ -157,6 +159,6 @@ class DetectionObserver(Protocol):
     def observe(
         self,
         frame: AnalysisFrame,
-        detections: list[Any],
+        detections: list[TagDetection],
         tag_records: list[dict[str, Any]],
     ) -> None: ...
