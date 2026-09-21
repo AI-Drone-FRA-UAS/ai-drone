@@ -11,12 +11,15 @@ import json
 import math
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
+from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 from tests.test_sitl import (
     _ardupilot_root,
     _assert_running_sitl_configuration,
+    _ExternalMavlinkSensors,
     _production_hover_arguments,
     _running_cli,
     _running_sitl,
@@ -120,6 +123,8 @@ def _save_evidence(tmp_path, sensors, metadata):
                 "flight": sensors.flight_observations,
                 "range": sensors.range_observations,
                 "metadata": metadata,
+                "injections": getattr(sensors, "injections", []),
+                "parameter_readback": getattr(sensors, "parameter_readback", {}),
             },
             indent=2,
         )
@@ -132,6 +137,7 @@ def _run_profile(
     duration: float,
     heading: float,
     overlay: dict[str, float] | None = None,
+    sensor_factory: type[_ExternalMavlinkSensors] = _ExternalMavlinkSensors,
 ) -> None:
     root = _ardupilot_root()
     wall_offset = time.time() - time.monotonic()
@@ -142,7 +148,18 @@ def _run_profile(
         "overlay": overlay,
         "wall_minus_monotonic_s": wall_offset,
     }
-    with _running_sitl(root, tmp_path, heading=heading, overlay=overlay) as sensors:
+    reference = time.monotonic()
+    with (
+        pytest.MonkeyPatch.context() as environment,
+        _running_sitl(
+            root,
+            tmp_path,
+            heading=heading,
+            overlay=overlay,
+            sensor_factory=sensor_factory,
+        ) as sensors,
+    ):
+        environment.setenv("AI_DRONE_PROFILE_REFERENCE_MONOTONIC", str(reference))
         try:
             _assert_running_sitl_configuration(sensors, overlay=overlay)
             sensors.reset_observations()
@@ -157,6 +174,12 @@ def _run_profile(
                 result = process.wait(timeout=150)
                 assert result == 0, log.read_text()[-8000:]
             sensors.wait_for_disarm(timeout=10)
+            if isinstance(sensors, _DisturbedSensors):
+                assert sensors.injections, "disturbance never activated"
+                for name, value in sensors.disturbance.items():
+                    assert sensors.parameter_readback.get(name) == pytest.approx(
+                        value
+                    ), name
             events_path = next(tmp_path.glob("artifacts/flights/*/events.jsonl"))
             events = [json.loads(line) for line in events_path.read_text().splitlines()]
             summary = _summarize(sensors, events, wall_offset, duration)
@@ -187,3 +210,85 @@ def test_compass_profile_truth(
     tmp_path: Path, operation: str, duration: float, heading: float
 ) -> None:
     _run_profile(tmp_path, operation, duration, heading)
+
+
+class _DisturbedSensors(_ExternalMavlinkSensors):
+    """Apply a changing field to every compass and gyro bias after liftoff.
+
+    The field is NED milligauss and gyro bias is radians/s, as declared in
+    pinned SITL.cpp. PARAM_VALUE readback proves each requested injection.
+    """
+
+    disturbance: ClassVar[dict[str, float]] = {
+        "SIM_MAG_ALY_X": -800.0,
+        "SIM_MAG_ALY_Y": 600.0,
+        "SIM_MAG_ALY_Z": 500.0,
+        "SIM_GYR1_BIAS_Z": 0.003,
+        "SIM_GYR2_BIAS_Z": 0.003,
+        "SIM_GYR3_BIAS_Z": 0.003,
+    }
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.injections: list[dict] = []
+        self.parameter_readback: dict[str, float] = {}
+        self.airborne_since = None
+        self.next_injection = 0.0
+
+    def _observe_vehicle_message(self, message):
+        if message.get_type() == "PARAM_VALUE":
+            name = message.param_id
+            if isinstance(name, bytes):
+                name = name.decode("ascii")
+            self.parameter_readback[name.rstrip("\x00")] = message.param_value
+        super()._observe_vehicle_message(message)
+
+    def _send_sensors(self, sender, state, ground_altitude_m):
+        now = time.monotonic()
+        if self._current_armed and state.alt - ground_altitude_m > 0.3:
+            if self.airborne_since is None:
+                self.airborne_since = now
+            if now - self.airborne_since >= 2.0 and now >= self.next_injection:
+                for name, value in self.disturbance.items():
+                    if self.parameter_readback.get(name) != pytest.approx(value):
+                        sender.param_set_send(
+                            1,
+                            1,
+                            name.encode("ascii"),
+                            value,
+                            mavlink.MAV_PARAM_TYPE_REAL32,
+                        )
+                        self.injections.append(
+                            {"at": now, "name": name, "value": value}
+                        )
+                self.next_injection = now + 0.5
+        super()._send_sensors(sender, state, ground_altitude_m)
+
+
+@pytest.mark.parametrize("operation", ["altitude-hold", "hover"])
+@pytest.mark.parametrize("magnetic", [False, True], ids=["normal", "changing-field"])
+@pytest.mark.parametrize(
+    "duration,heading", [(10.0, 0.0), (30.0, 120.0), (30.0, 240.0)]
+)
+def test_inertial_profile_truth(
+    tmp_path: Path, operation: str, magnetic: bool, duration: float, heading: float
+) -> None:
+    overlay = dict(EXPERIMENT_PROFILE)
+    if magnetic:
+        # Global anomaly acts on every enabled compass; no healthy spare hides it.
+        overlay.update(
+            {
+                "SIM_MAG_ALY_X": 600.0,
+                "SIM_MAG_ALY_Y": -800.0,
+                "SIM_MAG_ALY_Z": 500.0,
+                "SIM_MAG_ALY_HGT": 100.0,
+            }
+        )
+    _run_profile(
+        tmp_path,
+        operation,
+        duration,
+        heading,
+        overlay,
+        _DisturbedSensors if magnetic else _ExternalMavlinkSensors,
+    )

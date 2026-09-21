@@ -752,6 +752,7 @@ def _running_sitl(
     forward_range_enabled: bool = False,
     heading: float = 353,
     overlay: dict[str, float] | None = None,
+    sensor_factory: type[_ExternalMavlinkSensors] = _ExternalMavlinkSensors,
 ):
     _require_loopback_namespace()
     with closing(socket.socket()) as probe:
@@ -793,7 +794,7 @@ def _running_sitl(
         "--defaults",
         ",".join(defaults_paths),
     ]
-    sensors = _ExternalMavlinkSensors(forward_range_enabled=forward_range_enabled)
+    sensors = sensor_factory(forward_range_enabled=forward_range_enabled)
     sensors_started = False
     with log_path.open("wb") as log:
         process = subprocess.Popen(
