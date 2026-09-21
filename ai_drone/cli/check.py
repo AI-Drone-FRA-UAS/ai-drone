@@ -8,10 +8,10 @@ import math
 import sys
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
@@ -78,6 +78,25 @@ def _finite(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    severity: Literal["error", "warning"]
+    message: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"severity": self.severity, "message": self.message}
+
+
+@dataclass(frozen=True)
+class CheckAnalysis:
+    firmware: dict[str, Any]
+    sensors: dict[str, Any]
+    diagnostics: tuple[Diagnostic, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"firmware": dict(self.firmware), "sensors": dict(self.sensors)}
 
 
 @dataclass(frozen=True)
@@ -386,8 +405,9 @@ def _flow_summary(observed: Observations, now: float) -> dict[str, float | None]
     return {"quality": quality, **velocity}
 
 
-def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, Any]:
-    now = time.monotonic()
+def _sensor_summary(
+    observed: Observations, *, min_battery: float, now: float
+) -> dict[str, Any]:
     observed.fresh("HEARTBEAT", now)
     system = observed.fresh("SYS_STATUS", now) or {}
     voltage = _finite(system.get("voltage_battery"))
@@ -428,9 +448,10 @@ def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, 
         "forward_range": _range(observed, 0, now),
         "optical_flow": flow,
         "imu": {
-            "acceleration_mg": axes["acc"],
-            "gyro_mrad_s": axes["gyro"],
-            "compass_mgauss": axes["mag"],
+            "acceleration_raw": axes["acc"],
+            "gyro_raw": axes["gyro"],
+            "compass_raw": axes["mag"],
+            "units": "raw; MAVLink RAW_IMU does not specify calibration scales",
         },
         "attitude_rad": angles,
         "pressure_hpa": pressure,
@@ -444,6 +465,37 @@ def _sensor_summary(observed: Observations, *, min_battery: float) -> dict[str, 
     }
 
 
+def analyze_observations(
+    observed: Observations, *, now: float, min_battery: float, prearm: bool = False
+) -> CheckAnalysis:
+    """Analyze a fixed observation without I/O, clock reads or caller mutation."""
+    # Working diagnostics belong to this invocation. Copy every mutable collection
+    # so historical observations remain reusable for alternate analysis times.
+    local = replace(
+        observed,
+        latest={key: dict(value) for key, value in observed.latest.items()},
+        seen=dict(observed.seen),
+        counts=observed.counts.copy(),
+        parameters=dict(observed.parameters),
+        status_text=list(observed.status_text),
+        errors=[],
+        warnings=[],
+    )
+    sensors = _sensor_summary(local, min_battery=min_battery, now=now)
+    if prearm and local.prearm_result != mavlink.MAV_RESULT_ACCEPTED:
+        local.errors.append(
+            f"Pre-arm diagnostic request was not accepted (result={local.prearm_result!r})"
+        )
+    for text in local.status_text:
+        if "prearm:" in text.lower():
+            local.errors.append(f"FC status: {text}")
+    firmware = _firmware(local)
+    diagnostics = tuple(
+        Diagnostic("error", message) for message in local.errors
+    ) + tuple(Diagnostic("warning", message) for message in local.warnings)
+    return CheckAnalysis(firmware=firmware, sensors=sensors, diagnostics=diagnostics)
+
+
 def check_connection(
     connection: Any,
     observed: Observations,
@@ -453,7 +505,7 @@ def check_connection(
     parameter_timeout: float,
     prearm: bool,
     min_battery: float,
-) -> dict[str, Any]:
+) -> CheckAnalysis:
     """Read one selected disarmed FC; caller owns the serial descriptor only."""
     first = require_ardupilot_heartbeat(
         connection, system_id=1, component_id=1, timeout=timeout
@@ -500,15 +552,9 @@ def check_connection(
             connection, system_id=1, component_id=1, timeout=timeout
         )
     )
-    sensors = _sensor_summary(observed, min_battery=min_battery)
-    if prearm and observed.prearm_result != mavlink.MAV_RESULT_ACCEPTED:
-        observed.errors.append(
-            f"Pre-arm diagnostic request was not accepted (result={observed.prearm_result!r})"
-        )
-    for text in observed.status_text:
-        if "prearm:" in text.lower():
-            observed.errors.append(f"FC status: {text}")
-    return {"firmware": _firmware(observed), "sensors": sensors}
+    return analyze_observations(
+        observed, now=time.monotonic(), min_battery=min_battery, prearm=prearm
+    )
 
 
 def _print_report(report: dict[str, Any]) -> None:
@@ -605,17 +651,23 @@ def main(arguments: list[str] | None = None) -> int:
                 f"Closing connection failed: {error}"
             ),
         ):
-            report.update(
-                check_connection(
-                    connection,
-                    observed,
-                    duration=args.duration,
-                    timeout=args.timeout,
-                    parameter_timeout=args.parameter_timeout,
-                    prearm=args.prearm,
-                    min_battery=args.min_battery,
-                )
+            analysis = check_connection(
+                connection,
+                observed,
+                duration=args.duration,
+                timeout=args.timeout,
+                parameter_timeout=args.parameter_timeout,
+                prearm=args.prearm,
+                min_battery=args.min_battery,
             )
+            report.update(analysis.to_dict())
+            for diagnostic in analysis.diagnostics:
+                collection = (
+                    observed.errors
+                    if diagnostic.severity == "error"
+                    else observed.warnings
+                )
+                collection.append(diagnostic.message)
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as error:
         observed.errors.append(str(error))
     except KeyboardInterrupt:
@@ -625,6 +677,14 @@ def main(arguments: list[str] | None = None) -> int:
         elapsed_s=round(time.monotonic() - started, 3),
         errors=list(dict.fromkeys(observed.errors)),
         warnings=list(dict.fromkeys(observed.warnings)),
+        diagnostics=[
+            Diagnostic(severity, message).to_dict()
+            for severity, messages in (
+                ("error", observed.errors),
+                ("warning", observed.warnings),
+            )
+            for message in dict.fromkeys(messages)
+        ],
         status_text=observed.status_text,
         messages=dict(observed.counts),
         parameters=observed.parameters,

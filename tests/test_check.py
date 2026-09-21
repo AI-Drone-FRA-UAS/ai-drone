@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter, deque
+from copy import deepcopy
 
 import pytest
 
@@ -248,6 +249,44 @@ def test_check_is_read_only_and_bench_aiding_is_not_flight_clearance(rig, capsys
         for kind, values in connection.sent
         if kind == "command_long"
     )
+    assert report["diagnostics"] == [
+        {"severity": "warning", "message": message} for message in report["warnings"]
+    ]
+
+
+def test_analysis_is_repeatable_without_clock_io_or_observation_mutation(
+    rig, monkeypatch, capsys
+):
+    _, connection = rig
+    observed = check.Observations()
+    for item in [connection.heartbeat(), *connection.data]:
+        observed.observe(item)
+    observed.observe(
+        Message(
+            "AUTOPILOT_VERSION",
+            flight_sw_version=sum(
+                value << shift
+                for value, shift in zip(connection.version, (24, 16, 8), strict=True)
+            ),
+            flight_custom_version=connection.identity,
+        )
+    )
+    before = deepcopy(observed)
+
+    def forbidden_clock():
+        pytest.fail("Pure analysis must use its injected observation time")
+
+    monkeypatch.setattr(check.time, "monotonic", forbidden_clock)
+    first = check.analyze_observations(observed, now=0, min_battery=14.4)
+    assert first == check.analyze_observations(observed, now=0, min_battery=14.4)
+    expired = check.analyze_observations(
+        observed, now=check.FRESHNESS_S + 1, min_battery=14.4
+    )
+    assert any("stale" in item.message for item in expired.diagnostics)
+    assert observed == before
+    assert capsys.readouterr().out == ""
+    assert first.sensors["imu"]["compass_raw"] == [200, -50, 600]
+    assert "compass_mgauss" not in first.sensors["imu"]
 
 
 @pytest.mark.parametrize("phase", ["initial", "parameters", "capture"])
