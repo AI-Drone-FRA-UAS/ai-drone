@@ -227,11 +227,12 @@ def test_compass_changing_field_response(tmp_path: Path) -> None:
     """Retain the baseline profile's response to a field step after liftoff."""
     from tests.test_sitl_profiles import _DisturbedSensors, _yaw_metrics
 
+    overlay = {"SIM_MAG_ALY_HGT": 100.0}
     with _running_sitl(
-        _ardupilot_root(), tmp_path, sensor_factory=_DisturbedSensors
+        _ardupilot_root(), tmp_path, sensor_factory=_DisturbedSensors, overlay=overlay
     ) as sensors:
         try:
-            _assert_running_sitl_configuration(sensors)
+            _assert_running_sitl_configuration(sensors, overlay=overlay)
             sensors.reset_observations()
             with _running_cli(
                 tmp_path, "compass-field", "control", *_production_hover_arguments(30)
@@ -268,5 +269,9 @@ def test_compass_changing_field_response(tmp_path: Path) -> None:
             _save_evidence(
                 tmp_path,
                 sensors,
-                {"profile": "flow-compass", "fault": "changing-field-after-liftoff"},
+                {
+                    "profile": "flow-compass",
+                    "fault": "changing-field-after-liftoff",
+                    "overlay": overlay,
+                },
             )
