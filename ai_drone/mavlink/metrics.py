@@ -65,6 +65,10 @@ class TransportMetrics:
                     self._rx_errors += 1
                     self._rx = None
             raise
+        # pymavlink's nonblocking socket adapters use an empty text string for
+        # EAGAIN/EWOULDBLOCK. It proves zero bytes arrived; preserve the sentinel.
+        if isinstance(data, str) and not data:
+            return data
         with self._lock:
             if self._final is None and self._rx is not None:
                 self._rx = (

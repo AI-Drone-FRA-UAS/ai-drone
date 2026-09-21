@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from pymavlink import mavutil
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 from ai_drone.mavlink import metrics
@@ -134,3 +137,39 @@ def test_parser_replacement_cannot_reset_a_measurement_to_apparent_zero(measured
     assert snapshot["encoded_tx_bytes"] is None
     assert snapshot["parser_rx_bytes"] is None
     assert snapshot["tx_bytes"] == len(wire.packets[0])
+
+
+def test_real_tcp_idle_sentinel_preserves_exact_received_byte_total():
+    responses = iter([b"first", BlockingIOError(errno.EAGAIN, "idle"), b"next"])
+
+    def receive(_size):
+        value = next(responses)
+        if isinstance(value, OSError):
+            raise value
+        return value
+
+    raw: Any = object.__new__(mavutil.mavtcp)
+    mavutil.mavfile.__init__(raw, None, "MOCK", input=False)
+    raw.port = SimpleNamespace(recv=receive)
+    meter = metrics.attach_transport_metrics(raw)
+    assert meter is not None
+    try:
+        assert raw.recv(16) == b"first"
+        assert raw.recv(16) == ""  # The real pinned adapter catches EAGAIN.
+        assert meter.snapshot()["rx_bytes"] == len(b"first")
+        assert raw.recv(16) == b"next"
+        assert meter.snapshot()["rx_bytes"] == len(b"firstnext")
+        assert meter.snapshot()["rx_errors"] == 0
+    finally:
+        meter.close()
+
+
+def test_nonempty_text_receive_remains_unknown_after_idle_poll(measured):
+    wire, meter, _ = measured
+    wire.incoming = "unknown encoding"
+    assert wire.recv() == "unknown encoding"
+    wire.incoming = ""
+    assert wire.recv() == ""
+    wire.incoming = b"next"
+    assert wire.recv() == b"next"
+    assert meter.snapshot()["rx_bytes"] is None
