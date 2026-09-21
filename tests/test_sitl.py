@@ -1042,7 +1042,7 @@ def test_gcs_heartbeat_loss_in_loiter_lands_and_disarms(
 
         command = _python_command(
             "ai_drone.cli.control",
-            *_production_hover_arguments(duration=60.0),
+            *_production_hover_arguments(duration=30.0),
         )
         hover_process = subprocess.Popen(
             command,
@@ -1135,7 +1135,7 @@ def test_shared_recording_survives_hangup_and_operator_loss_lands(
                     record_process,
                     record_output,
                 )
-                arguments = _production_hover_arguments(duration=120.0)
+                arguments = _production_hover_arguments(duration=30.0)
                 arguments[arguments.index("--device") + 1] = endpoint
                 arguments.extend(["--runtime-status", str(status_path), "--foreground"])
                 with _running_cli(
@@ -1411,7 +1411,7 @@ def test_pilot_handoff_preserves_control_after_operator_loss(
                 tmp_path, "pilot-runtime", "runtime", "serve", "--no-network"
             ) as (runtime_process, runtime_output):
                 _wait_for_cli(runtime_ready, runtime_process, runtime_output)
-                arguments = _production_hover_arguments(duration=120)
+                arguments = _production_hover_arguments(duration=30)
                 arguments[arguments.index("--device") + 1] = f"unix:{socket_path}"
                 arguments.extend(["--runtime-status", str(status_path), "--foreground"])
                 with _running_cli(tmp_path, "pilot-control", "control", *arguments) as (
