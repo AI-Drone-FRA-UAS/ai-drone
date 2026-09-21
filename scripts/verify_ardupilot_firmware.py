@@ -182,7 +182,7 @@ def extract_feature_statuses(
     command = [
         "uv",
         "run",
-        "--no-sync",
+        "--no-project",
         "--python",
         sys.executable,
         "python",

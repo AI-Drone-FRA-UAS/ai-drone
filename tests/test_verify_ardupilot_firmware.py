@@ -180,7 +180,7 @@ def test_verifies_relative_build_dir_with_official_extractor(
         [
             "uv",
             "run",
-            "--no-sync",
+            "--no-project",
             "--python",
             sys.executable,
             "python",
