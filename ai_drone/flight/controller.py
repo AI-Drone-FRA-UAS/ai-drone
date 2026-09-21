@@ -6,7 +6,7 @@ import logging
 import math
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, assert_never
@@ -14,7 +14,33 @@ from typing import Any, assert_never
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.flight.limits import (
+    MAX_PHYSICAL_ALTITUDE_M as MAX_PHYSICAL_ALTITUDE_M,
+)
+from ai_drone.flight.limits import (
+    FlightEvidence,
+    FlightLimits,
+    relative_position_ready,
+    takeoff_ceiling_violation,
+    takeoff_reached,
+    violation,
+)
 from ai_drone.flight.ownership import OwnershipPolicy, human_takeover_allowed
+from ai_drone.flight.params import (
+    EXPECTED_FIRMWARE_COMMIT as EXPECTED_FIRMWARE_COMMIT,
+)
+from ai_drone.flight.params import (
+    EXPECTED_FIRMWARE_VERSION as EXPECTED_FIRMWARE_VERSION,
+)
+from ai_drone.flight.params import (
+    FORWARD_RANGEFINDER_PARAMETERS as FORWARD_RANGEFINDER_PARAMETERS,
+)
+from ai_drone.flight.params import (
+    PARAMETER_ABS_TOLERANCE as PARAMETER_ABS_TOLERANCE,
+)
+from ai_drone.flight.params import (
+    REQUIRED_NOGPS_LOITER_PARAMETERS as REQUIRED_NOGPS_LOITER_PARAMETERS,
+)
 from ai_drone.flight.phase import (
     Arm,
     Armed,
@@ -41,6 +67,7 @@ from ai_drone.flight.state import (
     VehicleState,
     align_altitude,
     decode,
+    fresh,
     observe,
 )
 from ai_drone.mavlink.connection import open_ardupilot_connection
@@ -61,7 +88,6 @@ DOWNWARD_ORIENTATION = mavlink.MAV_SENSOR_ROTATION_PITCH_270
 GCS_HEARTBEAT_INTERVAL_S = 1.0
 NAVIGATION_SAMPLE_MAX_AGE_S = 1.0
 BATTERY_SAMPLE_MAX_AGE_S = 2.0
-PARAMETER_ABS_TOLERANCE = 1e-5
 ATTITUDE_TARGET_MASK = (
     mavlink.ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE
     | mavlink.ATTITUDE_TARGET_TYPEMASK_BODY_PITCH_RATE_IGNORE
@@ -69,61 +95,7 @@ ATTITUDE_TARGET_MASK = (
 )
 GUIDED_HOLD_FIELD = 0.5
 GUIDED_TAKEOFF_CLIMB_FRACTION = 0.3
-MAX_PHYSICAL_ALTITUDE_M = 0.8
 
-# These are the reviewed ArduCopter 4.7 invariants for this GPS-less aircraft.
-# Hardware calibration and motor-output parameters deliberately do not belong here.
-REQUIRED_NOGPS_LOITER_PARAMETERS: Mapping[str, float] = {
-    "AHRS_EKF_TYPE": 3.0,
-    "AHRS_OPTIONS": 16.0,
-    "ARMING_NEED_LOC": 0.0,
-    "AVOID_ENABLE": 2.0,
-    "EK3_FLOW_USE": 1.0,
-    "EK3_ENABLE": 1.0,
-    "EK3_SRC1_POSXY": 0.0,
-    "EK3_SRC1_POSZ": 1.0,
-    "EK3_SRC1_VELXY": 5.0,
-    "EK3_SRC1_VELZ": 0.0,
-    "EK3_SRC1_YAW": 1.0,
-    "EK3_SRC_OPTIONS": 0.0,
-    "FLOW_TYPE": 5.0,
-    "FRAME_CLASS": 1.0,
-    "FRAME_TYPE": 1.0,
-    "FS_CRASH_CHECK": 1.0,
-    "FS_DR_ENABLE": 1.0,
-    "FS_EKF_ACTION": 1.0,
-    "FS_EKF_THRESH": 0.8,
-    "FS_GCS_ENABLE": 5.0,
-    "FS_GCS_TIMEOUT": 5.0,
-    "FS_OPTIONS": 8.0,
-    # This aircraft intentionally has no RC receiver.  In 4.7, disabling this
-    # check is what permits full-check GCS arming without reporting "RC not found".
-    "FS_THR_ENABLE": 0.0,
-    "FS_VIBE_ENABLE": 1.0,
-    "GPS1_TYPE": 0.0,
-    "GPS2_TYPE": 0.0,
-    # Bit 3 would reinterpret SET_ATTITUDE_TARGET's field as raw thrust.
-    "GUID_OPTIONS": 0.0,
-    # Preserve the project's deliberately gentle final descent rate.
-    "LAND_SPD_MS": 0.15,
-    "MAV_GCS_SYSID": 255.0,
-    "RNGFND1_MAX": 1.0,
-    "RNGFND1_ORIENT": float(DOWNWARD_ORIENTATION),
-    "RNGFND1_TYPE": 10.0,
-    # Fractional Guided climb setpoints are scaled by this value in 4.7.
-    "WP_SPD_UP": 0.25,
-}
-
-# The optional forward MT-15 is independent of the downward altitude source.
-# Preserve its reviewed conservative floor rather than its advertised wire minimum.
-FORWARD_RANGEFINDER_PARAMETERS: Mapping[str, float] = {
-    "RNGFND2_ORIENT": float(mavlink.MAV_SENSOR_ROTATION_NONE),
-    "RNGFND2_MIN": 0.1,
-    "RNGFND2_MAX": 15.0,
-}
-
-EXPECTED_FIRMWARE_VERSION = (4, 7, 1)
-EXPECTED_FIRMWARE_COMMIT = b"dbe79216"
 COPTER_MODES = mavutil.mode_mapping_byname(mavlink.MAV_TYPE_QUADROTOR)
 
 
@@ -138,12 +110,9 @@ class HumanControlTaken(FlightSafetyError):
 def _validate_takeoff_ceiling(
     target: float, ground_reference: float | None, max_altitude: float
 ) -> None:
-    ground = ground_reference or 0.0
-    if ground + target > max_altitude:
-        raise FlightSafetyError(
-            f"takeoff target {target:.2f} m above ground reference {ground:.2f} m "
-            f"exceeds maximum altitude {max_altitude:.2f} m"
-        )
+    reason = takeoff_ceiling_violation(target, ground_reference, max_altitude)
+    if reason is not None:
+        raise FlightSafetyError(reason)
 
 
 class DroneController:
@@ -170,18 +139,7 @@ class DroneController:
             raise ValueError("baud must be between 1 and 4000000")
         self.device = self.find_device(device)
         self.baud = baud
-        self.max_altitude = finite_in_range(
-            max_altitude,
-            "max_altitude",
-            minimum=0.1,
-            maximum=MAX_PHYSICAL_ALTITUDE_M,
-        )
-        self.min_battery_voltage = finite_in_range(
-            min_battery_voltage,
-            "min_battery_voltage",
-            minimum=0.0,
-            maximum=60.0,
-        )
+        self.limits = FlightLimits(max_altitude, min_battery_voltage)
         self.target_system = target_system
         self.target_component = target_component
         self.connection: Any | None = None
@@ -197,6 +155,14 @@ class DroneController:
         self.operator_alive = operator_alive
         self.human_takeover_requested = human_takeover_requested
         self.ownership_policy = ownership_policy or OwnershipPolicy()
+
+    @property
+    def max_altitude(self) -> float:
+        return self.limits.ceiling_m
+
+    @property
+    def min_battery_voltage(self) -> float:
+        return self.limits.min_battery_voltage
 
     @property
     def is_flying(self) -> bool:
@@ -631,42 +597,25 @@ class DroneController:
             self._enforce_flight_limits()
 
     def _enforce_flight_limits(self) -> None:
-        altitudes = (self.current_altitude, self.local_position_altitude_aligned)
-        if any(value is not None and value > self.max_altitude for value in altitudes):
+        evidence = FlightEvidence(
+            self.current_altitude,
+            self.local_position_altitude_aligned,
+            self.navigation_is_healthy(),
+            self.no_rc_input_is_confirmed(),
+            self.battery_voltage,
+            self.battery_is_fresh(),
+            self.altitude_is_fresh(),
+            self.heartbeat_is_fresh(),
+        )
+        reason = violation(
+            self.limits,
+            evidence,
+            in_loiter=self.flight_mode == "LOITER",
+            require_flight_telemetry=self._ground_reference is not None,
+        )
+        if reason is not None:
             self.emergency_stop()
-            measured = max(value for value in altitudes if value is not None)
-            raise FlightSafetyError(
-                f"altitude {measured:.2f} m exceeds {self.max_altitude:.2f} m"
-            )
-        if self.flight_mode == "LOITER" and not self.navigation_is_healthy():
-            self.emergency_stop()
-            raise FlightSafetyError(
-                "Loiter navigation became unhealthy (optical flow or relative EKF position)"
-            )
-        if not self.no_rc_input_is_confirmed():
-            self.emergency_stop()
-            raise FlightSafetyError(
-                "autonomous-flight receiver topology changed or RC_CHANNELS became stale"
-            )
-        if self.min_battery_voltage > 0.0 and (
-            not self.battery_is_fresh()
-            or self.battery_voltage is None
-            or self.battery_voltage < self.min_battery_voltage
-        ):
-            self.emergency_stop()
-            if not self.battery_is_fresh() or self.battery_voltage is None:
-                raise FlightSafetyError("battery telemetry became stale during flight")
-            raise FlightSafetyError(
-                f"battery {self.battery_voltage:.2f} V is below "
-                f"{self.min_battery_voltage:.2f} V"
-            )
-        if self._ground_reference is not None:
-            if not self.altitude_is_fresh():
-                self.emergency_stop()
-                raise FlightSafetyError("altitude became stale during flight")
-            if not self.heartbeat_is_fresh():
-                self.emergency_stop()
-                raise FlightSafetyError("heartbeat became stale during flight")
+            raise FlightSafetyError(reason)
 
     def _poll(self, timeout: float) -> Iterator[None]:
         deadline = time.monotonic() + timeout
@@ -696,57 +645,42 @@ class DroneController:
 
     def altitude_is_fresh(self, max_age: float = 1.0) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
-        return (
-            self.current_altitude is not None
-            and time.monotonic() - self.last_telemetry_time <= max_age
-        )
+        return fresh(self.state.altitude, time.monotonic(), max_age) is not None
 
     def heartbeat_is_fresh(self, max_age: float = 2.5) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
         return (
             self.last_heartbeat_time > 0
-            and time.monotonic() - self.last_heartbeat_time <= max_age
+            and fresh(self.state.heartbeat, time.monotonic(), max_age) is not None
         )
 
     def attitude_is_fresh(self, max_age: float = 1.0) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
         return (
-            self.yaw_rad is not None
-            and self.last_attitude_time > 0
-            and time.monotonic() - self.last_attitude_time <= max_age
+            self.last_attitude_time > 0
+            and fresh(self.state.yaw, time.monotonic(), max_age) is not None
         )
 
     def battery_is_fresh(self, max_age: float = BATTERY_SAMPLE_MAX_AGE_S) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
         return (
-            self.battery_voltage is not None
-            and self.last_battery_time > 0
-            and time.monotonic() - self.last_battery_time <= max_age
+            self.last_battery_time > 0
+            and fresh(self.state.battery, time.monotonic(), max_age) is not None
         )
 
     def optical_flow_is_fresh(
         self, max_age: float = NAVIGATION_SAMPLE_MAX_AGE_S
     ) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
-        return (
-            self.flow_quality is not None
-            and self.flow_quality > 0
-            and self.last_flow_time > 0
-            and time.monotonic() - self.last_flow_time <= max_age
-        )
+        quality = fresh(self.state.flow_quality, time.monotonic(), max_age)
+        return self.last_flow_time > 0 and quality is not None and quality > 0
 
     def relative_position_is_fresh(
         self, max_age: float = NAVIGATION_SAMPLE_MAX_AGE_S
     ) -> bool:
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
-        flags = self.ekf_flags
-        required = mavlink.EKF_VELOCITY_HORIZ | mavlink.EKF_POS_HORIZ_REL
-        return (
-            flags is not None
-            and flags & required == required
-            and not flags & mavlink.EKF_CONST_POS_MODE
-            and self.last_ekf_time > 0
-            and time.monotonic() - self.last_ekf_time <= max_age
+        return self.last_ekf_time > 0 and relative_position_ready(
+            self.state.ekf_flags, time.monotonic(), max_age
         )
 
     def navigation_is_healthy(self) -> bool:
@@ -766,9 +700,8 @@ class DroneController:
 
         finite_in_range(max_age, "max_age", minimum=0.05, maximum=10.0)
         return (
-            self.rc_channel_count == 0
-            and self.last_rc_channels_time > 0
-            and time.monotonic() - self.last_rc_channels_time <= max_age
+            self.last_rc_channels_time > 0
+            and fresh(self.state.rc_channels, time.monotonic(), max_age) == 0
         )
 
     def wait_for_altitude(self, timeout: float = 3.0) -> float | None:
@@ -1183,11 +1116,11 @@ class DroneController:
             ):
                 self.emergency_stop()
                 raise FlightSafetyError("telemetry became stale during takeoff")
-            if (
-                self.last_telemetry_time >= started
-                and self.current_altitude is not None
-                and self._ground_reference is not None
-                and self.current_altitude - self._ground_reference >= target * 0.9
+            if takeoff_reached(
+                self.state.altitude,
+                started=started,
+                ground=self._ground_reference,
+                target=target,
             ):
                 self._send_level_climb(0.0)
                 self.phase = Flight("holding_altitude", ground)
