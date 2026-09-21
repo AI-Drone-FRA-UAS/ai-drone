@@ -168,9 +168,9 @@ def _wait_runtime_ready(socket: str, *, timeout: float = 12) -> None:
 def _environment_interpreter(project: Path) -> tuple[str, bool, str]:
     """Preserve the installed minor version, independently of developer defaults.
 
-    New Pi installs stay on the qualified system 3.13 route. An existing 3.14
-    environment is retained only if separately prepared; deployment never selects
-    or constructs that candidate by following .python-version.
+    New Pi installs stay on the qualified system 3.13 route. Candidate 3.14
+    environments need a reviewed native-artifact preservation/install contract;
+    rebuilding or exactly syncing them would discard separately built bindings.
     """
     config = project / ".venv/pyvenv.cfg"
     if not config.exists():
@@ -187,6 +187,12 @@ def _environment_interpreter(project: Path) -> tuple[str, bool, str]:
     if not re.fullmatch(r"3\.(?:11|12|13|14)\.\d+(?:\.final\.0)?", version):
         raise RuntimeError(
             "existing environment Python version is unknown or unsupported"
+        )
+    if version.startswith("3.14."):
+        raise RuntimeError(
+            "Python 3.14 deployment is blocked pending a reviewed native-binding "
+            "artifact manifest and installation contract; preserve the separate "
+            "candidate environment and keep the working Python 3.13 runtime"
         )
     if values.get("include-system-site-packages") == "true":
         return ".venv/bin/python", False, ".".join(version.split(".")[:2])

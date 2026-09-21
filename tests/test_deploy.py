@@ -671,7 +671,7 @@ def test_dependency_install_uses_uv_offline_and_preserves_pi_system_packages(
         ]
 
 
-@pytest.mark.parametrize("version", ["3.13.5", "3.14.7", "3.13.15.final.0"])
+@pytest.mark.parametrize("version", ["3.13.5", "3.13.15.final.0"])
 def test_deployment_preserves_separately_selected_interpreter(tmp_path, version):
     _write_file(
         tmp_path,
@@ -684,6 +684,33 @@ def test_deployment_preserves_separately_selected_interpreter(tmp_path, version)
         False,
         ".".join(version.split(".")[:2]),
     )
+
+
+@pytest.mark.parametrize("system_packages", ["true", "false"])
+@pytest.mark.parametrize("version", ["3.14.7", "3.14.7.final.0"])
+def test_candidate_deployment_refuses_before_clearing_or_syncing_native_bindings(
+    tmp_path, monkeypatch, system_packages, version
+):
+    config = (
+        f"version_info = {version}\n"
+        f"include-system-site-packages = {system_packages}\n"
+        "executable = /candidate/interpreters/bin/python3.14\n"
+    )
+    _write_file(tmp_path, ".venv/pyvenv.cfg", config)
+    native = ".venv/lib/python3.14/site-packages/libcamera/_libcamera.so"
+    _write_file(tmp_path, native, "separately built native binding")
+    calls = []
+    monkeypatch.setattr(deploy_pi.shutil, "which", lambda _: "/usr/bin/uv")
+    monkeypatch.setattr(
+        deploy_pi.subprocess, "run", lambda *args, **kwargs: calls.append(args)
+    )
+
+    with pytest.raises(RuntimeError, match=r"Python 3\.14 deployment is blocked"):
+        deploy_pi._install_local(tmp_path, offline=True)
+
+    assert calls == []
+    assert (tmp_path / ".venv/pyvenv.cfg").read_text() == config
+    assert (tmp_path / native).read_text() == "separately built native binding"
 
 
 def test_environment_repair_retains_explicit_base_interpreter(tmp_path):
