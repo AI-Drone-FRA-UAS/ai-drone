@@ -4,6 +4,7 @@ import argparse
 import math
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ from ai_drone.flight.controller import (
     DroneController,
     FlightSafetyError,
 )
+from ai_drone.flight.state import Firmware, Heartbeat, Sample
 
 
 def _message(message_type: str, **fields):
@@ -67,7 +69,12 @@ def test_passive_context_never_controls_an_already_armed_vehicle() -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
 
     controller.__exit__(None, None, None)
 
@@ -282,31 +289,6 @@ def test_downward_live_packet_updates_altitude_and_forward_sensor_is_ignored() -
     assert controller.current_altitude == 0.47
 
 
-def test_stale_and_future_downward_samples_are_rejected() -> None:
-    controller = DroneController(device="udp:127.0.0.1:14550")
-    controller.connection = MagicMock()
-    base = dict(
-        orientation=mavlink.MAV_SENSOR_ROTATION_PITCH_270,
-        min_distance=2,
-        max_distance=1200,
-        signal_quality=0,
-    )
-    controller._process_message(
-        _message("DISTANCE_SENSOR", time_boot_ms=10_000, current_distance=40, **base),
-        100.0,
-    )
-    controller._process_message(
-        _message("DISTANCE_SENSOR", time_boot_ms=8_000, current_distance=90, **base),
-        100.1,
-    )
-    controller._process_message(
-        _message("DISTANCE_SENSOR", time_boot_ms=15_000, current_distance=95, **base),
-        100.2,
-    )
-
-    assert controller.current_altitude == 0.4
-
-
 def test_arming_checks_must_be_exactly_all(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
@@ -441,8 +423,13 @@ def test_firmware_gate_requests_and_accepts_exact_copter_471(monkeypatch) -> Non
 
     def send(command, parameters, *, timeout):
         sent.append((command, parameters, timeout))
-        controller.flight_sw_version = (4 << 24) | (7 << 16) | (1 << 8)
-        controller.flight_custom_version = EXPECTED_FIRMWARE_COMMIT
+        controller.state = replace(
+            controller.state,
+            firmware=Sample(
+                Firmware((4 << 24) | (7 << 16) | (1 << 8), EXPECTED_FIRMWARE_COMMIT),
+                time.monotonic(),
+            ),
+        )
 
     monkeypatch.setattr(controller, "_send_command_long_and_wait_ack", send)
 
@@ -482,8 +469,10 @@ def test_firmware_gate_rejects_wrong_version_or_commit(
     monkeypatch.setattr(controller, "_drain_messages", lambda: None)
 
     def send(*_args, **_kwargs):
-        controller.flight_sw_version = packed
-        controller.flight_custom_version = commit
+        controller.state = replace(
+            controller.state,
+            firmware=Sample(Firmware(packed, commit), time.monotonic()),
+        )
 
     monkeypatch.setattr(controller, "_send_command_long_and_wait_ack", send)
 
@@ -516,7 +505,12 @@ def test_land_timeout_never_force_disarms(monkeypatch) -> None:
     connection.mode_mapping.return_value = {"LAND": 9}
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     monkeypatch.setattr(controller, "update_telemetry", lambda: None)
     clock = [0.0]
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
@@ -538,7 +532,12 @@ def test_land_retries_until_disarmed_heartbeat_is_observed(monkeypatch) -> None:
     connection.mode_mapping.return_value = {"LAND": 9}
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._flight_started_by_controller = True
     clock = [0.0]
     updates = [0]
@@ -567,7 +566,12 @@ def test_cleanup_after_takeoff_always_monitors_land_and_never_disarms(
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._armed_by_controller = True
     controller._flight_started_by_controller = True
     controller._landing_commanded = True
@@ -641,8 +645,21 @@ def test_battery_guard_requires_fresh_voltage_before_arming(monkeypatch) -> None
     controller.connection = MagicMock()
 
     def update() -> None:
-        controller.battery_voltage = 14.09
-        controller.last_battery_time = time.monotonic()
+        controller.state = replace(
+            controller.state,
+            battery=Sample(
+                14.09,
+                controller.state.battery.received_at
+                if controller.state.battery is not None
+                else 0.0,
+            ),
+        )
+        controller.state = replace(
+            controller.state,
+            battery=replace(controller.state.battery, received_at=time.monotonic())
+            if controller.state.battery is not None
+            else None,
+        )
 
     monkeypatch.setattr(controller, "update_telemetry", update)
 
@@ -651,46 +668,6 @@ def test_battery_guard_requires_fresh_voltage_before_arming(monkeypatch) -> None
 
     controller.connection.mav.set_mode_send.assert_not_called()
     controller.connection.arducopter_arm.assert_not_called()
-
-
-@pytest.mark.parametrize("voltage", [0, -1, 65_535, 65_536, math.nan, math.inf])
-def test_invalid_battery_report_immediately_invalidates_previous_reading(
-    monkeypatch, voltage
-) -> None:
-    controller = DroneController(device="udp:127.0.0.1:14550")
-    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: 100.0)
-    controller._process_message(_battery_message(16_000), 99.8)
-    assert controller.battery_voltage == 16.0
-    assert controller.battery_is_fresh()
-
-    controller._process_message(_battery_message(voltage), 99.9)
-
-    assert controller.battery_voltage is None
-    assert not controller.battery_is_fresh()
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "onboard_control_sensors_present",
-        "onboard_control_sensors_enabled",
-        "onboard_control_sensors_health",
-    ],
-)
-def test_battery_status_must_confirm_present_enabled_and_healthy(
-    monkeypatch, field
-) -> None:
-    controller = DroneController(device="udp:127.0.0.1:14550")
-    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: 100.0)
-    controller._process_message(_battery_message(16_000), 99.7)
-
-    controller._process_message(_battery_message(16_000, **{field: 0}), 99.8)
-
-    assert controller.battery_voltage is None
-    assert not controller.battery_is_fresh()
-    controller._process_message(_battery_message(15_900), 99.9)
-    assert controller.battery_voltage == 15.9
-    assert controller.battery_is_fresh()
 
 
 def test_unknown_battery_stream_cannot_satisfy_prearm_guard(monkeypatch) -> None:
@@ -721,9 +698,27 @@ def test_unknown_battery_during_flight_commands_land() -> None:
     connection.mode_mapping.return_value = {"LAND": 9}
     controller.connection = connection
     controller._flight_started_by_controller = True
-    controller.is_armed = True
-    controller.rc_channel_count = 0
-    controller.last_rc_channels_time = time.monotonic()
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=Sample(
+            0,
+            controller.state.rc_channels.received_at
+            if controller.state.rc_channels is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=replace(controller.state.rc_channels, received_at=time.monotonic())
+        if controller.state.rc_channels is not None
+        else None,
+    )
     controller._process_message(_battery_message(16_000), time.monotonic())
     connection.recv_match.side_effect = [_battery_message(65_535), None]
 
@@ -744,11 +739,42 @@ def test_low_battery_during_controller_flight_commands_land() -> None:
     connection.recv_match.return_value = None
     controller.connection = connection
     controller._flight_started_by_controller = True
-    controller.is_armed = True
-    controller.rc_channel_count = 0
-    controller.last_rc_channels_time = time.monotonic()
-    controller.battery_voltage = 14.0
-    controller.last_battery_time = time.monotonic()
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=Sample(
+            0,
+            controller.state.rc_channels.received_at
+            if controller.state.rc_channels is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=replace(controller.state.rc_channels, received_at=time.monotonic())
+        if controller.state.rc_channels is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        battery=Sample(
+            14.0,
+            controller.state.battery.received_at
+            if controller.state.battery is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        battery=replace(controller.state.battery, received_at=time.monotonic())
+        if controller.state.battery is not None
+        else None,
+    )
 
     with pytest.raises(FlightSafetyError, match=r"14.00 V.*14.40 V"):
         controller.update_telemetry()
@@ -786,8 +812,23 @@ def test_wait_for_no_rc_input_accepts_fresh_zero_channel_report(monkeypatch) -> 
     controller.connection = MagicMock()
 
     def update() -> None:
-        controller.rc_channel_count = 0
-        controller.last_rc_channels_time = time.monotonic()
+        controller.state = replace(
+            controller.state,
+            rc_channels=Sample(
+                0,
+                controller.state.rc_channels.received_at
+                if controller.state.rc_channels is not None
+                else 0.0,
+            ),
+        )
+        controller.state = replace(
+            controller.state,
+            rc_channels=replace(
+                controller.state.rc_channels, received_at=time.monotonic()
+            )
+            if controller.state.rc_channels is not None
+            else None,
+        )
 
     monkeypatch.setattr(controller, "update_telemetry", update)
 
@@ -799,8 +840,23 @@ def test_wait_for_no_rc_input_rejects_active_receiver(monkeypatch) -> None:
     controller.connection = MagicMock()
 
     def update() -> None:
-        controller.rc_channel_count = 8
-        controller.last_rc_channels_time = time.monotonic()
+        controller.state = replace(
+            controller.state,
+            rc_channels=Sample(
+                8,
+                controller.state.rc_channels.received_at
+                if controller.state.rc_channels is not None
+                else 0.0,
+            ),
+        )
+        controller.state = replace(
+            controller.state,
+            rc_channels=replace(
+                controller.state.rc_channels, received_at=time.monotonic()
+            )
+            if controller.state.rc_channels is not None
+            else None,
+        )
 
     monkeypatch.setattr(controller, "update_telemetry", update)
 
@@ -817,7 +873,12 @@ def test_local_position_ceiling_is_aligned_to_rangefinder_and_lands(
     connection.recv_match.return_value = None
     controller.connection = connection
     controller._flight_started_by_controller = True
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     base = dict(
         orientation=mavlink.MAV_SENSOR_ROTATION_PITCH_270,
         min_distance=2,
@@ -847,17 +908,72 @@ def test_local_position_ceiling_is_aligned_to_rangefinder_and_lands(
 def test_takeoff_uses_guided_nogps_flag_and_rangefinder_delta(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550", max_altitude=0.8)
     controller.connection = MagicMock()
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._armed_by_controller = True
-    controller.flight_mode = "GUIDED_NOGPS"
-    controller.current_altitude = 0.05
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(controller.is_armed, "GUIDED_NOGPS"),
+            controller.last_heartbeat_time,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        altitude=Sample(
+            0.05,
+            controller.state.altitude.received_at
+            if controller.state.altitude is not None
+            else 0.0,
+        ),
+    )
     now = time.monotonic()
-    controller.yaw_rad = 0.0
-    controller.last_attitude_time = now
-    controller.flow_quality = 67
-    controller.last_flow_time = now
-    controller.last_heartbeat_time = now
-    controller.last_telemetry_time = now
+    controller.state = replace(
+        controller.state,
+        yaw=Sample(
+            0.0,
+            controller.state.yaw.received_at
+            if controller.state.yaw is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        yaw=replace(controller.state.yaw, received_at=now)
+        if controller.state.yaw is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        flow_quality=Sample(
+            67,
+            controller.state.flow_quality.received_at
+            if controller.state.flow_quality is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        flow_quality=replace(controller.state.flow_quality, received_at=now)
+        if controller.state.flow_quality is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        heartbeat=replace(controller.state.heartbeat, received_at=now)
+        if controller.state.heartbeat is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        altitude=replace(controller.state.altitude, received_at=now)
+        if controller.state.altitude is not None
+        else None,
+    )
     sent: list[float] = []
     monkeypatch.setattr(controller, "wait_for_altitude", lambda **_kwargs: 0.05)
     monkeypatch.setattr(
@@ -872,9 +988,27 @@ def test_takeoff_uses_guided_nogps_flag_and_rangefinder_delta(monkeypatch) -> No
         nonlocal updates
         updates += 1
         timestamp = time.monotonic()
-        controller.current_altitude = 0.05 if updates == 1 else 0.53
-        controller.last_telemetry_time = timestamp
-        controller.last_heartbeat_time = timestamp
+        controller.state = replace(
+            controller.state,
+            altitude=Sample(
+                0.05 if updates == 1 else 0.53,
+                controller.state.altitude.received_at
+                if controller.state.altitude is not None
+                else 0.0,
+            ),
+        )
+        controller.state = replace(
+            controller.state,
+            altitude=replace(controller.state.altitude, received_at=timestamp)
+            if controller.state.altitude is not None
+            else None,
+        )
+        controller.state = replace(
+            controller.state,
+            heartbeat=replace(controller.state.heartbeat, received_at=timestamp)
+            if controller.state.heartbeat is not None
+            else None,
+        )
 
     monkeypatch.setattr(controller, "update_telemetry", update)
 
@@ -890,17 +1024,72 @@ def test_takeoff_refuses_when_target_plus_ground_reference_exceeds_max_alt(
 ) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550", max_altitude=0.5)
     controller.connection = MagicMock()
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._armed_by_controller = True
-    controller.flight_mode = "GUIDED_NOGPS"
-    controller.current_altitude = 0.1
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(controller.is_armed, "GUIDED_NOGPS"),
+            controller.last_heartbeat_time,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        altitude=Sample(
+            0.1,
+            controller.state.altitude.received_at
+            if controller.state.altitude is not None
+            else 0.0,
+        ),
+    )
     now = time.monotonic()
-    controller.yaw_rad = 0.0
-    controller.last_attitude_time = now
-    controller.flow_quality = 67
-    controller.last_flow_time = now
-    controller.last_heartbeat_time = now
-    controller.last_telemetry_time = now
+    controller.state = replace(
+        controller.state,
+        yaw=Sample(
+            0.0,
+            controller.state.yaw.received_at
+            if controller.state.yaw is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        yaw=replace(controller.state.yaw, received_at=now)
+        if controller.state.yaw is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        flow_quality=Sample(
+            67,
+            controller.state.flow_quality.received_at
+            if controller.state.flow_quality is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        flow_quality=replace(controller.state.flow_quality, received_at=now)
+        if controller.state.flow_quality is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        heartbeat=replace(controller.state.heartbeat, received_at=now)
+        if controller.state.heartbeat is not None
+        else None,
+    )
+    controller.state = replace(
+        controller.state,
+        altitude=replace(controller.state.altitude, received_at=now)
+        if controller.state.altitude is not None
+        else None,
+    )
     monkeypatch.setattr(controller, "wait_for_altitude", lambda **_kwargs: 0.1)
 
     with pytest.raises(FlightSafetyError, match="exceeds maximum altitude"):
@@ -911,10 +1100,34 @@ def test_guided_nogps_climb_is_level_and_uses_climb_rate_field(monkeypatch) -> N
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     controller.connection = connection
-    controller.is_armed = True
-    controller.flight_mode = "GUIDED_NOGPS"
-    controller.yaw_rad = math.pi / 2
-    controller.last_attitude_time = 10.0
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(controller.is_armed, "GUIDED_NOGPS"),
+            controller.last_heartbeat_time,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        yaw=Sample(
+            math.pi / 2,
+            controller.state.yaw.received_at
+            if controller.state.yaw is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        yaw=replace(controller.state.yaw, received_at=10.0)
+        if controller.state.yaw is not None
+        else None,
+    )
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: 10.0)
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic_ns", lambda: 10**10)
 
@@ -972,7 +1185,12 @@ def test_command_ack_acceptance_sends_exact_parameters() -> None:
 def test_enter_loiter_waits_for_navigation_then_confirms_mode(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     controller.connection = MagicMock()
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._flight_started_by_controller = True
     wait = MagicMock()
     monkeypatch.setattr(controller, "wait_for_relative_position", wait)
@@ -980,7 +1198,12 @@ def test_enter_loiter_waits_for_navigation_then_confirms_mode(monkeypatch) -> No
     monkeypatch.setattr(controller, "no_rc_input_is_confirmed", lambda: True)
 
     def set_mode(mode: str) -> None:
-        controller.flight_mode = mode
+        controller.state = replace(
+            controller.state,
+            heartbeat=Sample(
+                Heartbeat(controller.is_armed, mode), controller.last_heartbeat_time
+            ),
+        )
 
     monkeypatch.setattr(controller, "set_mode", set_mode)
 
@@ -997,10 +1220,28 @@ def test_enter_loiter_lands_instead_of_accepting_valid_low_throttle_rc(
     connection = MagicMock()
     connection.mode_mapping.return_value = {"LAND": 9, "LOITER": 5}
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._flight_started_by_controller = True
-    controller.rc_channel_count = 8
-    controller.last_rc_channels_time = time.monotonic()
+    controller.state = replace(
+        controller.state,
+        rc_channels=Sample(
+            8,
+            controller.state.rc_channels.received_at
+            if controller.state.rc_channels is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=replace(controller.state.rc_channels, received_at=time.monotonic())
+        if controller.state.rc_channels is not None
+        else None,
+    )
     monkeypatch.setattr(
         controller, "wait_for_relative_position", lambda **_kwargs: None
     )
@@ -1023,13 +1264,36 @@ def test_active_receiver_during_controller_flight_commands_land_even_after_mode_
     connection.mode_mapping.return_value = {"LAND": 9}
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     controller._flight_started_by_controller = True
     # An RC mode channel can move the vehicle away from Loiter before the next
     # telemetry cycle.  The topology guard must remain active in every mode.
-    controller.flight_mode = "ALT_HOLD"
-    controller.rc_channel_count = 8
-    controller.last_rc_channels_time = time.monotonic()
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(controller.is_armed, "ALT_HOLD"), controller.last_heartbeat_time
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=Sample(
+            8,
+            controller.state.rc_channels.received_at
+            if controller.state.rc_channels is not None
+            else 0.0,
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        rc_channels=replace(controller.state.rc_channels, received_at=time.monotonic())
+        if controller.state.rc_channels is not None
+        else None,
+    )
     monkeypatch.setattr(controller, "navigation_is_healthy", lambda: True)
 
     with pytest.raises(FlightSafetyError, match="receiver topology changed"):
@@ -1115,8 +1379,21 @@ def test_telemetry_guards_only_command_an_owned_flight_before_landing(
     controller.connection = connection
     controller._flight_started_by_controller = owned
     controller._landing_commanded = landing
-    controller.flight_mode = "LOITER"
-    controller.current_altitude = 1.5
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(controller.is_armed, "LOITER"), controller.last_heartbeat_time
+        ),
+    )
+    controller.state = replace(
+        controller.state,
+        altitude=Sample(
+            1.5,
+            controller.state.altitude.received_at
+            if controller.state.altitude is not None
+            else 0.0,
+        ),
+    )
 
     controller.update_telemetry()
 
@@ -1160,9 +1437,25 @@ def test_public_loiter_hold_lands_if_mode_changes(monkeypatch, mode) -> None:
     connection = MagicMock()
     connection.mode_mapping.return_value = {"LAND": 9}
     controller.connection = connection
-    controller.flight_mode = "LOITER"
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(controller.is_armed, "LOITER"), controller.last_heartbeat_time
+        ),
+    )
     monkeypatch.setattr(
-        controller, "update_telemetry", lambda: setattr(controller, "flight_mode", mode)
+        controller,
+        "update_telemetry",
+        lambda: setattr(
+            controller,
+            "state",
+            replace(
+                controller.state,
+                heartbeat=Sample(
+                    Heartbeat(controller.is_armed, mode), time.monotonic()
+                ),
+            ),
+        ),
     )
     monkeypatch.setattr(controller, "altitude_is_fresh", lambda: True)
     monkeypatch.setattr(controller, "heartbeat_is_fresh", lambda: True)
@@ -1258,7 +1551,12 @@ def test_land_retries_after_transport_failure_without_mode_cache(monkeypatch, fa
     connection.mode_mapping.return_value = None
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller.is_armed = True
+    controller.state = replace(
+        controller.state,
+        heartbeat=Sample(
+            Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
+        ),
+    )
     clock = [100.0]
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(

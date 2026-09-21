@@ -6,6 +6,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,11 +14,16 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.flight.ownership import OwnershipPolicy, human_takeover_allowed
+from ai_drone.flight.state import (
+    VehicleState,
+    align_altitude,
+    decode,
+    observe,
+)
 from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
-    heartbeat_is_armed,
     is_vehicle_message,
     require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
@@ -29,8 +35,6 @@ from ai_drone.validation import finite_in_range
 logger = logging.getLogger(__name__)
 
 DOWNWARD_ORIENTATION = mavlink.MAV_SENSOR_ROTATION_PITCH_270
-MAX_SAMPLE_AGE_MS = 1_000
-FUTURE_TOLERANCE_MS = 250
 GCS_HEARTBEAT_INTERVAL_S = 1.0
 NAVIGATION_SAMPLE_MAX_AGE_S = 1.0
 BATTERY_SAMPLE_MAX_AGE_S = 2.0
@@ -108,37 +112,6 @@ class HumanControlTaken(FlightSafetyError):
     """Autonomous work must yield; the caller must keep telemetry alive until disarm."""
 
 
-def _reported_altitude(message: Any) -> float | None:
-    current = int(message.current_distance)
-    minimum = int(message.min_distance)
-    maximum = int(message.max_distance)
-    quality = int(getattr(message, "signal_quality", 255))
-    # MAVLink quality 0 is unspecified; 1 explicitly invalidates the reading.
-    if (
-        current <= 0
-        or (minimum > 0 and current < minimum)
-        or (maximum > 0 and current > maximum)
-        or quality == 1
-    ):
-        return None
-    altitude = current / 100.0
-    return altitude if math.isfinite(altitude) else None
-
-
-def _reported_battery_voltage(message: Any) -> float | None:
-    millivolts = float(message.voltage_battery)
-    healthy = all(
-        int(getattr(message, field, 0)) & mavlink.MAV_SYS_STATUS_SENSOR_BATTERY
-        for field in (
-            "onboard_control_sensors_present",
-            "onboard_control_sensors_enabled",
-            "onboard_control_sensors_health",
-        )
-    )
-    # UINT16_MAX means voltage was not supplied.
-    return millivolts / 1_000.0 if healthy and 0.0 < millivolts < 65_535.0 else None
-
-
 def _validate_takeoff_ceiling(
     target: float, ground_reference: float | None, max_altitude: float
 ) -> None:
@@ -189,29 +162,8 @@ class DroneController:
         self.target_system = target_system
         self.target_component = target_component
         self.connection: Any | None = None
-        self.current_altitude: float | None = None
-        self.local_position_altitude: float | None = None
-        self.local_position_altitude_aligned: float | None = None
-        self.battery_voltage: float | None = None
-        self.ekf_flags: int | None = None
-        self.flow_quality: int | None = None
-        self.rc_channel_count: int | None = None
-        self.yaw_rad: float | None = None
-        self.flight_mode: str | None = None
-        self.is_armed = False
+        self.state = VehicleState()
         self.is_flying = False
-        self.last_telemetry_time = 0.0
-        self.last_heartbeat_time = 0.0
-        self.last_battery_time = 0.0
-        self.last_ekf_time = 0.0
-        self.last_flow_time = 0.0
-        self.last_rc_channels_time = 0.0
-        self.last_attitude_time = 0.0
-        self.last_local_position_time = 0.0
-        self.flight_sw_version: int | None = None
-        self.flight_custom_version: bytes | None = None
-        self._latest_boot_ms: int | None = None
-        self._latest_boot_received = 0.0
         self._last_gcs_heartbeat_time: float | None = None
         # An unconfirmed arm write retains cleanup ownership even if an
         # intermediate heartbeat still describes the pre-arm disarmed state.
@@ -220,7 +172,6 @@ class DroneController:
         self._flight_started_by_controller = False
         self._landing_commanded = False
         self._ground_reference: float | None = None
-        self._local_altitude_offset: float | None = None
         # The CLI sets this to a non-blocking callback backed by its signal/event
         # handling.  Every long pre-landing loop checks it; landing deliberately
         # ignores it so a second signal cannot interrupt cleanup.
@@ -229,6 +180,105 @@ class DroneController:
         self.human_takeover_requested = human_takeover_requested
         self.ownership_policy = ownership_policy or OwnershipPolicy()
         self._human_control = False
+
+    @property
+    def current_altitude(self) -> float | None:
+        sample = self.state.altitude
+        return None if sample is None else sample.value
+
+    @property
+    def local_position_altitude(self) -> float | None:
+        sample = self.state.local_altitude
+        return None if sample is None else sample.value
+
+    @property
+    def battery_voltage(self) -> float | None:
+        sample = self.state.battery
+        return None if sample is None else sample.value
+
+    @property
+    def ekf_flags(self) -> int | None:
+        sample = self.state.ekf_flags
+        return None if sample is None else sample.value
+
+    @property
+    def flow_quality(self) -> int | None:
+        sample = self.state.flow_quality
+        return None if sample is None else sample.value
+
+    @property
+    def rc_channel_count(self) -> int | None:
+        sample = self.state.rc_channels
+        return None if sample is None else sample.value
+
+    @property
+    def yaw_rad(self) -> float | None:
+        sample = self.state.yaw
+        return None if sample is None else sample.value
+
+    @property
+    def last_telemetry_time(self) -> float:
+        sample = self.state.altitude
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_local_position_time(self) -> float:
+        sample = self.state.local_altitude
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_battery_time(self) -> float:
+        sample = self.state.battery
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_ekf_time(self) -> float:
+        sample = self.state.ekf_flags
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_flow_time(self) -> float:
+        sample = self.state.flow_quality
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_rc_channels_time(self) -> float:
+        sample = self.state.rc_channels
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_attitude_time(self) -> float:
+        sample = self.state.yaw
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def last_heartbeat_time(self) -> float:
+        sample = self.state.heartbeat
+        return 0.0 if sample is None else sample.received_at
+
+    @property
+    def is_armed(self) -> bool:
+        return self.state.heartbeat is not None and self.state.heartbeat.value.armed
+
+    @property
+    def flight_mode(self) -> str | None:
+        return None if self.state.heartbeat is None else self.state.heartbeat.value.mode
+
+    @property
+    def local_position_altitude_aligned(self) -> float | None:
+        return (
+            None if self.state.alignment is None else self.state.alignment.local.value
+        )
+
+    @property
+    def flight_sw_version(self) -> int | None:
+        return (
+            None if self.state.firmware is None else self.state.firmware.value.version
+        )
+
+    @property
+    def flight_custom_version(self) -> bytes | None:
+        return None if self.state.firmware is None else self.state.firmware.value.commit
 
     @property
     def owns_control(self) -> bool:
@@ -412,30 +462,6 @@ class DroneController:
         )
         self._last_gcs_heartbeat_time = now
 
-    @staticmethod
-    def _timestamp_delta(candidate: int, reference: int) -> int:
-        return (candidate - reference + 2**31) % 2**32 - 2**31
-
-    def _timestamp_is_fresh(self, raw: object, now: float) -> bool:
-        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 < raw < 2**32:
-            return False
-        if self._latest_boot_ms is None:
-            self._latest_boot_ms = raw
-            self._latest_boot_received = now
-            return True
-        elapsed_ms = round((now - self._latest_boot_received) * 1_000)
-        delta = self._timestamp_delta(raw, self._latest_boot_ms)
-        age_from_expected = delta - elapsed_ms
-        if (
-            age_from_expected < -MAX_SAMPLE_AGE_MS
-            or age_from_expected > FUTURE_TOLERANCE_MS
-        ):
-            return False
-        if delta > 0:
-            self._latest_boot_ms = raw
-            self._latest_boot_received = now
-        return True
-
     def _matching_vehicle_message(self, message: Any) -> bool:
         return is_vehicle_message(
             message,
@@ -446,113 +472,26 @@ class DroneController:
     def _process_message(self, message: Any, now: float) -> None:
         if not self._matching_vehicle_message(message):
             return
-        received = received_monotonic(message, default=now)
-        message_type = message.get_type()
-        if message_type == "HEARTBEAT":
-            self._process_heartbeat(message, received, now)
-            return
-        now = received
-        if message_type in {"ATTITUDE", "LOCAL_POSITION_NED"}:
-            self._process_pose_message(message, message_type, now)
-            return
-        if message_type == "DISTANCE_SENSOR":
-            self._process_downward_range(message, now)
-        elif message_type == "EKF_STATUS_REPORT":
-            self.ekf_flags = int(message.flags)
-            self.last_ekf_time = now
-        elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
-            self._process_flow_quality(message, now)
-        elif message_type == "RC_CHANNELS":
-            self._process_rc_channels(message, now)
-        elif message_type == "SYS_STATUS":
-            # Invalid new data immediately revokes an earlier good observation.
-            self.battery_voltage = _reported_battery_voltage(message)
-            self.last_battery_time = now if self.battery_voltage is not None else 0.0
-        elif message_type == "AUTOPILOT_VERSION":
-            self.flight_sw_version = int(message.flight_sw_version)
-            custom = message.flight_custom_version
-            self.flight_custom_version = (
-                custom if isinstance(custom, bytes) else bytes(custom)
-            )
-
-    def _process_flow_quality(self, message: Any, now: float) -> None:
-        self.flow_quality = int(message.quality)
-        if self.flow_quality > 0:
-            self.last_flow_time = now
-
-    def _process_heartbeat(self, message: Any, received: float, now: float) -> None:
-        if (
-            received < self.last_heartbeat_time
-            or not 0 <= now - received <= self.ownership_policy.heartbeat_max_age
-        ):
-            return
-        self.is_armed = heartbeat_is_armed(message)
-        self.last_heartbeat_time = received
-        mode = (
-            mavutil.mode_string_v10(message)
-            if isinstance(getattr(message, "custom_mode", None), int)
-            else getattr(self._connection(), "flightmode", None)
+        observation = decode(
+            message,
+            received=received_monotonic(message, default=now),
+            fallback_mode=getattr(self.connection, "flightmode", None),
         )
-        if isinstance(mode, str):
-            self.flight_mode = mode
-        if not self.is_armed:
+        if observation is None:
+            return
+        previous = self.state
+        self.state = observe(
+            previous,
+            observation,
+            now=now,
+            target_system=self.target_system,
+            target_component=self.target_component,
+            heartbeat_max_age=self.ownership_policy.heartbeat_max_age,
+        )
+        if self.state.heartbeat is not previous.heartbeat and not self.is_armed:
             self.is_flying = False
             self._armed_by_controller = False
             self._flight_started_by_controller = False
-            self._local_altitude_offset = None
-            self.local_position_altitude_aligned = None
-
-    def _process_downward_range(self, message: Any, now: float) -> None:
-        if int(message.orientation) != DOWNWARD_ORIENTATION:
-            return
-        if not self._timestamp_is_fresh(getattr(message, "time_boot_ms", None), now):
-            return
-        altitude = _reported_altitude(message)
-        if altitude is None:
-            return
-        self.current_altitude = altitude
-        self.last_telemetry_time = now
-        self._align_local_altitude(now)
-
-    def _process_rc_channels(self, message: Any, now: float) -> None:
-        if not self._timestamp_is_fresh(getattr(message, "time_boot_ms", None), now):
-            return
-        channel_count = int(message.chancount)
-        if 0 <= channel_count <= 18:
-            self.rc_channel_count = channel_count
-            self.last_rc_channels_time = now
-
-    def _process_pose_message(
-        self, message: Any, message_type: str, now: float
-    ) -> None:
-        if not self._timestamp_is_fresh(getattr(message, "time_boot_ms", None), now):
-            return
-        if message_type == "ATTITUDE":
-            yaw = float(message.yaw)
-            if math.isfinite(yaw):
-                self.yaw_rad = yaw
-                self.last_attitude_time = now
-            return
-        altitude = -float(message.z)
-        if math.isfinite(altitude):
-            self.local_position_altitude = altitude
-            self.last_local_position_time = now
-            self._align_local_altitude(now)
-
-    def _align_local_altitude(self, now: float) -> None:
-        """Align local NED altitude to the downward rangefinder's floor datum."""
-
-        local = self.local_position_altitude
-        distance = self.current_altitude
-        if local is None or distance is None:
-            return
-        if now - self.last_local_position_time > NAVIGATION_SAMPLE_MAX_AGE_S:
-            return
-        if now - self.last_telemetry_time > NAVIGATION_SAMPLE_MAX_AGE_S:
-            return
-        if self._local_altitude_offset is None:
-            self._local_altitude_offset = distance - local
-        self.local_position_altitude_aligned = local + self._local_altitude_offset
 
     def update_telemetry(self, max_messages: int = 50) -> None:
         if isinstance(max_messages, bool) or not 1 <= max_messages <= 1_000:
@@ -842,8 +781,7 @@ class DroneController:
         """Require official ArduCopter 4.7.1 at the captured project commit."""
 
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=15.0)
-        self.flight_sw_version = None
-        self.flight_custom_version = None
+        self.state = replace(self.state, firmware=None)
         self._drain_messages()
         self._send_command_long_and_wait_ack(
             mavlink.MAV_CMD_REQUEST_MESSAGE,
@@ -1131,9 +1069,9 @@ class DroneController:
             self.set_mode("GUIDED_NOGPS")
         self._ground_reference = self.current_altitude
         _validate_takeoff_ceiling(target, self._ground_reference, self.max_altitude)
-        self._local_altitude_offset = None
-        self.local_position_altitude_aligned = None
-        self._align_local_altitude(time.monotonic())
+        self.state = align_altitude(
+            replace(self.state, alignment=None), time.monotonic()
+        )
         # Mark ownership before the first climb target leaves.  From this point
         # cleanup must LAND and never issue a force-disarm, even if no motion is
         # observed or the link fails immediately afterward.
