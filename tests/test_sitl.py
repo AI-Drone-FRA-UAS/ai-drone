@@ -681,7 +681,10 @@ def _assert_subsequence(actual: list[str], expected: list[str]) -> None:
 
 
 def _assert_sitl_parameters(
-    connection: Any, *, forward_range_enabled: bool = False
+    connection: Any,
+    *,
+    forward_range_enabled: bool = False,
+    overlay: dict[str, float] | None = None,
 ) -> None:
     expected = {
         "AHRS_EKF_TYPE": 3.0,
@@ -727,6 +730,9 @@ def _assert_sitl_parameters(
     }
     if forward_range_enabled:
         expected.update(FORWARD_RANGE_PARAMETERS)
+    if overlay:
+        expected.update(overlay)
+    assert expected["ARMING_SKIPCHK"] == 0.0
     actual = {
         name: request_parameter(connection, name, timeout=5.0) for name in expected
     }
@@ -814,11 +820,15 @@ def _running_sitl(
                 _stop_process(process)
 
 
-def _assert_running_sitl_configuration(sensors: _ExternalMavlinkSensors) -> None:
+def _assert_running_sitl_configuration(
+    sensors: _ExternalMavlinkSensors, *, overlay: dict[str, float] | None = None
+) -> None:
     connection = _connect()
     try:
         _assert_sitl_parameters(
-            connection, forward_range_enabled=sensors.forward_range_enabled
+            connection,
+            forward_range_enabled=sensors.forward_range_enabled,
+            overlay=overlay,
         )
         sensors.assert_healthy()
         request_message_intervals(
