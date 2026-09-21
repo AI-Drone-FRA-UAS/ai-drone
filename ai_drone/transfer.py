@@ -16,7 +16,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
@@ -71,6 +71,8 @@ def _load(data: bytes) -> dict[str, Any]:
 
 
 def _relative(name: str) -> Path:
+    if not isinstance(name, str):
+        raise ValueError("Dataset path must be a string")
     path = PurePosixPath(name)
     if (
         not name
@@ -98,6 +100,139 @@ def _path(path: Path) -> Path:
     if ".." in absolute.parts or absolute.is_symlink():
         raise ValueError("Paths must not contain symlinks or '..'")
     return absolute.parent.resolve() / absolute.name
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    host: str | None
+    project: str | None
+    path: str
+
+    @classmethod
+    def parse(cls, value: object) -> Endpoint:
+        if not isinstance(value, dict) or set(value) != {"host", "project", "path"}:
+            raise ValueError("Invalid transfer endpoint")
+        host, project, path = value["host"], value["project"], value["path"]
+        if not isinstance(path, str) or not path or "\0" in path:
+            raise ValueError("Invalid transfer endpoint path")
+        if any(
+            item is not None and not isinstance(item, str) for item in (host, project)
+        ):
+            raise ValueError("Invalid transfer endpoint")
+        if host is not None and (
+            not re.fullmatch(r"[A-Za-z0-9_.@:\[\]-]+", host)
+            or host.startswith("-")
+            or not project
+        ):
+            raise ValueError("Invalid SSH endpoint")
+        return cls(host, project, path)
+
+    def document(self) -> dict[str, str | None]:
+        return {"host": self.host, "project": self.project, "path": self.path}
+
+
+@dataclass(frozen=True)
+class FileRecord:
+    size: int
+    sha256: str
+    stamp: tuple[int, ...] | None
+
+    @classmethod
+    def parse(cls, value: object) -> FileRecord:
+        if not isinstance(value, dict):
+            raise ValueError("Invalid file checksum or size")
+        size, digest, stamp = value.get("size"), value.get("sha256"), value.get("stamp")
+        if (
+            type(size) is not int
+            or size < 0
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise ValueError("Invalid file checksum or size")
+        if stamp is not None and (
+            not isinstance(stamp, list)
+            or len(stamp) != 5
+            or any(type(item) is not int for item in stamp)
+            or stamp[2] != size
+        ):
+            raise ValueError("Invalid source file stamp")
+        return cls(size, digest, None if stamp is None else tuple(stamp))
+
+    def document(self, *, stamps: bool = True) -> dict[str, object]:
+        return {
+            "size": self.size,
+            "sha256": self.sha256,
+            **(
+                {"stamp": list(self.stamp)} if stamps and self.stamp is not None else {}
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class Inventory:
+    files: tuple[tuple[str, FileRecord], ...]
+    directories: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, value: object) -> Inventory:
+        if not isinstance(value, dict):
+            raise ValueError("Invalid transfer inventory")
+        files, directories = value.get("files"), value.get("directories")
+        if not isinstance(files, dict) or not isinstance(directories, list):
+            raise ValueError("Invalid transfer inventory")
+        for name in [*files, *directories]:
+            _relative(name)
+        if len(directories) != len(set(directories)) or set(files) & set(directories):
+            raise ValueError("Duplicate transfer paths")
+        return cls(
+            tuple((name, FileRecord.parse(item)) for name, item in files.items()),
+            tuple(sorted(directories)),
+        )
+
+    def document(self, *, stamps: bool = True) -> dict[str, Any]:
+        return {
+            "files": {name: item.document(stamps=stamps) for name, item in self.files},
+            "directories": list(self.directories),
+        }
+
+
+@dataclass(frozen=True)
+class Receipt:
+    id: str
+    source: Endpoint
+    destination: Endpoint
+    inventory: Inventory
+
+    @classmethod
+    def parse(cls, value: object) -> Receipt:
+        if (
+            not isinstance(value, dict)
+            or type(value.get("version")) is not int
+            or value["version"] != 1
+            or set(value) != {"version", "id", "source", "destination", "snapshot"}
+        ):
+            raise ValueError("Unsupported transfer receipt")
+        token = value["id"]
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise ValueError("Invalid transfer receipt ID")
+        inventory = Inventory.parse(value["snapshot"])
+        if any(item.stamp is None for _, item in inventory.files):
+            raise ValueError("Transfer receipt requires source file stamps")
+        return cls(
+            token,
+            Endpoint.parse(value["source"]),
+            Endpoint.parse(value["destination"]),
+            inventory,
+        )
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "id": self.id,
+            "source": self.source.document(),
+            "destination": self.destination.document(),
+            "snapshot": self.inventory.document(),
+        }
 
 
 def _stamp(value: os.stat_result) -> list[int]:
@@ -174,72 +309,13 @@ def snapshot(path: Path, *, check_writers: bool = True) -> dict[str, Any]:
 
 
 def _content(value: dict[str, Any]) -> dict[str, Any]:
-    files = value["files"]
-    directories = value["directories"]
-    if not isinstance(files, dict) or not isinstance(directories, list):
-        raise ValueError("Invalid transfer inventory")
-    for name in [*files, *directories]:
-        _relative(name)
-    if len(directories) != len(set(directories)) or set(files) & set(directories):
-        raise ValueError("Duplicate transfer paths")
-    for item in files.values():
-        if (
-            type(item.get("size")) is not int
-            or item["size"] < 0
-            or not isinstance(item.get("sha256"), str)
-            or len(item["sha256"]) != 64
-            or any(c not in "0123456789abcdef" for c in item["sha256"])
-        ):
-            raise ValueError("Invalid file checksum or size")
-    return {
-        "files": {
-            name: {"size": item["size"], "sha256": item["sha256"]}
-            for name, item in files.items()
-        },
-        "directories": sorted(directories),
-    }
+    return Inventory.parse(value).document(stamps=False)
 
 
 def _receipt(value: dict[str, Any]) -> dict[str, Any]:
-    if value.get("version") != 1 or set(value) != {
-        "version",
-        "id",
-        "source",
-        "destination",
-        "snapshot",
-    }:
-        raise ValueError("Unsupported transfer receipt")
-    token = value["id"]
-    if (
-        not isinstance(token, str)
-        or len(token) != 32
-        or any(c not in "0123456789abcdef" for c in token)
-    ):
-        raise ValueError("Invalid transfer receipt ID")
-    for key in ("source", "destination"):
-        endpoint = value[key]
-        if not isinstance(endpoint, dict) or set(endpoint) != {
-            "host",
-            "project",
-            "path",
-        }:
-            raise ValueError("Invalid transfer endpoint")
-        if (
-            not isinstance(endpoint["path"], str)
-            or not endpoint["path"]
-            or "\0" in endpoint["path"]
-        ):
-            raise ValueError("Invalid transfer endpoint path")
-        for field in ("host", "project"):
-            if endpoint[field] is not None and not isinstance(endpoint[field], str):
-                raise ValueError("Invalid transfer endpoint")
-        if endpoint["host"] is not None and (
-            not re.fullmatch(r"[A-Za-z0-9_.@:\[\]-]+", endpoint["host"])
-            or endpoint["host"].startswith("-")
-            or not endpoint["project"]
-        ):
-            raise ValueError("Invalid SSH endpoint")
-    _content(value["snapshot"])
+    Receipt.parse(value)
+    # Exact wire bytes participate in the deletion ledger check; normalization
+    # must never make a modified receipt equal to a previously recorded receipt.
     return value
 
 
@@ -271,7 +347,12 @@ def _metadata(archive: tarfile.TarFile, name: str, value: dict[str, Any]) -> Non
 def send(
     source: dict[str, Any], destination: dict[str, Any], stream: IO[bytes]
 ) -> dict[str, Any]:
-    root = _path(Path(source["path"]))
+    source_endpoint, destination_endpoint = (
+        Endpoint.parse(source),
+        Endpoint.parse(destination),
+    )
+    source, destination = source_endpoint.document(), destination_endpoint.document()
+    root = _path(Path(source_endpoint.path))
     inventory = snapshot(root)
     receipt = _receipt(
         {
@@ -420,12 +501,13 @@ def _ssh(
 
 
 def _observed(endpoint: dict[str, Any]) -> dict[str, Any]:
-    if endpoint["host"] is None:
-        return snapshot(Path(endpoint["path"]), check_writers=False)
+    parsed = Endpoint.parse(endpoint)
+    if parsed.host is None:
+        return snapshot(Path(parsed.path), check_writers=False)
     result = subprocess.run(
         _ssh(endpoint, "_snapshot", endpoint), capture_output=True, check=True
     )
-    return _load(result.stdout)
+    return Inventory.parse(_load(result.stdout)).document()
 
 
 def fetch(source: dict[str, Any], destination: dict[str, Any]) -> Path:
@@ -556,18 +638,22 @@ def _remove_inventory(root: Path, inventory: dict[str, Any]) -> None:
 def remove_source(
     receipt: dict[str, Any], observed_destination: dict[str, Any]
 ) -> None:
-    receipt = _receipt(receipt)
-    root = _path(Path(receipt["source"]["path"]))
-    ledger = root.parent / ".ai-drone-transfers" / f"{receipt['id']}.source.json"
-    if ledger.parent.is_symlink() or _path(ledger).read_bytes() != _json(receipt):
+    supplied_receipt = _json(receipt)
+    parsed = Receipt.parse(receipt)
+    receipt = parsed.document()
+    root = _path(Path(parsed.source.path))
+    ledger = root.parent / ".ai-drone-transfers" / f"{parsed.id}.source.json"
+    if ledger.parent.is_symlink() or _path(ledger).read_bytes() != supplied_receipt:
         raise ValueError("Receipt does not match the source transfer ledger")
-    expected = receipt["snapshot"]
-    if _content(observed_destination) != _content(expected):
+    expected = parsed.inventory.document()
+    if Inventory.parse(observed_destination).document(
+        stamps=False
+    ) != parsed.inventory.document(stamps=False):
         raise ValueError("Destination no longer matches the verified transfer")
     if snapshot(root) != expected:
         raise RuntimeError("Source changed since transfer; source retained")
     _no_writers(root, expected)
-    quarantine = root.with_name(f".{root.name}.removing-{receipt['id']}")
+    quarantine = root.with_name(f".{root.name}.removing-{parsed.id}")
     if quarantine.exists() or quarantine.is_symlink():
         raise FileExistsError(quarantine)
     root.rename(quarantine)
@@ -603,7 +689,27 @@ def _endpoint(path: str, host: str | None = None) -> dict[str, Any]:
     return {"host": host, "project": target.project_dir, "path": str(remote)}
 
 
+def _worker_payload(operation: str, payload: object) -> dict[str, Any]:
+    """Validate the entire untrusted request before filesystem or SSH effects."""
+    if operation == "_snapshot":
+        return Endpoint.parse(payload).document()
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid transfer worker request")
+    if operation in {"_send", "_receive"} and set(payload) == {"source", "destination"}:
+        return {
+            key: Endpoint.parse(payload[key]).document()
+            for key in ("source", "destination")
+        }
+    if operation == "_remove" and set(payload) == {"receipt", "destination"}:
+        return {
+            "receipt": _receipt(payload["receipt"]),
+            "destination": Inventory.parse(payload["destination"]).document(),
+        }
+    raise ValueError("Invalid transfer worker request")
+
+
 def _worker(operation: str, payload: dict[str, Any]) -> None:
+    payload = _worker_payload(operation, payload)
     if operation == "_snapshot":
         print(_json(snapshot(Path(payload["path"]), check_writers=False)).decode())
     elif operation == "_send":
@@ -683,8 +789,6 @@ def main(arguments: list[str] | None = None) -> int:
     except (
         OSError,
         ValueError,
-        KeyError,
-        TypeError,
         RuntimeError,
         tarfile.TarError,
         subprocess.SubprocessError,

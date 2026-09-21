@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -49,6 +50,55 @@ def test_copy_round_trip_preserves_contents_and_originals(dataset, tmp_path):
     )
     assert receipt["source"]["path"] == str(dataset)
     assert list((tmp_path / ".ai-drone-transfers").glob("*.source.json"))
+
+
+def test_receipt_domain_freezes_nested_wire_data(dataset, tmp_path):
+    receipt = copied(dataset, tmp_path / "copy")
+    parsed = transfer.Receipt.parse(receipt)
+    expected = parsed.document()
+    receipt["snapshot"]["files"]["video.h264"]["stamp"][0] += 1
+    receipt["source"]["path"] = "changed"
+    assert parsed.document() == expected
+    assert transfer.Receipt.parse(expected) == parsed
+
+
+@pytest.mark.parametrize(
+    "operation,payload",
+    [
+        ("_snapshot", {}),
+        ("_snapshot", {"path": 3, "host": None, "project": None}),
+        ("_send", {"source": [], "destination": {}}),
+        ("_receive", {"source": {}}),
+        ("_remove", {"receipt": {}, "destination": {}}),
+        ("_unknown", {}),
+    ],
+)
+def test_malformed_worker_request_is_a_stable_error_before_effects(
+    monkeypatch, capsys, operation, payload
+):
+    monkeypatch.setattr(
+        transfer, "snapshot", lambda *_args, **_kwargs: pytest.fail("read source")
+    )
+    monkeypatch.setattr(transfer, "send", lambda *_args: pytest.fail("sent data"))
+    monkeypatch.setattr(
+        transfer, "remove_source", lambda *_args: pytest.fail("deleted source")
+    )
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    assert transfer.main([operation, encoded]) == 1
+    assert "Transfer failed:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "stamp", [None, [], [True, 2, 25600, 4, 5], [1, 2, 7, 4, 5], "invalid"]
+)
+def test_malformed_receipt_stamp_cannot_authorize_source_deletion(
+    dataset, tmp_path, stamp
+):
+    receipt = copied(dataset, tmp_path / "copy")
+    receipt["snapshot"]["files"]["video.h264"]["stamp"] = stamp
+    with pytest.raises(ValueError, match="stamp"):
+        transfer.remove_source(receipt, transfer.snapshot(tmp_path / "copy"))
+    assert dataset.exists()
 
 
 def test_incomplete_recording_is_refused(dataset):
@@ -222,6 +272,14 @@ def test_publish_refuses_existing_destination(dataset, tmp_path):
 def test_receipt_tampering_cannot_delete_source(dataset, tmp_path):
     receipt = copied(dataset, tmp_path / "copy")
     receipt["destination"]["path"] = str(tmp_path / "another")
+    with pytest.raises(ValueError, match="source transfer ledger"):
+        transfer.remove_source(receipt, transfer.snapshot(tmp_path / "copy"))
+    assert dataset.exists()
+
+
+def test_receipt_normalization_cannot_hide_tampering_from_ledger(dataset, tmp_path):
+    receipt = copied(dataset, tmp_path / "copy")
+    receipt["snapshot"]["directories"].reverse()
     with pytest.raises(ValueError, match="source transfer ledger"):
         transfer.remove_source(receipt, transfer.snapshot(tmp_path / "copy"))
     assert dataset.exists()
