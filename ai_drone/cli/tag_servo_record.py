@@ -16,8 +16,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
-from typing import Any, Protocol
+from typing import Any
 
+from ai_drone.capture.state import AnalysisFrame, CaptureState
 from ai_drone.cli.servo import ACTUATION_CONFIRMATION
 from ai_drone.mount import (
     ABSOLUTE_MAX_PULSE_US,
@@ -39,48 +40,6 @@ MAX_PULSE_DURATION_S = 2.0
 MAX_SETTLE_DURATION_S = 2.0
 MAX_DETECTION_AGE_S = 1.0
 MAX_HEARTBEAT_AGE_S = 5.0
-
-
-class AnalysisFrameLike(Protocol):
-    """Capture fields needed to qualify an actuation request."""
-
-    @property
-    def frame_index(self) -> int: ...
-
-    @property
-    def elapsed_s(self) -> float: ...
-
-    @property
-    def captured_monotonic(self) -> float | None: ...
-
-
-class DetectionLike(Protocol):
-    """AprilTag quality fields required by the active command."""
-
-    @property
-    def tag_id(self) -> int: ...
-
-    @property
-    def hamming(self) -> int | None: ...
-
-    @property
-    def decision_margin(self) -> float | None: ...
-
-
-class CaptureStateLike(Protocol):
-    """Thread-shared recording state updated by the active session."""
-
-    last_vehicle_heartbeat_monotonic: float | None
-    visible_tag_ids: tuple[int, ...]
-    confirmed_tag_ids: tuple[int, ...]
-    completed_servo_tag_ids: tuple[int, ...]
-    pending_servo_tag_ids: tuple[int, ...]
-    servo_pulses_completed: int
-    stop_reason: str | None
-
-    def record_error(self, message: str) -> None: ...
-
-    def set_stop_reason(self, reason: str) -> None: ...
 
 
 class ActuationStop(threading.Event):
@@ -437,7 +396,7 @@ class TagServoSession:
         *,
         config: TagServoConfig,
         event_path: Path,
-        state: CaptureStateLike,
+        state: CaptureState,
         capture_stop: threading.Event,
         ready: threading.Event,
         servo_factory: Any | None = None,
@@ -508,9 +467,6 @@ class TagServoSession:
                 self._process_lock.close()
             raise
 
-        if event_writer is None or servo_instance is None:
-            self._process_lock.close()
-            raise RuntimeError("payload servo session did not initialize completely")
         self._servo: Any = servo_instance
         self._events: ServoEventWriter = event_writer
 
@@ -562,10 +518,8 @@ class TagServoSession:
         allowed = self.config.allowed_tag_ids
         return allowed is None or tag_id in allowed
 
-    def _best_detection_by_id(
-        self, detections: list[DetectionLike]
-    ) -> dict[int, DetectionLike]:
-        by_id: dict[int, DetectionLike] = {}
+    def _best_detection_by_id(self, detections: list[Any]) -> dict[int, Any]:
+        by_id: dict[int, Any] = {}
         for detection in detections:
             current = by_id.get(detection.tag_id)
             current_margin = (
@@ -584,7 +538,7 @@ class TagServoSession:
 
     def _quality_results(
         self,
-        by_id: dict[int, DetectionLike],
+        by_id: dict[int, Any],
         *,
         fresh_frame: bool,
     ) -> tuple[set[int], dict[int, str]]:
@@ -600,10 +554,9 @@ class TagServoSession:
             elif detection.decision_margin < self.config.minimum_decision_margin:
                 reasons[tag_id] = "decision_margin_too_low"
             elif not fresh_frame:
-                reasons[tag_id] = "stale_frame"
+                reasons[tag_id] = "frame_stale"
             else:
                 qualifying.add(tag_id)
-                reasons[tag_id] = "qualifying"
         return qualifying, reasons
 
     def _advance_confirmation_streaks(
@@ -657,8 +610,8 @@ class TagServoSession:
 
     def observe(
         self,
-        frame: AnalysisFrameLike,
-        detections: list[DetectionLike],
+        frame: AnalysisFrame,
+        detections: list[Any],
         tag_records: list[dict[str, Any]],
     ) -> None:
         """Update live state and enqueue at most one fresh confirmed trigger."""

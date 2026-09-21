@@ -201,14 +201,6 @@ def test_usb_windows_config_commands() -> None:
     ]
 
 
-def test_windows_find_script_prefers_active_usb_adapter() -> None:
-    script = usb_ssh.windows_find_script()
-
-    assert "RNDIS|Remote NDIS|USB Ethernet|Ethernet Gadget|CDC" in script
-    assert "$_.Status -eq 'Up'" in script
-    assert "$fallback" in script
-
-
 def test_usb_dry_run_uses_windows_commands(monkeypatch, capsys) -> None:
     monkeypatch.setattr(usb_ssh.platform, "system", lambda: "Windows")
 
@@ -240,17 +232,7 @@ def test_usb_ssh_command_uses_configured_ssh_config() -> None:
     ]
 
 
-def test_usb_live_setup_refuses_guessed_interface(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(usb_ssh.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(usb_ssh, "find_usb_iface", lambda _system: "usb-dock0")
-    monkeypatch.setattr(
-        usb_ssh,
-        "config_commands",
-        lambda *_args: (_ for _ in ()).throw(
-            AssertionError("guessed interfaces must never be configured")
-        ),
-    )
-
+def test_usb_live_setup_refuses_without_usb_iface(capsys) -> None:
     result = usb_ssh.run([], environ={"TIMEOUT_SECONDS": "1"})
 
     assert result == 1

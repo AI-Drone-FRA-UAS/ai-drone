@@ -41,9 +41,6 @@ class Page:
     source: str | None = None
     group: str = ""
     nav_title: str = ""
-    lead: str = ""
-    body: str = ""
-    in_nav: bool = True
 
     @property
     def output(self) -> str:
@@ -269,8 +266,6 @@ def _anchor_token(anchor: str) -> Token:
 def _nav(active: str) -> str:
     groups: dict[str, list[Page]] = {}
     for page in PAGES:
-        if not page.in_nav:
-            continue
         groups.setdefault(page.group, []).append(page)
 
     chunks = []
@@ -298,7 +293,7 @@ def _toc(headings: list[Heading]) -> str:
 
 
 def _pager(page: Page) -> str:
-    nav_pages = [p for p in PAGES if p.in_nav]
+    nav_pages = PAGES
     if page not in nav_pages:
         return ""
     index = nav_pages.index(page)
@@ -389,10 +384,7 @@ def shell(*, title: str, description: str, body: str, active: str) -> str:
 
 def doc_page(page: Page, rendered: Rendered) -> str:
     title = page.title
-    lead = page.lead or f"{title} — Projektdokumentation der KI-Drohne."
-    lead_markup = (
-        f'<p class="seiten-lead">{html.escape(page.lead)}</p>' if page.lead else ""
-    )
+    lead = f"{title} — Projektdokumentation der KI-Drohne."
     original = (
         f'<p class="seiten-original">Originaltitel im Repository: '
         f"<b>{html.escape(rendered.title)}</b></p>"
@@ -410,7 +402,6 @@ def doc_page(page: Page, rendered: Rendered) -> str:
   <main class="inhalt">
     <div class="brotkrumen"><a href="index.html">Start</a> &rsaquo; {html.escape(page.group)}</div>
     <h1>{html.escape(title)}</h1>
-    {lead_markup}
     {original}
     {rendered.html}
     <div class="seiten-fuss">
@@ -477,8 +468,7 @@ def build() -> None:
                     if page.slug == "index"
                     else f"{page.title} · {SITE_TITLE}"
                 ),
-                description=page.lead
-                or (
+                description=(
                     "Projektarbeit an der Frankfurt UAS: eine FPV-Drohne wird zur "
                     "GPS-freien Indoor-Plattform, die AprilTags erkennt und eine "
                     "Nutzlast abwirft."

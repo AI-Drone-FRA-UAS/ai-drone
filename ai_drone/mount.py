@@ -166,7 +166,6 @@ class MountController(AbstractContextManager["MountController"]):
 
         self._lock: ServoProcessLock | None = None
         self._servo: Any | None = servo
-        self._current_value: float | None = None
         self._is_closed = False
 
         self._servo_factory = servo_factory
@@ -174,10 +173,6 @@ class MountController(AbstractContextManager["MountController"]):
     @property
     def is_closed(self) -> bool:
         return self._is_closed
-
-    @property
-    def current_value(self) -> float | None:
-        return self._current_value
 
     def _ensure_servo(self) -> Any:
         if self._is_closed:
@@ -225,7 +220,6 @@ class MountController(AbstractContextManager["MountController"]):
         servo = self._ensure_servo()
         if servo is not None:
             servo.value = target
-        self._current_value = target
 
         if settle_s > 0:
             time.sleep(settle_s)
@@ -246,7 +240,6 @@ class MountController(AbstractContextManager["MountController"]):
             self._servo.detach()
         elif self._servo is not None and hasattr(self._servo, "value"):
             self._servo.value = None
-        self._current_value = None
 
     def close(self) -> None:
         """Release the servo and process lock."""
@@ -262,7 +255,6 @@ class MountController(AbstractContextManager["MountController"]):
             if self._lock is not None:
                 self._lock.close()
                 self._lock = None
-        self._current_value = None
 
     def __enter__(self) -> MountController:
         return self

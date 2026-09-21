@@ -1153,16 +1153,6 @@ def test_cli_forwards_battery_threshold_into_controller(monkeypatch) -> None:
     assert created["min_battery_voltage"] == 14.4
 
 
-def test_loiter_monitor_lands_if_mode_changes() -> None:
-    drone = MagicMock()
-    drone.flight_mode = "ALT_HOLD"
-
-    with pytest.raises(FlightSafetyError, match="left LOITER mode for ALT_HOLD"):
-        control._monitor(drone, duration=0.1, min_battery_v=14.4)
-
-    drone.emergency_stop.assert_called_once_with()
-
-
 @pytest.mark.parametrize("mode", ["ALT_HOLD", None])
 def test_public_loiter_hold_lands_if_mode_changes(monkeypatch, mode) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
@@ -1193,6 +1183,7 @@ def test_hover_cli_runs_guided_nogps_takeoff_loiter_hold_and_land(
     drone = SimpleNamespace(ekf_flags=11, stop_requested=None)
     drone.takeoff = lambda altitude: calls.append(("takeoff", altitude))
     drone.enter_loiter = lambda **kwargs: calls.append(("loiter", kwargs))
+    drone.hold_loiter = lambda duration: calls.append(("hold", drone, duration, 14.4))
     drone.land = lambda: calls.append("land")
     record = SimpleNamespace(
         event=lambda name, **fields: calls.append(("event", name, fields))
@@ -1213,13 +1204,6 @@ def test_hover_cli_runs_guided_nogps_takeoff_loiter_hold_and_land(
     monkeypatch.setattr(control, "_flight_session", flight_session)
     monkeypatch.setattr(control, "_operator_link", operator_link)
     monkeypatch.setattr(control, "_termination_event", termination_event)
-    monkeypatch.setattr(
-        control,
-        "_monitor",
-        lambda controlled, duration, voltage: calls.append(
-            ("hold", controlled, duration, voltage)
-        ),
-    )
 
     assert (
         control.main(

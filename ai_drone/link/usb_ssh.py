@@ -111,101 +111,6 @@ def windows_config_commands(iface: str, host_ip: str) -> list[list[str]]:
     ]
 
 
-def windows_find_script() -> str:
-    return (
-        "$pattern = 'RNDIS|Remote NDIS|USB Ethernet|Ethernet Gadget|CDC'; "
-        "$matches = Get-NetAdapter | "
-        "Where-Object { "
-        "$_.InterfaceDescription -match $pattern -or $_.Name -match $pattern "
-        "}; "
-        "$up = $matches | Where-Object { $_.Status -eq 'Up' } | "
-        "Select-Object -First 1; "
-        "if ($up) { $up.Name; exit 0 }; "
-        "$fallback = $matches | Where-Object { $_.Status -ne 'Disabled' } | "
-        "Select-Object -First 1; "
-        "if ($fallback) { $fallback.Name }"
-    )
-
-
-def windows_find_command() -> list[str]:
-    return powershell_command(windows_find_script())
-
-
-def is_linux_usb_netdev(iface: str) -> bool:
-    if iface == "lo":
-        return False
-    if iface.startswith(("wlan", "wl", "docker", "virbr", "veth")):
-        return False
-    if iface.startswith("br-"):
-        return False
-
-    device = Path("/sys/class/net") / iface / "device"
-    try:
-        dev_path = device.resolve(strict=True)
-    except FileNotFoundError:
-        return False
-    return "/usb" in str(dev_path)
-
-
-def find_linux_usb_iface() -> str | None:
-    for path in Path("/sys/class/net").glob("*"):
-        if is_linux_usb_netdev(path.name):
-            return path.name
-    return None
-
-
-def find_darwin_usb_iface() -> str | None:
-    completed = subprocess.run(
-        ["ifconfig", "-u"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-
-    for line in completed.stdout.splitlines():
-        if not line or line[0].isspace() or ":" not in line:
-            continue
-        iface = line.split(":", 1)[0]
-        if iface == "lo0" or iface.startswith(
-            ("bridge", "awdl", "llw", "utun", "ap", "anpi")
-        ):
-            continue
-        if iface == "en0":
-            continue
-        details = subprocess.run(
-            ["ifconfig", iface],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if "status: inactive" not in details.stdout:
-            return iface
-    return None
-
-
-def find_windows_usb_iface() -> str | None:
-    completed = subprocess.run(
-        windows_find_command(),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-    iface = completed.stdout.strip()
-    return iface or None
-
-
-def find_usb_iface(system: str) -> str | None:
-    if system == "Darwin":
-        return find_darwin_usb_iface()
-    if system == "Windows":
-        return find_windows_usb_iface()
-    return find_linux_usb_iface()
-
-
 def _run_capture(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=False, capture_output=True, text=True)
 
@@ -280,18 +185,11 @@ def run_usb_transport(
     )
 
     if not args.usb_iface:
-        candidate = None if args.dry_run else find_usb_iface(system)
         print(
             "Refusing to reconfigure an auto-detected network adapter. Pass "
             "--usb-iface after verifying the Pi USB gadget interface.",
             flush=True,
         )
-        if candidate:
-            print(
-                f"Unverified candidate: {candidate}. Inspect it, then rerun with "
-                f"--usb-iface {shlex.quote(candidate)}.",
-                flush=True,
-            )
         return 1
     if not args.dry_run and not iface_exists(args.usb_iface, system):
         print(f"USB interface does not exist: {args.usb_iface}", flush=True)

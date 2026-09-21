@@ -22,7 +22,6 @@ from ai_drone.flight.controller import (
     HumanControlTaken,
 )
 from ai_drone.flight.dataflash import latest_dataflash_log
-from ai_drone.flight.guards import FlightGuardError, check_safety_guardrails
 from ai_drone.flight.recording import FlightRecorder
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.mavlink.shared import SharedMavlink
@@ -197,26 +196,6 @@ def _flight_session(args: argparse.Namespace):
             record.close()
 
 
-def _monitor(drone: DroneController, duration: float, min_battery_v: float) -> None:
-    """Hold for ``duration`` seconds, aborting the moment a guard trips."""
-
-    deadline = time.monotonic() + duration
-    while time.monotonic() < deadline:
-        drone.update_telemetry()
-        if drone.control_owner == "human":
-            raise HumanControlTaken("control was handed to the radio pilot")
-        if drone.flight_mode != "LOITER":
-            drone.emergency_stop()
-            raise FlightSafetyError(
-                f"Loiter hold left LOITER mode for {drone.flight_mode or 'unknown'}"
-            )
-        try:
-            check_safety_guardrails(drone, min_battery_v)
-        except FlightGuardError as error:
-            raise FlightSafetyError(str(error)) from error
-        time.sleep(0.05)
-
-
 def cmd_hover(args: argparse.Namespace) -> int:
     _require_flight_confirmation(args)
     with (
@@ -234,7 +213,7 @@ def cmd_hover(args: argparse.Namespace) -> int:
             record.event("loiter_acquisition_started")
             drone.enter_loiter(timeout=args.navigation_timeout)
             record.event("loiter_started", ekf_flags=drone.ekf_flags)
-            _monitor(drone, args.duration, args.min_battery)
+            drone.hold_loiter(args.duration)
             record.event("landing_started")
             drone.land()
             record.event("landed")

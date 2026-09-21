@@ -41,7 +41,6 @@ RUNTIME_FILES = frozenset(
         "scripts/mount.py",
         "scripts/usb_ssh.py",
         "scripts/tag_mount_capture.py",
-        "scripts/disarmed_tag_mount.py",
         "scripts/verify_ardupilot_firmware.py",
         "scripts/pi-safe-upgrade.sh",
         "scripts/setup-pi-hotspot.sh",

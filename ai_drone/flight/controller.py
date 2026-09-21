@@ -600,6 +600,13 @@ class DroneController:
                 f"battery {self.battery_voltage:.2f} V is below "
                 f"{self.min_battery_voltage:.2f} V"
             )
+        if self._ground_reference is not None:
+            if not self.altitude_is_fresh():
+                self.emergency_stop()
+                raise FlightSafetyError("altitude became stale during flight")
+            if not self.heartbeat_is_fresh():
+                self.emergency_stop()
+                raise FlightSafetyError("heartbeat became stale during flight")
 
     def _poll(self, timeout: float) -> Iterator[None]:
         deadline = time.monotonic() + timeout

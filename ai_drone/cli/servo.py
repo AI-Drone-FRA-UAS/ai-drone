@@ -44,13 +44,6 @@ def _parser() -> argparse.ArgumentParser:
         description="Control a 9g micro servo motor using BCM GPIO 12 on Raspberry Pi."
     )
     parser.add_argument(
-        "--pin",
-        type=int,
-        choices=[SERVO_GPIO_PIN],
-        default=SERVO_GPIO_PIN,
-        help="fixed BCM GPIO pin (12, physical pin 32)",
-    )
-    parser.add_argument(
         "--min-us",
         type=int,
         default=DEFAULT_MIN_PULSE_US,
@@ -179,7 +172,7 @@ def main(arguments: list[str] | None = None) -> int:
     process_lock = None
     try:
         process_lock = ServoProcessLock()
-        servo = create_servo(args.pin, min_us=args.min_us, max_us=args.max_us)
+        servo = create_servo(SERVO_GPIO_PIN, min_us=args.min_us, max_us=args.max_us)
     except BaseException as error:
         if process_lock is not None:
             process_lock.close()
@@ -188,14 +181,14 @@ def main(arguments: list[str] | None = None) -> int:
         if not isinstance(error, Exception):
             raise
         print(
-            f"ERROR: Failed to initialize Servo on GPIO {args.pin}: {error}",
+            f"ERROR: Failed to initialize Servo on GPIO {SERVO_GPIO_PIN}: {error}",
             file=sys.stderr,
         )
         return 1
 
     try:
         print(
-            f"Active pin: BCM GPIO {args.pin} (physical pin 32)\n"
+            f"Active pin: BCM GPIO {SERVO_GPIO_PIN} (physical pin 32)\n"
             f"Pulse range: {args.min_us}us to {args.max_us}us\n"
             f"Mode: {args.mode.upper()}\n"
             f"{WIRING_DIAGRAM}"

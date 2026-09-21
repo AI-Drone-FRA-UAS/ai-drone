@@ -12,6 +12,7 @@ modules =
     ai_drone.config
     ai_drone.flight
     ai_drone.vision
+    ai_drone.review
 
 [importlinter:contract:layers]
 name = Command adapters sit above shared MAVLink and link logic
@@ -44,6 +45,7 @@ source_modules =
     ai_drone.operator
     ai_drone.runtime
     ai_drone.mount
+    ai_drone.review
 forbidden_modules =
     ai_drone.cli
 
@@ -75,3 +77,4 @@ forbidden_modules =
     ai_drone.link
     ai_drone.mavlink
     ai_drone.vision
+    ai_drone.review
