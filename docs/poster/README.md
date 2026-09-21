@@ -19,15 +19,16 @@ Das Plakat ist bewusst bildlastig — der Text ist knapp gehalten, damit beim
 Vortrag frei geredet werden kann.
 
 - **Oben:** das Hauptbild der Drohne über zwei Spalten, mit Führungslinien zu
-  den Bauteilen. Die Beschriftung liegt als SVG über dem Foto, ist also
-  vektoriell und bleibt im Druck scharf. Sie ersetzt die frühere Hardwaretabelle.
+  den Bauteilen. Kamera (schwarze Halterung), MTF-01P (silbernes Gehäuse)
+  und Servo sind einzeln zugeordnet. Die Beschriftung liegt als SVG über dem
+  Foto, ist also vektoriell und bleibt im Druck scharf. Sie ersetzt die frühere Hardwaretabelle.
 - **Links:** Kennzahlen und der Blick von unten mit nummerierten Markern
-  (Servo, MTF-01P, Kamera).
+  und Führungslinien (Servo, MTF-01P, Kamera).
 - **Mitte:** die Ablaufgrafik „Tag erkannt → Last fällt", das Foto des
   Abwurfmechanismus und die gedruckten Teile.
 - **Rechts:** die Geschichte von oben nach unten — erst der Simulator, dann die
   Flugversuche, der Absturz mit Messkurve und QR-Code zum Video, die drei
-  gemessenen Ursachen, die Konsequenzen und der heutige Stand.
+  gemessenen Befunde, die Konsequenzen und der datierte Projektstand.
 
 ## Bilder
 
@@ -54,7 +55,8 @@ neu erzeugen.
 
 Der **QR-Code** ist als Pfad-SVG direkt im HTML eingebettet (kein externer
 Dienst, kein Bild-Asset) und zeigt auf das Video des Absturzes vom 21.08.2026
-auf Instagram: `instagram.com/reel/DcbRrKNRIA_`. Bewusst ohne Tracking- und
+auf Instagram: `instagram.com/reel/DcbRrKNRIA_`. Eine weiße Ruhezone von
+vier Modulen umgibt den Code. Bewusst ohne Tracking- und
 Share-Parameter — das hält den Code klein und hängt keinen Sitzungsbezug an
 einen gedruckten Aushang.
 Der **AprilTag** in der Ablaufgrafik ist der echte `tag36h11`-Marker mit ID 3 —
@@ -72,38 +74,27 @@ Dann die drei übrigen Formate daraus skalieren — reine Skalierung derselben
 Seite, damit alle vier Druckstände denselben Satz zeigen:
 
 ```bash
-cd docs/poster && uv run --with pypdf python skaliere_plakat.py
+cd docs/poster && uv run --with pymupdf python skaliere_plakat.py
 ```
 
 Der Inhalt von `skaliere_plakat.py` (bewusst nicht im Repository, damit keine
 Abhängigkeit deklariert werden muss, die nur ein Druckvorgang braucht):
 
 ```python
-from pypdf import PdfReader, PdfWriter, Transformation
-from pypdf.generic import RectangleObject
+import pymupdf
 
 MM = 72 / 25.4
-QUELLE = (594.0, 841.0)  # das Layout ist in A1 gesetzt
 ZIELE = {"a0": (841.0, 1189.0), "a2": (420.0, 594.0), "a3": (297.0, 420.0)}
 
-for name, (breite, hoehe) in ZIELE.items():
-    seite = PdfReader("plakat-a1.pdf").pages[0]
-    faktor = min(breite / QUELLE[0], hoehe / QUELLE[1])
-    # Die DIN-Reihe rundet auf ganze Millimeter; den Rest mittig verteilen.
-    dx = (breite - QUELLE[0] * faktor) / 2 * MM
-    dy = (hoehe - QUELLE[1] * faktor) / 2 * MM
-    seite.add_transformation(Transformation().scale(faktor).translate(dx, dy))
-    kasten = RectangleObject((0, 0, breite * MM, hoehe * MM))
-    seite.mediabox = kasten
-    seite.cropbox = kasten
-    schreiber = PdfWriter()
-    schreiber.add_page(seite)
-    schreiber.compress_identical_objects()
-    for fertig in schreiber.pages:
-        fertig.compress_content_streams(level=9)
-    with open(f"plakat-{name}.pdf", "wb") as datei:
-        schreiber.write(datei)
-    print(f"plakat-{name}.pdf: {breite:.0f} x {hoehe:.0f} mm")
+with pymupdf.open("plakat-a1.pdf") as quelle:
+    for name, (breite, hoehe) in ZIELE.items():
+        with pymupdf.open() as ziel:
+            seite = ziel.new_page(width=breite * MM, height=hoehe * MM)
+            # Die ganze Seite als Form-XObject einbetten: So werden auch
+            # Farbverläufe und Transparenzen mit dem Inhalt skaliert.
+            seite.show_pdf_page(seite.rect, quelle, 0, keep_proportion=True)
+            ziel.save(f"plakat-{name}.pdf", garbage=4, deflate=True)
+        print(f"plakat-{name}.pdf: {breite:.0f} x {hoehe:.0f} mm")
 ```
 
 Alternativ im Browser öffnen und drucken: Papierformat wählen, Ränder **keine**,
@@ -112,7 +103,10 @@ Option **Hintergrundgrafiken** aktivieren, Skalierung „an Seite anpassen".
 ## Stand der Angaben
 
 September 2026: eigene ArduCopter-4.7.1-Firmware mit EKF3-Flussfusion, vorderer
-MT-15 an UART3 in Betrieb, Freigabe der Halterung bei Tag ID 3. Der offene
+MT-15 an UART3 in Betrieb, implementierte
+einmalige Freigabe der Halterung pro Programmlauf bei Tag ID 3 (ohne
+automatisches Schließen). Die Kennzahlen unterscheiden die direkt gemessene
+MT-15-Sensorrate von der Kameraauswertung im Sensortest. Der offene
 Blocker ist die Kompass-Vorflugprüfung; die Drohne ist nicht für Tests mit
 Propellern freigegeben. Wer das Plakat anfasst, prüft diese Angaben zuerst
 gegen die neueste Aufzeichnung unter `state/`.
