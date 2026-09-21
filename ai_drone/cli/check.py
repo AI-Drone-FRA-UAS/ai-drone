@@ -15,6 +15,7 @@ from typing import Any
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.cli.harness import connection_scope
 from ai_drone.flight import controller as flight_config
 from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import (
@@ -505,7 +506,6 @@ def main(arguments: list[str] | None = None) -> int:
     if not 0 < args.baud <= 3_000_000:
         parser.error("--baud must be between 1 and 3000000")
     observed = Observations()
-    connection = None
     report: dict[str, Any] = {
         "started_utc": datetime.now(UTC).isoformat(),
         "source": {"system": 1, "component": 1},
@@ -526,27 +526,27 @@ def main(arguments: list[str] | None = None) -> int:
             source_system=255,
             source_component=mavlink.MAV_COMP_ID_MISSIONPLANNER,
         )
-        report.update(
-            check_connection(
-                connection,
-                observed,
-                duration=args.duration,
-                timeout=args.timeout,
-                parameter_timeout=args.parameter_timeout,
-                prearm=args.prearm,
-                min_battery=args.min_battery,
+        with connection_scope(
+            connection,
+            close_error=lambda error: observed.errors.append(
+                f"Closing connection failed: {error}"
+            ),
+        ):
+            report.update(
+                check_connection(
+                    connection,
+                    observed,
+                    duration=args.duration,
+                    timeout=args.timeout,
+                    parameter_timeout=args.parameter_timeout,
+                    prearm=args.prearm,
+                    min_battery=args.min_battery,
+                )
             )
-        )
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as error:
         observed.errors.append(str(error))
     except KeyboardInterrupt:
         observed.errors.append("Operator interrupted the bench check")
-    finally:
-        if connection is not None:
-            try:
-                connection.close()
-            except Exception as error:
-                observed.errors.append(f"Closing connection failed: {error}")
     report.update(
         passed=not observed.errors,
         elapsed_s=round(time.monotonic() - started, 3),

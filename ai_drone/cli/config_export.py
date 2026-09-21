@@ -12,6 +12,7 @@ from typing import Any
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.cli.harness import connection_scope
 from ai_drone.config.snapshot import (
     ParameterRecord,
     download_all_parameters,
@@ -98,7 +99,7 @@ def main(arguments: list[str] | None = None) -> int:
         source_system=255,
         source_component=mavlink.MAV_COMP_ID_MISSIONPLANNER,
     )
-    try:
+    with connection_scope(connection):
         heartbeat = connection.wait_heartbeat(timeout=args.heartbeat_timeout)
         if heartbeat is None:
             raise SystemExit("No ArduPilot heartbeat received.")
@@ -136,8 +137,6 @@ def main(arguments: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 0
-    finally:
-        connection.close()
 
 
 if __name__ == "__main__":

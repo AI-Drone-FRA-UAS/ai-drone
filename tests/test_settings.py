@@ -11,7 +11,7 @@ def test_defaults_need_no_file(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert load_settings(environ={}) == Settings()
     captured = capsys.readouterr()
-    assert "drone.toml not found" in captured.err
+    assert captured.err == ""
     with pytest.raises(ValueError, match="does not exist"):
         load_settings(tmp_path / "missing.toml")
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 from importlib import import_module
 from pathlib import Path
 
+from ai_drone.cli.harness import invoke
 from ai_drone.settings import load_settings
 
 COMMANDS = {
@@ -19,6 +19,11 @@ COMMANDS = {
     "tag-servo-record": ("ai_drone.cli.tag_servo_record", "main"),
     "operator": ("ai_drone.cli.operator", "main"),
     "runtime": ("ai_drone.cli.runtime", "main"),
+    "power": ("ai_drone.cli.power", "main"),
+    "servo": ("ai_drone.cli.servo", "main"),
+    "mount": ("ai_drone.cli.mount", "main"),
+    "motor-test": ("ai_drone.cli.motor_test", "main"),
+    "config-export": ("ai_drone.cli.config_export", "main"),
 }
 
 
@@ -30,20 +35,14 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)
-    previous = os.environ.get("AI_DRONE_CONFIG")
-    if args.config is not None:
-        os.environ["AI_DRONE_CONFIG"] = str(args.config.expanduser().absolute())
     try:
-        load_settings()
+        settings = load_settings(args.config)
         module, function = COMMANDS[args.command]
-        return getattr(import_module(module), function)(args.arguments)
+        return invoke(
+            getattr(import_module(module), function), args.arguments, settings
+        )
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    finally:
-        if previous is None:
-            os.environ.pop("AI_DRONE_CONFIG", None)
-        else:
-            os.environ["AI_DRONE_CONFIG"] = previous
 
 
 if __name__ == "__main__":

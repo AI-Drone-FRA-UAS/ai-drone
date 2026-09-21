@@ -6,9 +6,10 @@ import ipaddress
 import math
 import os
 import re
-import sys
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -60,6 +61,21 @@ class Settings:
     transfer: TransferSettings = TransferSettings()
     operator: OperatorSettings = OperatorSettings()
     runtime: RuntimeSettings = RuntimeSettings()
+
+
+_COMMAND_SETTINGS: ContextVar[Settings | None] = ContextVar(
+    "command_settings", default=None
+)
+
+
+@contextmanager
+def use_settings(settings: Settings) -> Iterator[None]:
+    """Inject one immutable configuration into a command and its legacy adapters."""
+    token = _COMMAND_SETTINGS.set(settings)
+    try:
+        yield
+    finally:
+        _COMMAND_SETTINGS.reset(token)
 
 
 def validate_operator_forward(host: str | None, port: int) -> None:
@@ -119,6 +135,8 @@ def _section(
 def load_settings(
     path: Path | None = None, *, environ: Mapping[str, str] | None = None
 ) -> Settings:
+    if path is None and (current := _COMMAND_SETTINGS.get()) is not None:
+        return current
     environment = os.environ if environ is None else environ
     selected = path or environment.get("AI_DRONE_CONFIG")
     source = Path(selected).expanduser() if selected else Path("drone.toml")
@@ -128,10 +146,6 @@ def load_settings(
     except FileNotFoundError:
         if selected:
             raise ValueError(f"configuration file does not exist: {source}") from None
-        print(
-            f"Warning: {source} not found; falling back to default settings",
-            file=sys.stderr,
-        )
         return Settings()
     except tomllib.TOMLDecodeError as error:
         raise ValueError(f"invalid TOML configuration: {source}") from error
