@@ -141,7 +141,7 @@ def test_landing_latch_blocks_public_mission_reentry(operation, monkeypatch, met
             drone, "state", replace(drone.state, altitude=Sample(0.55, clock[0]))
         ),
     )
-    with pytest.raises(FlightSafetyError, match="[Ll][Aa][Nn][Dd]|cleanup"):
+    with pytest.raises(FlightSafetyError, match=r"[Ll][Aa][Nn][Dd]|cleanup"):
         if method == "takeoff":
             drone.takeoff(0.5, timeout=1.0)
         elif method == "enter_loiter":
