@@ -10,7 +10,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, assert_never
+from typing import Any, Literal, assert_never
 
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
@@ -1078,33 +1078,75 @@ class DroneController:
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         if self._flight_started_by_controller:
             raise FlightSafetyError("refusing to force-disarm a flight; use land()")
-        self._drain_cleanup_evidence()
-        started = max(time.monotonic(), self.last_heartbeat_time)
-        deadline = time.monotonic() + timeout
-        self._best_effort_disarm()
-        next_request = time.monotonic() + 1.0
-        while (remaining := deadline - time.monotonic()) > 0:
-            now = time.monotonic()
-            if now >= next_request:
-                self._drain_cleanup_evidence()
-                self._best_effort_disarm()
-                next_request = now + 1.0
-            try:
+        self._cleanup_until_disarmed("disarm", timeout)
+
+    def _cleanup_request(self, operation: Literal["land", "disarm"]) -> None:
+        if operation == "land":
+            self.emergency_stop()
+        else:
+            self._best_effort_disarm()
+
+    def _cleanup_receive(
+        self, operation: Literal["land", "disarm"], remaining: float
+    ) -> bool:
+        try:
+            if operation == "land":
+                self.update_telemetry()
+            else:
                 self._pump_gcs_heartbeat()
                 message = self._connection().recv_match(
                     type="HEARTBEAT", blocking=True, timeout=min(remaining, 0.5)
                 )
                 if message is not None:
                     self._process_message(message, time.monotonic())
-                self._resolve_control_ownership()
-                self._require_autonomous_control()
-                if self.last_heartbeat_time > started and not self.is_armed:
-                    self.phase = Landed(landing_commanded=False)
-                    return
-            except (OSError, SharedMavlinkError) as error:
-                logger.warning("DISARM receive failed; retrying: %s", error)
+        except (OSError, SharedMavlinkError) as error:
+            logger.warning("%s receive failed; retrying: %s", operation.upper(), error)
+            return False
+        return True
+
+    def _cleanup_retry(
+        self, operation: Literal["land", "disarm"], next_request: float
+    ) -> float:
+        now = time.monotonic()
+        if now >= next_request:
+            self._drain_cleanup_evidence()
+            self._cleanup_request(operation)
+            return now + 1.0
+        return next_request
+
+    def _cleanup_until_disarmed(
+        self, operation: Literal["land", "disarm"], timeout: float
+    ) -> None:
+        """Share retries/confirmation while retaining each operation's RX cadence.
+
+        Resolve queued human evidence before the first and every retry write. The
+        confirmation boundary is fixed before the first request, never each resend.
+        """
+        self._drain_cleanup_evidence()
+        if operation == "land":
+            self.phase = request_landing(self.phase)
+        started = max(time.monotonic(), self.last_heartbeat_time)
+        deadline = time.monotonic() + timeout
+        self._cleanup_request(operation)
+        next_request = (started if operation == "land" else time.monotonic()) + 1.0
+        while (remaining := deadline - time.monotonic()) > 0:
+            if operation == "disarm":
+                next_request = self._cleanup_retry(operation, next_request)
+            received = self._cleanup_receive(operation, remaining)
+            self._resolve_control_ownership()
+            self._require_autonomous_control()
+            if self.last_heartbeat_time > started and not self.is_armed:
+                self.phase = Landed(landing_commanded=operation == "land")
+                return
+            if operation == "land":
+                next_request = self._cleanup_retry(operation, next_request)
+            if operation == "land" or not received:
                 time.sleep(min(remaining, 0.1))
-        raise TimeoutError("flight controller did not confirm disarming")
+        if operation == "disarm":
+            raise TimeoutError("flight controller did not confirm disarming")
+        raise TimeoutError(
+            "LAND remains commanded but disarming was not confirmed; do not approach the vehicle"
+        )
 
     def _send_level_climb(self, climb_fraction: float) -> None:
         """Send a level GuidedNoGPS target with a bounded climb fraction.
@@ -1299,31 +1341,7 @@ class DroneController:
         self._resolve_control_ownership()
         self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
-        self._drain_cleanup_evidence()
-        self.phase = request_landing(self.phase)
-        started = max(time.monotonic(), self.last_heartbeat_time)
-        deadline = time.monotonic() + timeout
-        self.emergency_stop()
-        next_request = started + 1.0
-        while time.monotonic() < deadline:
-            try:
-                self.update_telemetry()
-            except (OSError, SharedMavlinkError) as error:
-                logger.warning("LAND receive failed; retrying: %s", error)
-            self._resolve_control_ownership()
-            self._require_autonomous_control()
-            if self.last_heartbeat_time > started and not self.is_armed:
-                self.phase = Landed()
-                return
-            now = time.monotonic()
-            if now >= next_request:
-                self._drain_cleanup_evidence()
-                self.emergency_stop()
-                next_request = now + 1.0
-            time.sleep(0.1)
-        raise TimeoutError(
-            "LAND remains commanded but disarming was not confirmed; do not approach the vehicle"
-        )
+        self._cleanup_until_disarmed("land", timeout)
 
     def emergency_stop(self) -> None:
         """Best-effort LAND; cleanup remains safe even if the link is broken."""
