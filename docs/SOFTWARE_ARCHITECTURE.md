@@ -36,6 +36,19 @@ intent, write outcome and error separately from received FC confirmation.
 `Human` remains latched across disarm, stale RC and reconnect; those observations
 do not return command ownership to autonomy.
 
+`mavlink.metrics` attaches only to a directly owned pymavlink parser/file pair.
+It measures bytes returned by `recv()` and accepted by `write()`, separately from
+parser RX and encoded TX counters. Pymavlink can increment encoded TX even when
+serial write returns -1; unknown or ambiguous returns make exact transport byte
+totals null. A short write records its confirmed byte count and an error. Outbound
+HEARTBEAT and SET_ATTITUDE_TARGET timing includes maximum gaps between confirmed
+complete writes and the current silence age; fewer than two writes gives no
+measured gap. Closing freezes the interval and restores original transport methods.
+Remote proxies do not pretend to have measured UART bytes. Shared status includes
+decoded/BAD_DATA counts, receive failures, subscriber/log overflow counts and
+queue depth/peak alongside the transport interval. These are diagnostics and
+never substitute for freshness, ownership or flight-qualification checks.
+
 Altitude values retain their datum: takeoff gain is relative to the fresh pad
 reading, the 0.8 m ceiling is floor referenced, and raw downward range, local
 altitude and aligned local altitude remain separate. A forward range reading is

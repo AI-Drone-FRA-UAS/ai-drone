@@ -17,6 +17,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 from ai_drone.durability import IntervalSync
+from ai_drone.mavlink.metrics import attach_transport_metrics
 from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
 
 _RECEIVED_AT = "_received_monotonic"
@@ -24,6 +25,10 @@ _RECEIVED_AT = "_received_monotonic"
 
 class SharedMavlinkError(RuntimeError):
     """A shared reader, consumer, or log sink can no longer deliver complete data."""
+
+
+class _LogOverflow(SharedMavlinkError):
+    pass
 
 
 def received_monotonic(message: Any, *, default: float | None = None) -> float:
@@ -112,9 +117,7 @@ class _LogSink:
             try:
                 self._queue.put_nowait(packet)
             except queue.Full:
-                error = SharedMavlinkError(
-                    "MAVLink tlog queue overflow; log is incomplete"
-                )
+                error = _LogOverflow("MAVLink tlog queue overflow; log is incomplete")
         if error is not None:
             self._fail(error)
 
@@ -278,6 +281,9 @@ class MavlinkEndpoint:
         with self._hub._condition:
             if self._error is None:
                 self._error = error
+                self._hub._discarded_messages += len(self._messages)
+                if isinstance(error, _LogOverflow):
+                    self._hub._log_overflows += 1
                 self._messages.clear()
             if self._log is not None:
                 self._log.request_close()
@@ -293,9 +299,12 @@ class MavlinkEndpoint:
         if self._closed or self._error is not None:
             return
         if len(self._messages) >= self.capacity:
+            self._hub._subscriber_overflows += 1
+            self._hub._discarded_messages += 1
             self._fail(SharedMavlinkError(f"{self.name} receive queue overflow"))
             return
         self._messages.append(message)
+        self._hub._queue_peak = max(self._hub._queue_peak, len(self._messages))
         if self._log is not None and packet is not None:
             self._log.enqueue(packet)
 
@@ -437,6 +446,16 @@ class SharedMavlink:
         self._close_thread: threading.Thread | None = None
         self._close_error: BaseException | None = None
         self._closing_endpoints: list[MavlinkEndpoint] = []
+        self._decoded_messages = 0
+        self._bad_data_messages = 0
+        self._receive_errors = 0
+        self._subscriber_overflows = 0
+        self._log_overflows = 0
+        self._discarded_messages = 0
+        self._queue_peak = 0
+        self._transport_metrics = attach_transport_metrics(
+            self._raw, scope="shared_physical_connection"
+        )
         self._reader = threading.Thread(
             target=self._read, name="mavlink-reader", daemon=True
         )
@@ -444,6 +463,8 @@ class SharedMavlink:
             self._reader.start()
         except BaseException:
             self._closed = True
+            if self._transport_metrics is not None:
+                self._transport_metrics.close()
             self._raw.close()
             raise
 
@@ -489,6 +510,8 @@ class SharedMavlink:
                 with self._condition:
                     if self._closed:
                         return
+                    self._decoded_messages += 1
+                    self._bad_data_messages += message.get_type() == "BAD_DATA"
                     if self._selected_heartbeat(message) and (
                         self._heartbeat is None
                         or received >= received_monotonic(self._heartbeat)
@@ -508,6 +531,7 @@ class SharedMavlink:
         except BaseException as error:
             with self._condition:
                 if not self._closed:
+                    self._receive_errors += 1
                     self._error = error
                     for endpoint in self._endpoints.values():
                         endpoint._fail(error)
@@ -554,6 +578,39 @@ class SharedMavlink:
                 else "unknown",
                 "closed": self._closed,
                 "error": None if self._error is None else str(self._error),
+                "transport": self.transport_metrics(),
+            }
+
+    def transport_metrics(self) -> dict[str, Any]:
+        """Measure physical returns separately from broker delivery and parser totals."""
+        with self._condition:
+            transport = (
+                self._transport_metrics.snapshot()
+                if self._transport_metrics is not None
+                else {
+                    "schema": 1,
+                    "scope": "shared_physical_connection",
+                    "supported": False,
+                    "rx_bytes": None,
+                    "tx_bytes": None,
+                    "rx_errors": None,
+                    "tx_errors": None,
+                    "heartbeat_tx_gap_max_s": None,
+                    "setpoint_tx_gap_max_s": None,
+                }
+            )
+            return {
+                **transport,
+                "decoded_messages": self._decoded_messages,
+                "bad_data_messages": self._bad_data_messages,
+                "receive_errors": self._receive_errors,
+                "subscriber_overflows": self._subscriber_overflows,
+                "log_queue_overflows": self._log_overflows,
+                "subscriber_messages_discarded": self._discarded_messages,
+                "queue_peak_per_subscriber": self._queue_peak,
+                "current_queue_depth": sum(
+                    len(endpoint._messages) for endpoint in self._endpoints.values()
+                ),
             }
 
     def _close_transport(self, timeout: float) -> None:
@@ -563,6 +620,8 @@ class SharedMavlink:
             try:
                 self._raw.close()
             finally:
+                if self._transport_metrics is not None:
+                    self._transport_metrics.close()
                 self._send_lock.release()
         except BaseException as error:
             self._close_error = error

@@ -180,6 +180,11 @@ def test_overflow_fails_slow_consumer_without_blocking_other_readers_or_land(lin
     slow.mav.command_long_send(1, 1, mavlink.MAV_CMD_NAV_LAND)
     assert wire.writes[-1][1][-1] == mavlink.MAV_CMD_NAV_LAND
     assert hub.status()["fresh"]
+    measured = hub.status()["transport"]
+    assert measured["subscriber_overflows"] == 1
+    assert measured["subscriber_messages_discarded"] >= 2
+    assert measured["queue_peak_per_subscriber"] >= 1
+    assert measured["rx_bytes"] is None and measured["tx_bytes"] is None
 
 
 def test_reader_error_propagates_and_preserves_best_effort_write(link):
@@ -192,6 +197,7 @@ def test_reader_error_propagates_and_preserves_best_effort_write(link):
     first.arducopter_disarm()
     assert wire.writes[-1][1][4] == 0
     assert not hub.status()["fresh"]
+    assert hub.status()["transport"]["receive_errors"] == 1
     with pytest.raises(SharedMavlinkError):
         hub.subscribe("late")
 
