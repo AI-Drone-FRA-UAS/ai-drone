@@ -64,6 +64,10 @@ never grants that authorization.
 - [ ] Start with bounded takeoff–LAND using normal checks and measured floor
   reference. Confirm liftoff, climb progress, actual peak height, overshoot,
   descent/touchdown and fresh disarm; a sent command or mode ACK is insufficient.
+- [ ] Qualify the new post-takeoff lower-height guard against physical range/local
+  noise and dynamics: the declared floor target minus 0.10 m is an engineering
+  abort bound. Simulator detection after thrust loss does not establish recovery
+  capability, safe impact dynamics or authorization for hardware motor-failure tests.
 - [ ] Qualify autonomous vertical hold with adequate whole-sequence horizontal
   clearance. The 30-second simulator vertical hold maintained altitude but
   exceeded the frozen 0.5 m clearance criterion. Ten seconds is only a provisional

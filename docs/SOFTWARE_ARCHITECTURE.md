@@ -58,6 +58,20 @@ profile and the simulator-only inertial-yaw candidate have separate parameter
 contracts. Neither mode entry nor green estimator flags qualifies heading drift
 or hall performance.
 
+After takeoff reaches its target, altitude hold, Loiter acquisition and Loiter
+retain the declared floor target in the flight phase. Fresh downward range and
+aligned local height independently supervise a lower bound 0.10 m below that
+target. Losing the hold or unexpectedly disarming retains a concrete failure
+and a LAND cleanup obligation. Takeoff and commanded landing are separate
+phases; the lower guard does not prohibit their intended vertical motion.
+Only observations received at or after the target-reaching range sample can
+establish subsequent altitude loss; an older climb sample is not reused as
+failed-hold evidence merely because it remains within the normal freshness age.
+This engineering bound detects a failed hold, including the simulated thrust
+loss that previously returned success after impact. It is not a measured Pi
+recovery guarantee or permission to test motor loss on the physical aircraft.
+The first safety failure remains in the controller-session audit through cleanup.
+
 ## Ownership and failures
 
 The implemented Pi boot service owns the FC UART and sends no autonomous flight
