@@ -62,6 +62,8 @@ non_dev_dependency_groups = ["raspi", "docs"]
 DEP002 = ["pyserial", "future", "pillow"]
 # Native Pi packages come from apt and load only in hardware paths.
 DEP001 = ["picamera2", "gpiozero", "apriltag"]
+# gpiozero is supplied by apt in production; the dev copy enables MockPWMPin tests.
+DEP004 = ["gpiozero"]
 
 [tool.deptry.package_module_name_map]
 # opencv-python is only installed in the raspi group, so deptry cannot read
