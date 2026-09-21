@@ -100,6 +100,51 @@ def test_scalar_table_preserves_csv_column_order_units_and_missing_values(tmp_pa
     assert series(payload, "roll")["unit"] == "°"
 
 
+def test_hall_timeline_preserves_magnetic_units_and_only_recorded_estimator_fields(
+    tmp_path,
+):
+    telemetry = [
+        message("RAW_IMU", 0, {"id": 0, "xmag": 3, "ymag": 4, "zmag": 0}),
+        message("SCALED_IMU2", 1, {"xmag": 300, "ymag": 400, "zmag": 0}),
+        message("HIGHRES_IMU", 2, {"id": 0, "xmag": 0.3, "ymag": 0.4, "zmag": 0}),
+        message("ATTITUDE", 2, {"yaw": 0.2}),
+        message("EKF_STATUS_REPORT", 3, {"flags": 1, "compass_variance": 0.7}),
+        message("ESTIMATOR_STATUS", 3, {"flags": 1, "mag_ratio": 1.2}),
+        message("STATUSTEXT", 4, {"severity": 4, "text": "EKF3 yaw reset"}),
+    ]
+    capture, output = recording(tmp_path, telemetry)
+    raw_before = (capture / "telemetry.jsonl").read_bytes()
+    payload = export_recording(capture, output)
+    assert series(payload, "RAW_IMU_0_mag_norm")["points"] == [[0, 5.0, True]]
+    assert series(payload, "RAW_IMU_0_mag_norm")["unit"] == "raw"
+    assert series(payload, "SCALED_IMU2_1_mag_norm")["points"] == [[1, 500.0, True]]
+    assert series(payload, "HIGHRES_IMU_0_mag_norm")["points"] == [[2, 500.0, True]]
+    assert series(payload, "ekf_compass_variance")["points"] == [[3, 0.7, True]]
+    assert series(payload, "estimator_mag_ratio")["unit"] == "ratio"
+    assert not any(item["id"] == "estimator_vel_ratio" for item in payload["series"])
+    assert payload["events"][0]["elapsed_s"] == 4
+    assert payload["events"][0]["text"] == "EKF3 yaw reset"
+    assert rows(output, "estimator.csv")[0]["pos_horiz_variance"] == ""
+    assert any(
+        "not independently measured heading" in text for text in payload["warnings"]
+    )
+    assert (capture / "telemetry.jsonl").read_bytes() == raw_before
+
+
+def test_event_timeline_is_bounded_while_csv_retains_every_message(tmp_path):
+    capture, output = recording(
+        tmp_path,
+        [
+            message("STATUSTEXT", 1, {"severity": 6, "text": f"status {index}"})
+            for index in range(503)
+        ],
+    )
+    payload = export_recording(capture, output)
+    assert len(payload["events"]) == 500
+    assert len(rows(output, "events.csv")) == 503
+    assert any("3 further messages remain" in text for text in payload["warnings"])
+
+
 def distance(elapsed: float, orientation: int, value: int) -> dict[str, Any]:
     return message(
         "DISTANCE_SENSOR",

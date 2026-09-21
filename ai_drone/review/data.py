@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ai_drone.review.signals import columns, for_message
+from ai_drone.review.signals import ESTIMATOR_SIGNALS, columns, for_message
 
 COMMON = ["elapsed_s", "timestamp_utc", "message", "source_system", "source_component"]
 CSV_FIELDS = {
@@ -68,6 +68,8 @@ CSV_FIELDS = {
         "ymag_raw",
         "zmag_raw",
         "temperature_c",
+        "mag_norm_mgauss",
+        "mag_norm_raw",
     ],
     "motion.csv": [*COMMON, *columns("motion.csv")],
     "environment.csv": [
@@ -102,6 +104,11 @@ CSV_FIELDS = {
         "sensors_healthy",
         "severity",
         "text",
+    ],
+    "estimator.csv": [
+        *COMMON,
+        "flags",
+        *(signal.column for signal in ESTIMATOR_SIGNALS),
     ],
     "camera.csv": [
         "elapsed_s",
@@ -241,6 +248,8 @@ class Export:
     def __init__(self, output: Path, duration: float, stack: ExitStack) -> None:
         self.bucket_s = max(duration / 800, 0.025)
         self.series: dict[str, Series] = {}
+        self.events: list[dict[str, Any]] = []
+        self.events_omitted = 0
         self.writers = {}
         self.rows: Counter[str] = Counter()
         for name, fields in CSV_FIELDS.items():
@@ -456,6 +465,23 @@ def _imu(export: Export, base: dict[str, Any], f: dict[str, Any]) -> None:
                 base["elapsed_s"],
                 row[field_name],
             )
+    magnetic = [
+        row.get(f"{axis}mag_raw" if raw else f"mag_{axis}_mgauss") for axis in "xyz"
+    ]
+    norm = (
+        number(math.hypot(*(value for value in magnetic if value is not None)))
+        if all(value is not None for value in magnetic)
+        else None
+    )
+    row["mag_norm_raw" if raw else "mag_norm_mgauss"] = norm
+    export.point(
+        f"{base['message']}_{sensor}_mag_norm",
+        f"{base['message']} {sensor} norm",
+        "Raw magnetic norm" if raw else "Magnetic field norm",
+        "raw" if raw else "mG",
+        base["elapsed_s"],
+        norm,
+    )
     export.csv("imu.csv", row)
 
 
@@ -596,9 +622,36 @@ def _event(export: Export, base: dict[str, Any], f: dict[str, Any]) -> None:
         )
     elif base["message"] == "EKF_STATUS_REPORT":
         row["ekf_flags"] = f.get("flags")
+        _estimator(export, base, f)
     else:
         row.update(severity=f.get("severity"), text=f.get("text"))
+        if isinstance(f.get("text"), str):
+            if len(export.events) < 500:
+                export.events.append(
+                    {**base, "severity": f.get("severity"), "text": f["text"]}
+                )
+            else:
+                export.events_omitted += 1
     export.csv("events.csv", row)
+
+
+def _estimator(export: Export, base: dict[str, Any], fields: dict[str, Any]) -> None:
+    row = {**base, "flags": fields.get("flags")}
+    for signal in ESTIMATOR_SIGNALS:
+        if signal.message != base["message"]:
+            continue
+        value = scaled(fields, signal.field, signal.factor)
+        row[signal.column] = value
+        if signal.field in fields:
+            export.point(
+                signal.key or signal.field,
+                signal.label,
+                signal.panel,
+                signal.unit,
+                base["elapsed_s"],
+                value,
+            )
+    export.csv("estimator.csv", row)
 
 
 def _camera(export: Export, row: dict[str, Any]) -> None:
@@ -657,6 +710,7 @@ _HANDLERS = {
     "BATTERY_STATUS": _battery,
     "HEARTBEAT": _event,
     "EKF_STATUS_REPORT": _event,
+    "ESTIMATOR_STATUS": _estimator,
     "STATUSTEXT": _event,
 }
 
@@ -778,6 +832,18 @@ def export_recording(
             f"Excluded {outside_window} telemetry messages outside the recorded capture interval."
         ] += 1
     warnings.update(_sensor_warnings(export, messages))
+    if export.events_omitted:
+        warnings[
+            f"Timeline shows the first 500 FC status messages; {export.events_omitted} further messages remain in events.csv."
+        ] += 1
+    if any("mag_norm" in key for key in export.series):
+        warnings[
+            "Magnetic norms are derived from the three reported axes; raw and scaled units remain separate. Yaw is the FC estimate, not independently measured heading. FC reset messages are observations, not proof of reset timing or heading accuracy."
+        ] += 1
+    if messages.get("EKF_STATUS_REPORT") or messages.get("ESTIMATOR_STATUS"):
+        warnings[
+            "Estimator plots contain only fields present in the recording. EKF_STATUS_REPORT diagnostics and ESTIMATOR_STATUS innovation ratios are separate; neither supplies raw innovations or heading ground truth."
+        ] += 1
     return {
         "title": recording.name,
         "started_utc": manifest.get("started_utc"),
@@ -804,6 +870,7 @@ def export_recording(
                 "camera_frame",
             )
         ],
+        "events": export.events,
         "csv_rows": dict(export.rows),
         "manifest": manifest,
     }

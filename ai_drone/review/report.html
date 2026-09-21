@@ -131,6 +131,11 @@ footer{margin-top:28px;padding-top:16px;border-top:1px solid var(--line);color:v
 <details class="section" open><summary>Recorded messages <span id="message-total" class="count-total"></span></summary><div class="messages table-wrap"><table id="message-table"><thead><tr><th>Message</th><th class="number">Count</th></tr></thead><tbody></tbody></table></div></details>
 </section>
 </div>
+<section class="section card camera" aria-labelledby="event-heading">
+<h2 id="event-heading">FC status messages</h2>
+<p class="section-intro">Select a message time to inspect the shared telemetry timeline. Reset and yaw messages reflect what the FC reported; they do not provide independent heading truth.</p>
+<div class="table-wrap messages"><table id="event-table"><thead><tr><th>Time</th><th>Severity</th><th>Message</th></tr></thead><tbody></tbody></table></div>
+</section>
 <footer>Recorded data · Use the exported tables to inspect individual samples.</footer>
 </main>
 <script id="report-data" type="application/json">__REPORT_DATA__</script>
@@ -452,6 +457,16 @@ footer{margin-top:28px;padding-top:16px;border-top:1px solid var(--line);color:v
   if (!summaryBody.children.length) {
     const row = make('tr'), cell = make('td', 'muted', 'No signal summaries are available.');
     cell.colSpan = 4; row.append(cell); summaryBody.append(row);
+  }
+  for (const event of data.events || []) {
+    const row = make('tr'), time = make('td'), button = make('button', '', seconds(event.elapsed_s));
+    button.type = 'button'; button.addEventListener('click', () => setCursor(event.elapsed_s));
+    time.append(button); row.append(time, make('td', '', event.severity), make('td', '', event.text));
+    byId('event-table').querySelector('tbody').append(row);
+  }
+  if (!byId('event-table').querySelector('tbody').children.length) {
+    const row = make('tr'), cell = make('td', 'muted', 'No FC status messages were recorded.');
+    cell.colSpan = 3; row.append(cell); byId('event-table').querySelector('tbody').append(row);
   }
   const download = (href, label) => {
     const link = make('a', '', label); link.href = href; link.download = ''; return link;

@@ -157,6 +157,17 @@ def test_report_has_accessible_controls_and_independent_video_description(
     ) in document.text
 
 
+def test_fc_event_timeline_keeps_reported_messages_inert(payload):
+    payload["events"] = [
+        {"elapsed_s": 1, "severity": 4, "text": "</script><script>bad()</script>"}
+    ]
+    document = ReportDocument(render_report(payload))
+    assert len(document.scripts) == 2
+    assert document.payload()["events"] == payload["events"]
+    assert any(attrs.get("id") == "event-table" for _, attrs in document.elements)
+    assert "setCursor(event.elapsed_s)" in document.scripts[1][1]
+
+
 def test_untrusted_text_cannot_close_json_script_or_create_html(payload) -> None:
     attack = '</script><img src=x onerror="alert(1)"> & " <script>bad()</script>'
     payload["title"] = attack
