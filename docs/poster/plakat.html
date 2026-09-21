@@ -353,7 +353,7 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
       <section>
         <h2 class="tuerkis">Tag erkannt → Last fällt</h2>
         <svg class="tag-grafik" viewBox="0 0 820 520" xmlns="http://www.w3.org/2000/svg" role="img"
-     aria-label="Die Kamera erkennt den Marker am Boden, danach öffnet die Halterung und die Last fällt">
+     aria-label="Die Kamera erkennt den Marker am Boden, danach öffnet die Halterung. Die Last fällt senkrecht auf den Tag zu und ist vor dem Auftreffen dargestellt">
   <defs>
     <linearGradient id="kegel" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#0d9488" stop-opacity=".26"/>
@@ -367,6 +367,7 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
   <rect x="0" y="392" width="820" height="40" fill="#eef3f7"/>
   <line x1="0" y1="392" x2="820" y2="392" stroke="#c9d6e1" stroke-width="2.5"/>
 
+  <g transform="translate(90 0)">
   <!-- Sichtkegel -->
   <path d="M300 196 L168 390 H432 Z" fill="url(#kegel)"/>
   <path d="M300 196 L168 390" stroke="#0d9488" stroke-width="2.6" stroke-dasharray="11 8" fill="none"/>
@@ -385,15 +386,19 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
   <rect x="232" y="106" width="136" height="56" rx="10" fill="#0b3d67"/>
   <rect x="268" y="76" width="64" height="30" rx="5" fill="#1573b8"/>
   <rect x="284" y="162" width="32" height="26" rx="5" fill="#0d9488"/>
-  <rect x="352" y="162" width="50" height="24" rx="5" fill="#e8710a"/>
+  <rect x="275" y="188" width="50" height="16" rx="5" fill="#e8710a"/>
   <path d="M250 180 v26 M348 186 v20" stroke="#0b3d67" stroke-width="5"/>
 
-  <!-- Fallende Last -->
-  <path d="M404 200 C 520 248 596 300 634 340" stroke="#e8710a" stroke-width="3.4"
+  <!-- Senkrechter Abwurf: Momentaufnahme oberhalb des sichtbaren Tags. -->
+  <path d="M300 212 V246" stroke="#e8710a" stroke-width="3.4"
         stroke-dasharray="10 9" fill="none" marker-end="url(#spitze)"/>
-  <g transform="translate(642 348)">
+  <g transform="translate(268 262)">
     <rect x="0" y="0" width="64" height="44" rx="6" fill="#e8710a"/>
     <path d="M32 0 v44" stroke="#ffffff" stroke-width="3.5" opacity=".75"/>
+  </g>
+
+  <text x="445" y="277" font-size="19" font-weight="700" fill="#0b3d67">Senkrechter Abwurf</text>
+  <text x="445" y="302" font-size="16" fill="#5b6a78">Last vor dem Auftreffen</text>
   </g>
 
   <!-- Ablauf, unterhalb der Szene -->
@@ -463,13 +468,13 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
       <section>
         <h2>Der Absturz</h2>
         <p>
-          Zwischen diesen Versuchen lief ein Start in einen Timeout. Die Software forderte
-          daraufhin eine <b>Landung</b> an.
+          Bei einem der Startversuche wurde das Zeitlimit überschritten. Die Software
+          forderte daraufhin eine <b>Landung</b> an.
         </p>
         <p>
-          Der Landemodus regelt auf die Höhe, die der Filter meldet — und die war um zehn
-          Kilometer falsch. Er gab Vollgas, die Drohne stieg in die Hallendecke.
-          <b>Totalschaden, niemand verletzt.</b>
+          Die Höhenregelung verwendete eine um zehn Kilometer fehlerhafte Filterschätzung.
+          Auf die Landungsanforderung folgte maximaler Schub; die Drohne kollidierte
+          mit der Hallendecke. <b>Die Drohne wurde zerstört. Es gab keine Verletzten.</b>
         </p>
         <div class="kurve-karte">
           <svg class="kurve" viewBox="0 0 600 290" xmlns="http://www.w3.org/2000/svg" role="img"
@@ -501,25 +506,24 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.4mm; }
       </section>
 
       <section>
-        <h2>Drei Befunde aus den Tests</h2>
+        <h2>Befunde aus den Tests</h2>
         <ol class="befunde">
-          <li><b>Der Höhenfilter hatte keine Quelle.</b> Zwei Parameter widersprachen sich;
-            gemeldet wurden <b>−10 000 m</b> und 38 m/s Sinken — im Stand auf dem Boden.</li>
-          <li><b>Die Schubkennlinie war falsch angenommen.</b> Mittlerer Knüppel bedeutet
-            Schwebeschub, nicht mittleren Schub. Befohlen wurde gut die Hälfte.</li>
-          <li><b>Die Motoren verfälschen die Beschleunigung.</b> 9,79 m/s² im Stand,
-            10,65 m/s² im Leerlauf — daraus rechnet der Filter einen Steigflug, den es
-            nicht gibt.</li>
+          <li><b>Inkonsistente Höhenkonfiguration.</b> Widersprüchliche Parameter
+            verhinderten eine gültige Höhenfusion. Im Stillstand meldete der Filter
+            <b>−10 000 m</b> Höhe und 38 m/s Sinkgeschwindigkeit.</li>
+          <li><b>Abweichende Beschleunigung bei laufenden Motoren.</b> Der Messwert stieg
+            von 9,79 m/s² bei ausgeschalteten Motoren auf 10,65 m/s² im Leerlauf.
+            Der Filter leitete daraus eine Steigbewegung ab, obwohl die Drohne am Boden stand.</li>
         </ol>
       </section>
 
       <section>
         <h2 class="blau">Was wir geändert haben</h2>
         <ul class="folgen">
-          <li>Steht die Drohne am Boden, wird <b>entwaffnet statt gelandet</b>.</li>
-          <li>Ein Flug gilt erst als begonnen, wenn sie <b>wirklich abgehoben</b> ist.</li>
-          <li>Gemeldete Steigrate und Abstandsmessung werden <b>laufend verglichen</b>.</li>
-          <li>Eigener Firmware-Build, weil dem Serienimage die Flussfusion fehlte.</li>
+          <li>Bei einem Startabbruch am Boden wird die Drohne <b>disarmed</b>.</li>
+          <li>Der Flugstatus wird erst nach <b>bestätigtem Abheben</b> gesetzt.</li>
+          <li>Geschätzte Steigrate und gemessener Bodenabstand werden <b>kontinuierlich abgeglichen</b>.</li>
+          <li>Ein eigener Firmware-Build ergänzt die im Serienimage fehlende <b>Fusion des optischen Flusses</b>.</li>
         </ul>
       </section>
 
