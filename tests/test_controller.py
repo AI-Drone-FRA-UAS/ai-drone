@@ -21,6 +21,7 @@ from ai_drone.flight.controller import (
     DroneController,
     FlightSafetyError,
 )
+from ai_drone.flight.phase import Armed, ArmPending, Flight, Landing, Unclaimed
 from ai_drone.flight.state import Firmware, Heartbeat, Sample
 
 
@@ -205,7 +206,7 @@ def test_disarm_requires_new_heartbeat_not_cached_or_queued_state(
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     controller.connection = connection
-    controller._arm_command_sent = True
+    controller.phase = ArmPending()
     clock = [100.0]
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
     queue = [_message("HEARTBEAT", base_mode=0)] if queued_disarmed else []
@@ -231,7 +232,7 @@ def test_disarm_waits_for_matching_disarmed_heartbeat() -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     controller.connection = connection
-    controller._arm_command_sent = True
+    controller.phase = ArmPending()
     foreign = _message("HEARTBEAT", base_mode=0)
     foreign.get_srcSystem = lambda: 2
     connection.recv_match.side_effect = [
@@ -538,7 +539,7 @@ def test_land_retries_until_disarmed_heartbeat_is_observed(monkeypatch) -> None:
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     clock = [0.0]
     updates = [0]
 
@@ -572,9 +573,9 @@ def test_cleanup_after_takeoff_always_monitors_land_and_never_disarms(
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._armed_by_controller = True
-    controller._flight_started_by_controller = True
-    controller._landing_commanded = True
+    controller.phase = Armed()
+    controller.phase = Flight("taking_off", None)
+    controller.phase = Landing(controller.phase)
     land = MagicMock(side_effect=TimeoutError("still armed"))
     monkeypatch.setattr(controller, "land", land)
 
@@ -697,7 +698,7 @@ def test_unknown_battery_during_flight_commands_land() -> None:
     connection = MagicMock()
     connection.mode_mapping.return_value = {"LAND": 9}
     controller.connection = connection
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     controller.state = replace(
         controller.state,
         heartbeat=Sample(
@@ -738,7 +739,7 @@ def test_low_battery_during_controller_flight_commands_land() -> None:
     connection.mode_mapping.return_value = {"LAND": 9}
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     controller.state = replace(
         controller.state,
         heartbeat=Sample(
@@ -872,7 +873,7 @@ def test_local_position_ceiling_is_aligned_to_rangefinder_and_lands(
     connection.mode_mapping.return_value = {"LAND": 9}
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     controller.state = replace(
         controller.state,
         heartbeat=Sample(
@@ -914,7 +915,7 @@ def test_takeoff_uses_guided_nogps_flag_and_rangefinder_delta(monkeypatch) -> No
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._armed_by_controller = True
+    controller.phase = Armed()
     controller.state = replace(
         controller.state,
         heartbeat=Sample(
@@ -1030,7 +1031,7 @@ def test_takeoff_refuses_when_target_plus_ground_reference_exceeds_max_alt(
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._armed_by_controller = True
+    controller.phase = Armed()
     controller.state = replace(
         controller.state,
         heartbeat=Sample(
@@ -1098,6 +1099,7 @@ def test_takeoff_refuses_when_target_plus_ground_reference_exceeds_max_alt(
 
 def test_guided_nogps_climb_is_level_and_uses_climb_rate_field(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
+    controller.phase = Armed()
     connection = MagicMock()
     controller.connection = connection
     controller.state = replace(
@@ -1148,14 +1150,14 @@ def test_command_ack_is_required_and_rejection_includes_vehicle_text() -> None:
         _message("STATUSTEXT", text="takeoff refused"),
         _message(
             "COMMAND_ACK",
-            command=mavlink.MAV_CMD_NAV_TAKEOFF,
+            command=mavlink.MAV_CMD_REQUEST_MESSAGE,
             result=mavlink.MAV_RESULT_FAILED,
         ),
     ]
 
     with pytest.raises(FlightSafetyError, match="takeoff refused"):
         controller._send_command_long_and_wait_ack(
-            mavlink.MAV_CMD_NAV_TAKEOFF,
+            mavlink.MAV_CMD_REQUEST_MESSAGE,
             (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5),
         )
 
@@ -1166,17 +1168,19 @@ def test_command_ack_acceptance_sends_exact_parameters() -> None:
     controller.connection = connection
     connection.recv_match.return_value = _message(
         "COMMAND_ACK",
-        command=mavlink.MAV_CMD_NAV_TAKEOFF,
+        command=mavlink.MAV_CMD_REQUEST_MESSAGE,
         result=mavlink.MAV_RESULT_ACCEPTED,
     )
     parameters = (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5)
 
-    controller._send_command_long_and_wait_ack(mavlink.MAV_CMD_NAV_TAKEOFF, parameters)
+    controller._send_command_long_and_wait_ack(
+        mavlink.MAV_CMD_REQUEST_MESSAGE, parameters
+    )
 
     connection.mav.command_long_send.assert_called_once_with(
         1,
         1,
-        mavlink.MAV_CMD_NAV_TAKEOFF,
+        mavlink.MAV_CMD_REQUEST_MESSAGE,
         0,
         *parameters,
     )
@@ -1191,7 +1195,7 @@ def test_enter_loiter_waits_for_navigation_then_confirms_mode(monkeypatch) -> No
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     wait = MagicMock()
     monkeypatch.setattr(controller, "wait_for_relative_position", wait)
     monkeypatch.setattr(controller, "navigation_is_healthy", lambda: True)
@@ -1226,7 +1230,7 @@ def test_enter_loiter_lands_instead_of_accepting_valid_low_throttle_rc(
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     controller.state = replace(
         controller.state,
         rc_channels=Sample(
@@ -1270,7 +1274,7 @@ def test_active_receiver_during_controller_flight_commands_land_even_after_mode_
             Heartbeat(True, controller.flight_mode), controller.last_heartbeat_time
         ),
     )
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     # An RC mode channel can move the vehicle away from Loiter before the next
     # telemetry cycle.  The topology guard must remain active in every mode.
     controller.state = replace(
@@ -1328,7 +1332,7 @@ def test_stop_callback_requests_land_after_takeoff() -> None:
     connection.mode_mapping.return_value = {"LAND": 9}
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller._flight_started_by_controller = True
+    controller.phase = Flight("taking_off", None)
     controller.stop_requested = lambda: True
 
     with pytest.raises(FlightSafetyError, match="stop requested"):
@@ -1377,8 +1381,9 @@ def test_telemetry_guards_only_command_an_owned_flight_before_landing(
     connection = MagicMock()
     connection.recv_match.return_value = None
     controller.connection = connection
-    controller._flight_started_by_controller = owned
-    controller._landing_commanded = landing
+    controller.phase = Flight("taking_off", None) if owned else Unclaimed()
+    if landing:
+        controller.phase = Landing(controller.phase)
     controller.state = replace(
         controller.state,
         heartbeat=Sample(
@@ -1607,7 +1612,7 @@ def test_disarm_retries_after_failed_write_and_receive(monkeypatch):
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     controller.connection = connection
-    controller._arm_command_sent = True
+    controller.phase = ArmPending()
     clock = [100.0]
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(

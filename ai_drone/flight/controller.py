@@ -5,15 +5,38 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.flight.ownership import OwnershipPolicy, human_takeover_allowed
+from ai_drone.flight.phase import (
+    Arm,
+    Armed,
+    ArmPending,
+    Climb,
+    Command,
+    CommandAttempt,
+    CommandLong,
+    Disarm,
+    Flight,
+    Human,
+    Landed,
+    Landing,
+    Phase,
+    SetMode,
+    Unclaimed,
+    cleanup,
+    ground_reference,
+    observed_disarm,
+    owns_control,
+    request_landing,
+)
 from ai_drone.flight.state import (
     VehicleState,
     align_altitude,
@@ -163,15 +186,10 @@ class DroneController:
         self.target_component = target_component
         self.connection: Any | None = None
         self.state = VehicleState()
-        self.is_flying = False
+        self.phase: Phase = Unclaimed()
+        self.command_attempts: deque[CommandAttempt] = deque(maxlen=256)
+        self._command_sequence = 0
         self._last_gcs_heartbeat_time: float | None = None
-        # An unconfirmed arm write retains cleanup ownership even if an
-        # intermediate heartbeat still describes the pre-arm disarmed state.
-        self._arm_command_sent = False
-        self._armed_by_controller = False
-        self._flight_started_by_controller = False
-        self._landing_commanded = False
-        self._ground_reference: float | None = None
         # The CLI sets this to a non-blocking callback backed by its signal/event
         # handling.  Every long pre-landing loop checks it; landing deliberately
         # ignores it so a second signal cannot interrupt cleanup.
@@ -179,7 +197,43 @@ class DroneController:
         self.operator_alive = operator_alive
         self.human_takeover_requested = human_takeover_requested
         self.ownership_policy = ownership_policy or OwnershipPolicy()
-        self._human_control = False
+
+    @property
+    def is_flying(self) -> bool:
+        airborne = (
+            self.phase.flight_started
+            if isinstance(self.phase, Human)
+            else cleanup(self.phase) == "land"
+        )
+        return airborne and self.is_armed
+
+    @property
+    def _human_control(self) -> bool:
+        return isinstance(self.phase, Human)
+
+    @property
+    def _arm_command_sent(self) -> bool:
+        phase = self.phase.previous if isinstance(self.phase, Landing) else self.phase
+        return isinstance(phase, ArmPending)
+
+    @property
+    def _armed_by_controller(self) -> bool:
+        phase = self.phase.previous if isinstance(self.phase, Landing) else self.phase
+        return isinstance(phase, Armed | Flight)
+
+    @property
+    def _flight_started_by_controller(self) -> bool:
+        return cleanup(self.phase) == "land"
+
+    @property
+    def _landing_commanded(self) -> bool:
+        return isinstance(self.phase, Landing) or (
+            isinstance(self.phase, Landed) and self.phase.landing_commanded
+        )
+
+    @property
+    def _ground_reference(self) -> float | None:
+        return ground_reference(self.phase)
 
     @property
     def current_altitude(self) -> float | None:
@@ -282,11 +336,7 @@ class DroneController:
 
     @property
     def owns_control(self) -> bool:
-        return not self._human_control and (
-            self._arm_command_sent
-            or self._armed_by_controller
-            or self._flight_started_by_controller
-        )
+        return owns_control(self.phase)
 
     @property
     def control_owner(self) -> str:
@@ -297,6 +347,83 @@ class DroneController:
     def _require_autonomous_control(self) -> None:
         if self._human_control:
             raise HumanControlTaken("control was handed to the radio pilot")
+
+    def _write_command(self, command: Command) -> None:
+        """The autonomous write boundary; heartbeat and passive requests are separate.
+
+        Intent precedes a potentially ambiguous transport write. A written command
+        is not an FC acknowledgement or an observed arming/landing confirmation.
+        """
+        self._resolve_control_ownership()
+        self._require_autonomous_control()
+        if isinstance(command, Disarm) and cleanup(self.phase) == "land":
+            raise FlightSafetyError("refusing to force-disarm a flight; use land()")
+        if (
+            isinstance(command, CommandLong)
+            and command.command != mavlink.MAV_CMD_REQUEST_MESSAGE
+        ):
+            raise FlightSafetyError(
+                "command-ACK helper only authorizes passive message requests"
+            )
+        if isinstance(command, Arm):
+            self.phase = ArmPending()
+        elif isinstance(command, Climb):
+            if not isinstance(self.phase, Armed | Flight):
+                raise FlightSafetyError("climb requires arming by this controller")
+            if not isinstance(self.phase, Flight):
+                self.phase = Flight("taking_off", self._ground_reference)
+        elif isinstance(command, SetMode) and command.name == "LAND":
+            self.phase = request_landing(self.phase)
+        self._command_sequence += 1
+        attempt = CommandAttempt(
+            self._command_sequence, command, time.monotonic(), "attempting"
+        )
+        self.command_attempts.append(attempt)
+        try:
+            self._perform_command(command)
+        except BaseException as error:
+            self.command_attempts[-1] = replace(
+                attempt, outcome="failed", error=f"{type(error).__name__}: {error}"
+            )
+            raise
+        self.command_attempts[-1] = replace(attempt, outcome="written")
+
+    def _perform_command(self, command: Command) -> None:
+        connection = self._connection()
+        match command:
+            case Arm():
+                connection.arducopter_arm()
+            case Disarm():
+                connection.arducopter_disarm()
+            case SetMode(name=name):
+                connection.mav.set_mode_send(
+                    self.target_system,
+                    mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                    COPTER_MODES[name],
+                )
+            case Climb(fraction=fraction, yaw=yaw):
+                half_yaw = yaw * 0.5
+                connection.mav.set_attitude_target_send(
+                    (time.monotonic_ns() // 1_000_000) & 0xFFFFFFFF,
+                    self.target_system,
+                    self.target_component,
+                    ATTITUDE_TARGET_MASK,
+                    [math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)],
+                    0.0,
+                    0.0,
+                    0.0,
+                    GUIDED_HOLD_FIELD + fraction * 0.5,
+                )
+            case CommandLong(command=identifier, parameters=parameters):
+                connection.mav.command_long_send(
+                    self.target_system,
+                    self.target_component,
+                    identifier,
+                    0,
+                    *parameters,
+                )
+            case _ as impossible:
+                assert_never(impossible)
 
     def _resolve_control_ownership(self) -> None:
         callback = self.human_takeover_requested
@@ -318,11 +445,7 @@ class DroneController:
             now=time.monotonic(),
         ):
             return
-        self._human_control = True
-        self._arm_command_sent = False
-        self._armed_by_controller = False
-        self._flight_started_by_controller = False
-        self._landing_commanded = False
+        self.phase = Human(self.is_flying)
         logger.warning("control handed to the radio pilot in %s", self.flight_mode)
 
     def _require_operator(self) -> None:
@@ -489,9 +612,7 @@ class DroneController:
             heartbeat_max_age=self.ownership_policy.heartbeat_max_age,
         )
         if self.state.heartbeat is not previous.heartbeat and not self.is_armed:
-            self.is_flying = False
-            self._armed_by_controller = False
-            self._flight_started_by_controller = False
+            self.phase = observed_disarm(self.phase)
 
     def update_telemetry(self, max_messages: int = 50) -> None:
         if isinstance(max_messages, bool) or not 1 <= max_messages <= 1_000:
@@ -835,16 +956,12 @@ class DroneController:
     def set_mode(self, mode_name: str, timeout: float = 5.0) -> None:
         self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
-        connection = self._connection()
+        self._connection()
         requested = mode_name.upper()
         mapping = COPTER_MODES
         if requested not in mapping:
             raise ValueError(f"flight mode {requested!r} is not supported")
-        connection.mav.set_mode_send(
-            self.target_system,
-            mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            mapping[requested],
-        )
+        self._write_command(SetMode(requested))
         for _ in self._poll(timeout):
             self._require_autonomous_control()
             if self.flight_mode == requested:
@@ -863,6 +980,8 @@ class DroneController:
             )
         if self.is_armed:
             return
+        if isinstance(self.phase, Landed):
+            self.phase = Unclaimed()  # arm() explicitly starts a new mission
         self.verify_firmware()
         self.verify_arming_checks()
         self.verify_nogps_loiter_parameters()
@@ -881,9 +1000,7 @@ class DroneController:
         self._require_operator()
         if not self.altitude_is_fresh():
             raise FlightSafetyError("downward altitude became stale before arming")
-        self._arm_command_sent = True
-        self._landing_commanded = False
-        self._connection().arducopter_arm()
+        self._write_command(Arm())
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self._pump_gcs_heartbeat()
@@ -894,8 +1011,7 @@ class DroneController:
             self._require_autonomous_control()
             self._raise_if_stop_requested()
             if self.is_armed:
-                self._arm_command_sent = False
-                self._armed_by_controller = True
+                self.phase = Armed()
                 return
         raise TimeoutError("flight controller did not confirm arming")
 
@@ -915,13 +1031,7 @@ class DroneController:
 
         self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
-        self._connection().mav.command_long_send(
-            self.target_system,
-            self.target_component,
-            command,
-            0,
-            *parameters,
-        )
+        self._write_command(CommandLong(command, parameters))
         status_text: list[str] = []
         deadline = time.monotonic() + timeout
         while (remaining := deadline - time.monotonic()) > 0:
@@ -957,9 +1067,7 @@ class DroneController:
         )
 
     def _request_disarm(self) -> None:
-        self._resolve_control_ownership()
-        self._require_autonomous_control()
-        self._connection().arducopter_disarm()
+        self._write_command(Disarm())
 
     def _drain_cleanup_evidence(self) -> None:
         # Bound the drain and isolate transport errors: queued pilot evidence
@@ -1007,7 +1115,7 @@ class DroneController:
                 self._resolve_control_ownership()
                 self._require_autonomous_control()
                 if self.last_heartbeat_time > started and not self.is_armed:
-                    self._arm_command_sent = False
+                    self.phase = Landed(landing_commanded=False)
                     return
             except (OSError, SharedMavlinkError) as error:
                 logger.warning("DISARM receive failed; retrying: %s", error)
@@ -1035,19 +1143,7 @@ class DroneController:
         yaw = self.yaw_rad
         if yaw is None:  # guarded above; keeps the quaternion type exact
             raise FlightSafetyError("no yaw available for level climb setpoint")
-        half_yaw = yaw * 0.5
-        field = GUIDED_HOLD_FIELD + fraction * 0.5
-        self._connection().mav.set_attitude_target_send(
-            (time.monotonic_ns() // 1_000_000) & 0xFFFFFFFF,
-            self.target_system,
-            self.target_component,
-            ATTITUDE_TARGET_MASK,
-            [math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)],
-            0.0,
-            0.0,
-            0.0,
-            field,
-        )
+        self._write_command(Climb(fraction, yaw))
 
     def takeoff(self, target_alt: float, timeout: float = 15.0) -> None:
         self._require_autonomous_control()
@@ -1067,16 +1163,15 @@ class DroneController:
             self.wait_for_attitude(timeout=3.0)
         if self.flight_mode != "GUIDED_NOGPS":
             self.set_mode("GUIDED_NOGPS")
-        self._ground_reference = self.current_altitude
-        _validate_takeoff_ceiling(target, self._ground_reference, self.max_altitude)
+        ground = self.current_altitude
+        _validate_takeoff_ceiling(target, ground, self.max_altitude)
         self.state = align_altitude(
             replace(self.state, alignment=None), time.monotonic()
         )
         # Mark ownership before the first climb target leaves.  From this point
         # cleanup must LAND and never issue a force-disarm, even if no motion is
         # observed or the link fails immediately afterward.
-        self._flight_started_by_controller = True
-        self.is_flying = True
+        self.phase = Flight("taking_off", ground)
         started = time.monotonic()
         deadline = started + timeout
         while time.monotonic() < deadline:
@@ -1095,6 +1190,7 @@ class DroneController:
                 and self.current_altitude - self._ground_reference >= target * 0.9
             ):
                 self._send_level_climb(0.0)
+                self.phase = Flight("holding_altitude", ground)
                 return
             self._send_level_climb(GUIDED_TAKEOFF_CLIMB_FRACTION)
             time.sleep(0.05)
@@ -1140,6 +1236,7 @@ class DroneController:
         self._require_autonomous_control()
         if not self.is_armed or not self._flight_started_by_controller:
             raise FlightSafetyError("Loiter transition requires a controller takeoff")
+        self.phase = Flight("awaiting_loiter", self._ground_reference)
         self.wait_for_relative_position(timeout=timeout, stable_for=stable_for)
         if not self.no_rc_input_is_confirmed():
             self.emergency_stop()
@@ -1150,6 +1247,7 @@ class DroneController:
         if not self.navigation_is_healthy():
             self.emergency_stop()
             raise FlightSafetyError("navigation became unhealthy during Loiter entry")
+        self.phase = Flight("loitering", self._ground_reference)
 
     def hold_loiter(self, duration: float) -> None:
         """Hold confirmed Loiter while enforcing flow, EKF, range and link gates."""
@@ -1177,7 +1275,7 @@ class DroneController:
         self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
         self._drain_cleanup_evidence()
-        self._landing_commanded = True
+        self.phase = request_landing(self.phase)
         started = max(time.monotonic(), self.last_heartbeat_time)
         deadline = time.monotonic() + timeout
         self.emergency_stop()
@@ -1190,7 +1288,7 @@ class DroneController:
             self._resolve_control_ownership()
             self._require_autonomous_control()
             if self.last_heartbeat_time > started and not self.is_armed:
-                self.is_flying = False
+                self.phase = Landed()
                 return
             now = time.monotonic()
             if now >= next_request:
@@ -1208,11 +1306,6 @@ class DroneController:
             self._resolve_control_ownership()
             if self.connection is None or self._human_control:
                 return
-            self._landing_commanded = True
-            self.connection.mav.set_mode_send(
-                self.target_system,
-                mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-                COPTER_MODES["LAND"],
-            )
+            self._write_command(SetMode("LAND"))
         except Exception:
             logger.exception("could not request emergency LAND")

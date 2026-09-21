@@ -13,6 +13,7 @@ from ai_drone.flight.controller import (
     HumanControlTaken,
 )
 from ai_drone.flight.ownership import OwnershipPolicy, human_takeover_allowed
+from ai_drone.flight.phase import Flight, Unclaimed
 from ai_drone.flight.state import Heartbeat, Sample, VehicleState
 from ai_drone.mavlink.shared import received_monotonic
 
@@ -58,8 +59,7 @@ def controlled(monkeypatch):
         heartbeat=Sample(Heartbeat(True, "GUIDED_NOGPS"), 100.0),
         rc_channels=Sample(0, 100.0),
     )
-    drone.is_flying = True
-    drone._flight_started_by_controller = drone._armed_by_controller = True
+    drone.phase = Flight("taking_off", None)
     return drone
 
 
@@ -131,14 +131,13 @@ def test_operator_callback_failure_is_loss(controlled):
 
 def test_unavailable_operator_blocks_arming_before_commands(controlled):
     controlled.operator_alive = lambda: False
-    controlled._flight_started_by_controller = controlled._armed_by_controller = False
+    controlled.phase = Unclaimed()
     controlled.state = replace(
         controlled.state,
         heartbeat=Sample(
             Heartbeat(False, controlled.flight_mode), controlled.last_heartbeat_time
         ),
     )
-    controlled.is_flying = False
     with pytest.raises(FlightSafetyError, match="operator heartbeat lost"):
         controlled.arm()
     controlled.connection.arducopter_arm.assert_not_called()
