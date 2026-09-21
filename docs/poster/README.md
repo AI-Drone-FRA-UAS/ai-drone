@@ -77,9 +77,15 @@ Option **Hintergrundgrafiken** aktivieren, Skalierung „an Seite anpassen".
 
 Linke Spalte Ziel, Hardware, Kennzahlen, Vorgehen und das Foto; mittlere Spalte
 Systemarchitektur, Navigation ohne GPS, das Zwischenergebnis aus Tag-Erkennung
-und Abwurf, Rahmen und Werkzeuge; rechte Spalte die Flugversuche, die drei
-gemessenen Ursachen des Absturzes, der QR-Code zum Video, die Simulation, die
-Konsequenzen im Code und der Ausblick.
+und Nutzlast-Freigabe, Rahmen und Werkzeuge; rechte Spalte die Flugversuche vom
+August, die drei gemessenen Ursachen des Absturzes, der QR-Code zum Video, die
+Absicherung gegen ArduPilot-SITL, die Konsequenzen im Code und der Ausblick.
+
+Stand September 2026: eigene ArduCopter-4.7.1-Firmware mit EKF3-Flussfusion,
+vorderer MT-15 an UART3 in Betrieb, Freigabe der Halterung bei Tag ID 3. Der
+offene Blocker ist die Kompass-Vorflugprüfung; die Drohne ist nicht für Tests
+mit Propellern freigegeben. Wer das Plakat anfasst, prüft diese Angaben zuerst
+gegen die neueste Aufzeichnung unter `state/`.
 
 Der **QR-Code** ist als Pfad-SVG direkt im HTML eingebettet (kein externer
 Dienst, kein Bild-Asset) und zeigt auf das Video des Absturzes vom 21.08.2026.
@@ -106,6 +112,9 @@ sollte es mindestens 1600 px breit sein.
 ## Quellen des Inhalts
 
 Der Text stammt aus `docs/drone-project.md`, `docs/DRONE_CONFIGURATION.md`,
-`docs/APRILTAG_MISSION.md`, `docs/FRAME_AND_3D_PRINTS.md`, dem
-AprilTag-Durchsatztest in `state/2026-08-18/camera-apriltag-benchmark.json` und
-dem heute [archivierten Flugprotokoll](../../notes/archive/preflight-and-nogps-takeoff/README.md).
+[ArduCopter 4.7 no-GPS Loiter](../ARDUCOPTER_4_7_NOGPS_LOITER.md),
+[Sensoraufzeichnung](../SENSOR_RECORDING.md), `docs/FRAME_AND_3D_PRINTS.md`,
+dem AprilTag-Durchsatztest in
+`state/2026-08-18/camera-apriltag-benchmark.json`, den Aufzeichnungen zu
+Firmware und vorderem Sensor in `state/2026-09-09/` und dem heute
+[archivierten Flugprotokoll](../../notes/archive/preflight-and-nogps-takeoff/README.md).

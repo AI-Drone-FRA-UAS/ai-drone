@@ -82,7 +82,7 @@ h1{
   gap:10mm; padding:11mm 18mm 0 18mm;
   min-height:0;
 }
-.spalte{ display:flex; flex-direction:column; gap:8mm; }
+.spalte{ display:flex; flex-direction:column; gap:7mm; }
 
 section{ break-inside:avoid; }
 h2{
@@ -252,9 +252,9 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
     <div class="hochschule">Frankfurt University of Applied Sciences <span>&nbsp;·&nbsp; Fachbereich 2 &nbsp;·&nbsp; Projektarbeit</span></div>
     <h1>KI-Drohne mit AprilTag-Abwurf</h1>
     <div class="untertitel">
-      Von der FPV-Renndrohne zur GPS-freien Indoor-Plattform: ArduPilot-Autopilot,
-      Raspberry&nbsp;Pi als Companion-Computer, AprilTag-Erkennung auf der Kamera und ein
-      servogesteuerter Nutzlast-Abwurf — mit den Flugversuchen, die dahin geführt haben.
+      Von der FPV-Renndrohne zur GPS-freien Indoor-Plattform: eigene ArduPilot-Firmware,
+      Raspberry&nbsp;Pi als Companion-Computer, AprilTag-Erkennung auf der Kamera und eine
+      servogesteuerte Nutzlast-Freigabe — mit den Flugversuchen, die dahin geführt haben.
     </div>
     <div class="kopf-meta">
       <div><span>Team (4 Personen)</span><b>Jannik&nbsp;Höhler &nbsp;·&nbsp; Julian&nbsp;Veerkamp &nbsp;·&nbsp; Sebastian&nbsp;Urmann &nbsp;·&nbsp; Serkan&nbsp;Savranoglu</b></div>
@@ -280,9 +280,8 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <li><b>Autopilot:</b> Betaflight durch ArduPilot Copter ersetzen, Konfiguration
               über QGroundControl.</li>
           <li><b>Position &amp; Altitude Hold</b> ohne GPS über LiDAR und optischen Fluss.</li>
-          <li><b>Markererkennung</b> auf dem Companion-Computer statt Fernsteuerung durch
-              den Piloten.</li>
-          <li><b>Abwurfmechanismus</b> mit 9g-Servo, ausgelöst durch die Erkennung.</li>
+          <li><b>Markererkennung</b> auf dem Companion-Computer, die den
+              <b>Abwurf</b> über einen 9g-Servo auslöst.</li>
           <li><b>Rahmenerweiterung</b> (3D-Druck) für Sensor, Servo, Pi und Kamera.</li>
         </ul>
       </section>
@@ -293,13 +292,14 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <table>
             <tr><td>Rahmen</td><td>SpeedyBee BEE35 Pro, 3,5" CineWhoop</td></tr>
             <tr><td>Flight Controller</td><td>Flywoo GOKU GN745 AIO (STM32F745)</td></tr>
-            <tr><td>Firmware</td><td>ArduPilot Copter 4.6.3</td></tr>
+            <tr><td>Firmware</td><td>ArduPilot Copter 4.7.1 — Eigenbau</td></tr>
             <tr><td>Antrieb</td><td>4 × Emax Eco II 2004, 3000 KV, ESC 45 A</td></tr>
             <tr><td>Funkstrecke</td><td>ExpressLRS, RadioMaster XR4 Gemini</td></tr>
             <tr><td>Companion</td><td>Raspberry Pi Zero 2 WH</td></tr>
             <tr><td>Kamera</td><td>Raspberry Pi AI Camera (Sony IMX500)</td></tr>
             <tr><td>Navigation</td><td>MicoAir MTF-01P — LiDAR + Optical Flow</td></tr>
-            <tr><td>Aktuator</td><td>Micro-Servo 9g (MS18-F) für Abwurf</td></tr>
+            <tr><td>Nach vorn</td><td>MicoAir MT-15 — Distanz 0,1–15 m</td></tr>
+            <tr><td>Aktuator</td><td>Micro-Servo 9g am Pi (BCM 12)</td></tr>
             <tr><td>FPV-Video</td><td>RunCam Phoenix 2 → SpeedyBee TX800</td></tr>
           </table>
         </div>
@@ -308,10 +308,10 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
       <section>
         <h2>Projekt in Zahlen</h2>
         <div class="kennzahlen">
-          <div class="kennzahl"><b>29 fps</b><span>Aufnahme + Tag-Erkennung bei 640×480 auf dem Pi</span></div>
-          <div class="kennzahl"><b>36h11</b><span>AprilTag-Familie, zwei Detektor-Backends</span></div>
+          <div class="kennzahl"><b>29 fps</b><span>Kamerabilder pro Sekunde ausgewertet, im Aufbau gemessen</span></div>
+          <div class="kennzahl"><b>52 Hz</b><span>Distanzpakete des vorderen MT-15</span></div>
           <div class="kennzahl"><b>0×</b><span>GPS-Satelliten für die Navigation nötig</span></div>
-          <div class="kennzahl"><b>500+</b><span>Offline-Tests, 11 injizierbare Fehlerbilder</span></div>
+          <div class="kennzahl"><b>1187</b><span>gesicherte Flugparameter je Aufzeichnung</span></div>
         </div>
       </section>
 
@@ -332,6 +332,10 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
               <span>Servo öffnet bei stabil erkanntem Tag</span></li>
           <li class="kritisch"><b>Flugversuche → Absturz</b>
               <span>21.08.: Totalschaden an der Hallendecke, Aufbau repariert</span></li>
+          <li><b>Firmware neu gebaut, Sensorik erweitert</b>
+              <span>Copter 4.7.1 mit Flussfusion; MT-15 nach vorn in Betrieb</span></li>
+          <li class="offen"><b>Erster Flug mit Propellern</b>
+              <span>gesperrt: Kompass-Vorflugprüfung schlägt fehl</span></li>
           <li class="offen"><b>Autonome Mission im Flug</b>
               <span>Suchen, Anfliegen, Zentrieren, Abwerfen — offen</span></li>
         </ul>
@@ -378,7 +382,7 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <!-- Flight Controller -->
           <rect x="60" y="80" width="140" height="38" rx="3" fill="#0b3d67"/>
           <text class="dg-label" x="72" y="94">Flight Controller — GN745 AIO</text>
-          <text class="dg-sub" x="72" y="102">ArduPilot Copter 4.6.3 · EKF3</text>
+          <text class="dg-sub" x="72" y="102">ArduPilot Copter 4.7.1 · EKF3</text>
           <text class="dg-sub" x="72" y="109">Motorregelung · Flugmodi · Failsafe</text>
           <text class="dg-sub" x="72" y="115">Höhe aus Baro, Lage aus IMU</text>
 
@@ -386,23 +390,29 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <rect x="4" y="140" width="104" height="34" rx="3" fill="#1573b8"/>
           <text class="dg-label" x="14" y="153">Raspberry Pi Zero 2 WH</text>
           <text class="dg-sub" x="14" y="160">Python · pymavlink · OpenCV</text>
-          <text class="dg-sub" x="14" y="167">Tag-Erkennung → Abwurf-Trigger</text>
+          <text class="dg-sub" x="14" y="167">Tag-Erkennung → Mount-Auslösung</text>
 
           <!-- Kamera -->
           <rect x="4" y="184" width="104" height="22" rx="3" fill="#0d9488"/>
           <text class="dg-label" x="14" y="194">IMX500-Kamera (Nadir)</text>
           <text class="dg-sub" x="14" y="201">AprilTag 3 / ArUco · tag36h11</text>
 
-          <!-- Sensorik -->
-          <rect x="152" y="140" width="104" height="34" rx="3" fill="#0d9488"/>
-          <text class="dg-label" x="162" y="153">MicoAir MTF-01P</text>
-          <text class="dg-sub" x="162" y="160">LiDAR 1–800 cm (nach unten)</text>
-          <text class="dg-sub" x="162" y="167">Optical Flow → Geschwindigkeit</text>
+          <!-- Sensorik nach unten -->
+          <rect x="120" y="140" width="66" height="34" rx="3" fill="#0d9488"/>
+          <text class="dg-label" x="126" y="152">MTF-01P</text>
+          <text class="dg-sub" x="126" y="159">LiDAR nach unten</text>
+          <text class="dg-sub" x="126" y="166">Optical Flow</text>
 
-          <!-- Servo -->
-          <rect x="152" y="184" width="104" height="22" rx="3" fill="#e8710a"/>
-          <text class="dg-label" x="162" y="194">Abwurfmechanismus</text>
-          <text class="dg-sub" x="162" y="201">Micro-Servo 9g · 900–2100 µs</text>
+          <!-- Sensorik nach vorn -->
+          <rect x="190" y="140" width="66" height="34" rx="3" fill="#0d9488"/>
+          <text class="dg-label" x="196" y="152">MT-15</text>
+          <text class="dg-sub" x="196" y="159">Distanz nach vorn</text>
+          <text class="dg-sub" x="196" y="166">0,1–15 m</text>
+
+          <!-- Nutzlast-Halterung -->
+          <rect x="120" y="184" width="136" height="22" rx="3" fill="#e8710a"/>
+          <text class="dg-label" x="126" y="194">Nutzlast-Halterung (Mount)</text>
+          <text class="dg-sub" x="126" y="201">Micro-Servo 9g · Pi BCM 12 · 900–2100 µs</text>
 
           <!-- Kanten -->
           <path d="M56,36 L56,58 L110,58 L110,80" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
@@ -417,15 +427,18 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
           <path d="M56,184 L56,174" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
           <text class="dg-kante" x="59" y="181">CSI</text>
 
-          <path d="M204,140 L204,128 L174,128 L174,118" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
-          <text class="dg-kante" x="196" y="133">UART5</text>
+          <path d="M153,140 L153,128 L170,128 L170,118" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="134" y="133">UART5</text>
 
-          <path d="M204,184 L204,174" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
-          <text class="dg-kante" x="200" y="181">GPIO</text>
+          <path d="M223,140 L223,128 L186,128 L186,118" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="226" y="133">UART3</text>
+
+          <path d="M108,195 L120,195" fill="none" stroke="#5b6a78" stroke-width="1" marker-end="url(#pfeil)"/>
+          <text class="dg-kante" x="88" y="193">GPIO</text>
         </svg>
         <div class="bildunterschrift">
-          <b>Abb. 2:</b> Signalfluss zwischen Bodenstation, Fernsteuerung, Autopilot,
-          Companion-Computer, Sensorik und Abwurf.
+          <b>Abb. 2:</b> Signalfluss zwischen Bodenstation, Autopilot, Companion-Computer
+          und Sensorik.
         </div>
       </section>
 
@@ -441,10 +454,13 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
               Geschwindigkeit → Halten der Position ohne Satelliten.</li>
         </ul>
         <p>
-          Angebunden über <code>SERIAL5</code> mit <code>FLOW_TYPE=5</code> und
-          <code>RNGFND1_TYPE=10</code>. <b>Wichtige Einschränkung:</b> EKF3 startet die
-          Flussnavigation erst, wenn es ein Abheben erkannt hat — die Positionslösung, die
-          <code>GUIDED</code> verlangt, existiert am Boden also noch nicht.
+          <b>Dass das lange nicht funktionierte, lag nicht an der Konfiguration:</b> Im
+          installierten Firmware-Image war die Flussfusion des EKF3 <b>gar nicht
+          einkompiliert</b> — kein Parameter hätte daran etwas geändert. Zusätzlich
+          verlangte <code>EK3_SRC1_POSXY=3</code> eine GPS-Position bei abgeschaltetem GPS.
+          Die Konsequenz ist ein eigener Build, <b>ArduCopter 4.7.1</b> mit Flussfusion und
+          <code>GUIDED_NOGPS</code>. Seitdem meldet der EKF beim Anheben eine relative
+          Horizontalposition — vorher nie.
         </p>
       </section>
 
@@ -452,28 +468,26 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
         <h2 class="h2-erfolg">Zwischenergebnis: Tag erkannt → Last fällt</h2>
         <div class="karte karte-erfolg">
           <p>
-            Die Kette <b>Kamera → Erkennung → Aktuator funktioniert</b> und ist der
-            vorzeigbare Stand des Projekts: Die nach unten gerichtete IMX500 erkennt
-            <code>tag36h11</code>-Marker, und sobald ein Tag stabil erkannt ist, öffnet der
-            Servo den Haltebügel und lässt die Nutzlast fallen.
+            Die Kette <b>Kamera → Erkennung → Aktuator funktioniert</b>: Die nach unten
+            gerichtete IMX500 erkennt <code>tag36h11</code>-Marker, und bei Tag <b>ID 3</b>
+            öffnet der Servo die Nutzlast-Halterung.
           </p>
           <ul>
-            <li><b>Zwei Detektor-Backends:</b> AprilTag&nbsp;3.4.2 nativ (meldet Hamming-
-                Korrektur und Decision Margin) und OpenCV&nbsp;4.11 <code>ArucoDetector</code>
-                mit <code>DICT_APRILTAG_36h11</code> als Rückfall und für die Kalibrierung.</li>
-            <li><b>Durchsatz auf dem Pi Zero 2 W</b> (gemessen 18.08.): 29 fps bei 640×480,
-                13–15 fps bei 1280×960 jeweils inklusive Bildaufnahme; der Detektor allein
-                schafft bis 76 fps.</li>
-            <li><b>Auslösung:</b> Erst mehrere aufeinanderfolgende Frames mit derselben
-                erlaubten ID lösen aus; der Servo wird direkt vom Pi über GPIO angesteuert
-                und die Freigabe ist verriegelt, sodass sie sich nicht wiederholen kann.</li>
-            <li><b>Metrische Distanz nur mit Kalibrierung:</b> ohne hinterlegte Intrinsics
-                meldet die Software bewusst nur IDs und Eckpunkte statt einer erfundenen
-                Entfernung.</li>
+            <li><b>Zwei Detektor-Backends:</b> AprilTag&nbsp;3 nativ (meldet Hamming-
+                Korrektur und Decision Margin) und OpenCV <code>ArucoDetector</code> als
+                Rückfall und für die Kalibrierung.</li>
+            <li><b>Durchsatz auf dem Pi Zero 2 W:</b> 29 fps bei 640×480 inklusive
+                Bildaufnahme; im 30-Sekunden-Lauf am Aufbau 877 ausgewertete Bilder.</li>
+            <li><b>Auslösung:</b> Drei aufeinanderfolgende frische Erkennungen ohne
+                Hamming-Korrektur und mit Decision Margin ≥ 30. Der Servo hängt direkt am
+                Pi (BCM 12), und die Halterung öffnet <b>genau einmal pro Lauf</b>.</li>
+            <li><b>Auch im Flug benutzbar:</b> am Boden, vor dem Armieren oder während
+                eines manuell geflogenen Fluges — die Aufzeichnung sendet selbst keinen
+                Armier-, Modus- oder Motorbefehl.</li>
+            <li><b>Ohne Kalibrierung keine Entfernung:</b> Die Software meldet dann
+                bewusst nur IDs und Eckpunkte statt einer erfundenen Distanz.</li>
           </ul>
-          <p class="fussnote">
-            Verifiziert am Boden und handgeführt — nicht im autonomen Flug.
-          </p>
+          <p class="fussnote">Verifiziert am Boden und handgeführt — nicht im autonomen Flug.</p>
         </div>
       </section>
 
@@ -481,19 +495,19 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
         <h2>Rahmen &amp; 3D-Druck</h2>
         <p>
           Die Rahmenerweiterung trägt Sensor, Servo, Pi und Kamera. Jedes Teil liegt
-          zweifach im Repository: als <b>STL</b> (die Geometrie, für jeden Slicer) und als
-          <b>3MF</b> mit den Einstellungen, mit denen tatsächlich gedruckt wurde.
+          zweifach im Repository: als <b>STL</b> (Geometrie) und als <b>3MF</b> mit den
+          Einstellungen, mit denen gedruckt wurde.
         </p>
         <ul>
           <li><b>Pi-Gehäuse</b> in PETG, 37,6 × 72,6 × 13,4 mm, Stützen sind Teil des
               Modells statt vom Slicer erzeugt.</li>
           <li><b>Weiche Rahmenteile</b> (vorn, hinten, 2 × seitlich) in TPU&nbsp;95A. Sie
-              sind bewusst flexibel: sie dämpfen Schwingungen, und genau davon hängen
-              optischer Fluss und die Zustandsschätzung ab — in starrem Filament gedruckt
-              sind sie kein Ersatz.</li>
+              dämpfen Schwingungen, und genau davon hängen optischer Fluss und die
+              Zustandsschätzung ab — starres Filament ist kein Ersatz.</li>
           <li><b>Servohalter</b> für den 9g-Servo, Stellbereich 900–2100&nbsp;µs, Neutral
               1500&nbsp;µs; Anlaufstrom bis 1,6&nbsp;A über den geregelten 5-V-Zweig.</li>
-          <li>Gedruckt auf einer Prusa XL, 0,4-mm-Düse, 0,20&nbsp;mm Schichthöhe, 30 % Infill.</li>
+          <li>Prusa XL, 0,4-mm-Düse, 0,20&nbsp;mm Schichthöhe, 30 % Infill; von den weichen
+              Teilen gibt es inzwischen eine überarbeitete zweite Fassung.</li>
         </ul>
       </section>
 
@@ -505,8 +519,8 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
             <tr><td>Protokoll</td><td>MAVLink 2 (pymavlink, MAVProxy)</td></tr>
             <tr><td>Companion</td><td>Raspberry Pi OS · Python 3.13 · uv</td></tr>
             <tr><td>Erkennung</td><td>AprilTag 3 · OpenCV ArUco (36h11)</td></tr>
+            <tr><td>Werkzeuge</td><td>drone-check · -inspect · -walk · -mount</td></tr>
             <tr><td>Qualität</td><td>ruff · ty · pytest · import-linter</td></tr>
-            <tr><td>CAD / Druck</td><td>Tinkercad · PrusaSlicer · PETG / TPU 95A</td></tr>
           </table>
         </div>
       </section>
@@ -519,16 +533,14 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
       <section>
         <h2>Flugversuche</h2>
         <p>
-          Der vollständig autonome Flug wurde <b>nicht erreicht</b>. Die Versuche sind
-          trotzdem das lehrreichste Ergebnis der Arbeit — jeder ist über Telemetrie und
-          Dataflash-Log ausgewertet.
+          Der vollständig autonome Flug wurde <b>nicht erreicht</b>. Die Versuche vom
+          20./21. August sind trotzdem das lehrreichste Ergebnis — jeder ist über
+          Telemetrie und Dataflash-Log ausgewertet.
         </p>
         <table class="chronik">
           <tr>
             <td>20.08.</td>
-            <td><b>Erster Flug überhaupt.</b> Stieg über die befohlene Höhe hinaus und
-                blieb oben; die Drohne hing an einer Leine und wurde durch Abziehen des
-                Akkus gestoppt.</td>
+            <td><b>Erster Flug überhaupt.</b> Stieg über die befohlene Höhe hinaus und blieb oben; gestoppt durch Abziehen des Akkus, die Drohne hing an einer Leine.</td>
           </tr>
           <tr>
             <td>21.08.<br><span>vormittags</span></td>
@@ -600,19 +612,18 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
       </section>
 
       <section>
-        <h2>Was die Simulation leistet</h2>
+        <h2>Absicherung vor dem Flug</h2>
         <p>
-          Jeder Flugbefehl lässt sich gegen ein simuliertes Fahrzeug proben
-          (<code>drone-rehearse</code>), in das <b>11 Fehlerbilder</b> injiziert werden
-          können — verweigertes Armieren, weglaufende Höhe, Batterieeinbruch, veraltete
-          Telemetrie, Heartbeat-Verlust, divergierender EKF. Der Unfall vom 21.08. ist als
-          Fehlerbild nachgebaut, dazu über 500 Offline-Tests.
+          Geprobt wird gegen <b>echte ArduPilot-SITL</b>, gebaut aus genau dem Commit, der
+          auch auf der Drohne liegt. Drei Szenarien laufen durch: Schweben auf optischem
+          Fluss, Koexistenz beider Abstandssensoren, und Verlust der Bodenstation mit
+          Landung und Entwaffnung. Dazu über <b>800 Offline-Tests</b>.
         </p>
         <p class="merksatz">
-          Und die eigentliche Lehre: Der Simulator enthielt <b>dieselbe falsche Annahme
-          über die Schubkennlinie</b> wie der Flugcode. Eine Probe gegen ihn konnte den
-          Fehler deshalb prinzipiell nicht finden — eine Simulation prüft Code gegen
-          Annahmen, nicht Annahmen gegen die Wirklichkeit.
+          Warum nicht mehr der eigene Simulator: Der enthielt <b>dieselbe falsche Annahme
+          über die Schubkennlinie</b> wie der Flugcode und konnte den Fehler deshalb
+          prinzipiell nicht finden. Eine Simulation prüft Code gegen Annahmen — nicht
+          Annahmen gegen die Wirklichkeit.
         </p>
       </section>
 
@@ -624,14 +635,13 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
                 wird entwaffnet statt gelandet.</li>
             <li>Ein Flug gilt erst als begonnen, wenn die Drohne <b>abgehoben ist</b> —
                 vorher ist ein Fehler kein Notfall in der Luft.</li>
-            <li>Vor dem Armieren muss die Vertikalschätzung <b>3 s ruhig</b> sein
-                (±0,10 m/s); gemeldete Steigrate und Rangefinder werden laufend verglichen.</li>
-            <li>Jeder Abbau prüft den Disarm und erzwingt ihn, wenn ein frischer
-                Rangefinder die Drohne am Boden hält.</li>
-            <li>Bricht die WLAN-Verbindung ab, beendet das den Flug geordnet, statt ihn
-                sich selbst zu überlassen.</li>
-            <li>Vorflugprüfungen nie abschalten: erlaubt sind nur „alle“ oder „alle außer
-                GPS“ — und geprüft werden Werte, nicht nur Statusbits.</li>
+            <li>Vor dem Armieren muss die Vertikalschätzung <b>3 s ruhig</b> sein; Steigrate
+                und Rangefinder werden laufend gegeneinander geprüft.</li>
+            <li>Jeder Abbau prüft den Disarm und erzwingt ihn am Boden; bricht die
+                Verbindung ab, beendet das den Flug geordnet.</li>
+            <li>Vorflugprüfungen nie abschalten. Copter 4.7 dreht die Logik um:
+                <code>ARMING_SKIPCHK=0</code> heißt, dass keine Prüfung übersprungen
+                wird — und geprüft werden Werte, nicht nur Statusbits.</li>
           </ul>
         </div>
       </section>
@@ -639,13 +649,15 @@ footer code{ background:rgba(255,255,255,.14); color:#fff; font-size:4.6mm; }
       <section>
         <h2>Stand &amp; Ausblick</h2>
         <ul>
-          <li><b>Erreicht:</b> ArduPilot in Betrieb, GPS-freie Sensorik verifiziert,
-              Pi angebunden, AprilTag-Erkennung und der davon ausgelöste Abwurf.</li>
-          <li><b>Offen:</b> die autonome Mission im Flug — Suchen, Anfliegen, Zentrieren,
-              Abwerfen.</li>
-          <li><b>Nächste Schritte:</b> den Beschleunigungs-Offset mechanisch beseitigen
-              (der Motortest misst ihn), Geofence und Failsafes fahrzeugseitig aktivieren,
-              Kamera starr montieren und kalibrieren — dann gefesselte Tests.</li>
+          <li><b>Erreicht:</b> eigene Firmware mit Flussfusion, Sensorik nach unten und nach
+              vorn in Betrieb, AprilTag-Erkennung und die davon ausgelöste Nutzlast-Freigabe.</li>
+          <li><b>Der Blocker:</b> <code>PreArm: Check mag field</code> — das Z-Feld weicht um
+              rund <b>295 mG</b> gegen eine 200-mG-Schwelle ab. Die Drohne ist damit
+              <b>nicht für Tests mit Propellern freigegeben</b>. Die Prüfung wird nicht
+              umgangen, sondern die Ursache gesucht.</li>
+          <li><b>Offen:</b> der erste Flug unter der neuen Firmware und die autonome
+              Mission. Und eine Grenze bleibt: ein Abstandswert nach vorn ist noch keine
+              Hindernisvermeidung — die Firmware bringt keine Proximity-Unterstützung mit.</li>
         </ul>
       </section>
 
