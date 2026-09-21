@@ -1540,6 +1540,55 @@ def test_lifecycle_attempts_all_cleanup_before_finalization(tmp_path, monkeypatc
     assert len(manifest["errors"]) == 10
 
 
+def test_failed_camera_startup_retains_workers_and_failed_close_for_final_retry(
+    tmp_path, monkeypatch
+):
+    args = _parser().parse_args(["--output-dir", str(tmp_path / "failed-start")])
+    recording = inspect_cli._recording(args, "inspect")
+    calls = []
+
+    def camera_close():
+        calls.append("camera-close")
+        if calls.count("camera-close") == 1:
+            raise OSError("camera close failed")
+
+    def servo_close():
+        calls.append("servo-close")
+        if calls.count("servo-close") == 1:
+            raise OSError("servo close failed")
+
+    camera = SimpleNamespace(close=camera_close)
+    servo = SimpleNamespace(close=servo_close)
+    worker = SimpleNamespace(ident=1)
+    recording.camera.device = camera
+    recording.camera.worker = cast(Any, worker)
+    recording.servo_session = servo
+    monkeypatch.setattr(
+        inspect_cli,
+        "_stop_detection_worker",
+        lambda value, *_: (
+            calls.append("join-worker")
+            if value is worker
+            else pytest.fail("lost worker")
+        ),
+    )
+    with inspect_cli._recording_lifecycle(recording):
+        inspect_cli._camera_startup_failed(recording, RuntimeError("partial start"))
+        assert recording.camera.device is camera
+        assert recording.camera.worker is worker
+        assert recording.servo_session is servo
+        assert recording.camera.status == "unavailable"
+    assert calls == [
+        "servo-close",
+        "camera-close",
+        "servo-close",
+        "camera-close",
+        "join-worker",
+    ]
+    assert "servo close failed" in recording.state.errors[0]
+    assert "camera close failed" in recording.state.errors[1]
+
+
 def test_capture_snapshot_freezes_each_concurrent_first_seen_key():
     state = CaptureState()
     boundary = threading.Barrier(2, timeout=2)

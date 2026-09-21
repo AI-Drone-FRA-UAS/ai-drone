@@ -349,13 +349,15 @@ def _cleanup_action(
     state: CaptureState,
     label: str,
     action: Callable[[], object],
-) -> None:
+) -> bool:
     """Run one cleanup action without skipping any later cleanup."""
 
     try:
         action()
     except BaseException as error:
         state.record_error(f"{label}: {error}")
+        return False
+    return True
 
 
 def _cleanup_camera(
@@ -365,7 +367,7 @@ def _cleanup_camera(
     *,
     camera_started: bool,
     encoder_started: bool,
-) -> None:
+) -> bool:
     if encoder_started and camera is not None and encoder is not None:
         _cleanup_action(
             state,
@@ -375,7 +377,8 @@ def _cleanup_camera(
     if camera_started and camera is not None:
         _cleanup_action(state, "stop camera", lambda: camera.stop())
     if camera is not None:
-        _cleanup_action(state, "close camera", lambda: camera.close())
+        return _cleanup_action(state, "close camera", lambda: camera.close())
+    return True
 
 
 def _join_telemetry_worker(worker: TelemetryWorker, timeout: float = 2.0) -> None:
@@ -1227,13 +1230,14 @@ def _camera_startup_failed(recording: _Recording, error: Exception) -> None:
         recording.state.set_stop_reason("startup_failed")
         recording.stop.set()
     if recording.servo_session is not None:
-        _cleanup_action(
+        closed = _cleanup_action(
             recording.state,
             "close failed payload servo session",
             recording.servo_session.close,
         )
-        recording.servo_session = None
-    _cleanup_camera(
+        if closed:
+            recording.servo_session = None
+    camera_closed = _cleanup_camera(
         camera.device,
         camera.encoder,
         recording.state,
@@ -1241,11 +1245,16 @@ def _camera_startup_failed(recording: _Recording, error: Exception) -> None:
         encoder_started=camera.encoder_started,
     )
     recording.camera = _CameraCapture(
+        device=None if camera_closed else camera.device,
+        encoder=None if camera_closed else camera.encoder,
+        started=camera.started and not camera_closed,
+        encoder_started=camera.encoder_started and not camera_closed,
         cv2=camera.cv2,
         numpy=camera.numpy,
         detector=camera.detector,
         detector_status=camera.detector_status,
         calibration=camera.calibration,
+        worker=camera.worker,
         server=camera.server,
         push_stream_frame=camera.push_stream_frame,
         first_frame=camera.first_frame,
@@ -1444,7 +1453,7 @@ def _capture_loop(recording: _Recording, deadline: float | None) -> None:
                 ),
             )
             next_status = now + 1.0
-        if recording.camera.device is None:
+        if recording.camera.status != "ok":
             wait_time = 0.1 if deadline is None else min(0.1, max(0.0, deadline - now))
             recording.stop.wait(wait_time)
             continue
