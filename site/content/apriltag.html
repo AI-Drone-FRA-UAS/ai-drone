@@ -98,6 +98,30 @@
     <p>Eine metrische Tag-Pose benötigt gemessene Taggröße und eine passende
       Kamerakalibrierung. Eine gewählte Beispielgröße ersetzt keine Messung.</p>
 
+    <h2 id="mount"><a class="anker" href="#mount" aria-hidden="true">#</a>Der gepflegte Weg: Aufzeichnung mit einmaliger Freigabe</h2>
+
+    <p>
+      Seit Mitte September gibt es dafür ein eigenes Skript auf dem Pi. Es zeichnet den
+      vollständigen Sensor- und Kameradatensatz auf und öffnet dabei die
+      Nutzlast-Halterung, wenn Tag <b>ID 3</b> erkannt wird:
+    </p>
+
+    <pre><code>uv run --locked --group raspi python scripts/tag_mount_capture.py</code></pre>
+
+    <ul>
+      <li>Ausgelöst wird nach <b>drei aufeinanderfolgenden frischen Erkennungen</b> ohne
+        Hamming-Korrektur und mit Decision Margin von mindestens 30.</li>
+      <li>Die Halterung öffnet <b>einmal pro Lauf</b> — dieselbe Stellung wie
+        <code>drone-mount open</code>, danach wird das PWM-Signal abgekoppelt. Es gibt kein
+        automatisches Schließen; die Ausgangsstellung setzt vorher
+        <code>drone-mount close</code>.</li>
+      <li>Der Lauf funktioniert <b>disarmiert, vor dem Armieren und während eines manuell
+        geflogenen Fluges</b>. Er sendet selbst keinen Armier-, Modus-, Motor-, RC- oder
+        Missionsbefehl und rührt keinen Servo-Ausgang des Flight Controllers an.</li>
+      <li>Der Servo hat keine Positionsrückmeldung: Protokolliert wird das <i>gesendete</i>
+        Kommando, nicht die tatsächliche Stellung der Mechanik.</li>
+    </ul>
+
     <h2 id="grenzen"><a class="anker" href="#grenzen" aria-hidden="true">#</a>Grenzen, die bewusst so bleiben</h2>
 
     <ul>
@@ -108,9 +132,11 @@
       <li><b>Die Kamera muss starr sitzen</b> und nach unten schauen (Nadir), mit
         entlastetem Flachbandkabel und fixiertem Fokus. Solange sie das nicht tut, ist
         jede Posenangabe wertlos.</li>
-      <li><b>Ein nach unten gerichteter Aufbau sieht keine Hindernisse.</b> Der LiDAR
-        misst Höhe, der optische Fluss Geschwindigkeit, die Kamera den Boden — nichts
-        davon sieht eine Wand voraus.</li>
+      <li><b>Ein Abstandswert nach vorn ist keine Hindernisvermeidung.</b> Seit dem
+        9. September misst ein vorderer MT-15 zuverlässig mit rund 52 Hz, aber die
+        Firmware bringt keine Proximity-Unterstützung mit: Der Wert wird gemessen und
+        angezeigt, nicht geflogen. LiDAR misst Höhe, optischer Fluss Geschwindigkeit,
+        die Kamera den Boden.</li>
     </ul>
 
     <div class="seiten-fuss">
