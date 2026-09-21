@@ -12,9 +12,15 @@ from typing import Any
 from ai_drone.durability import atomic_write_text
 from ai_drone.mavlink.shared import SharedMavlink
 from ai_drone.network import (
+    Activating,
     Activation,
+    Deactivating,
+    Idle,
+    LinkState,
     NetworkAttempt,
+    NetworkJob,
     NetworkSnapshot,
+    NetworkWork,
     begin_activation,
     choose_network,
     fresh_disarmed,
@@ -58,13 +64,12 @@ class VehicleAccess:
         self.operator = OperatorMonitor(settings.operator)
         self.server: Any = None
         self.human_requested = False
-        self.link = (None, False, False)
+        self.link = LinkState()
         self.link_observed = 0.0
         self.started = time.monotonic()
         self.profiles = ()
         self.attempts: list[NetworkAttempt] = []
-        self.activation: Activation | None = None
-        self.deactivation: Activation | None = None
+        self.network_job: NetworkJob = Idle()
         self.requests: queue.Queue[list[str]] = queue.Queue(maxsize=1)
         self.network_error: str | None = None
         self._publish_error: Exception | None = None
@@ -170,17 +175,22 @@ class VehicleAccess:
         self.attempts = self.attempts[-max(8, len(self.profiles) * 2) :]
         # A timed-out submit or a failed post-submit check can still leave NM
         # switching radios. Retain the lease until a fresh poll settles it.
-        self.activation = Activation(profile.uuid, started)
-        self.activation = begin_activation(
-            profile, self.network_snapshot, explicit_hotspot=explicit_hotspot
+        self.network_job = Activating(Activation(profile.uuid, started))
+        self.network_job = Activating(
+            begin_activation(
+                profile, self.network_snapshot, explicit_hotspot=explicit_hotspot
+            )
+        )
+
+    def network_work(self) -> NetworkWork:
+        return NetworkWork(
+            self.network_job,
+            not self.requests.empty(),
+            bool(self.server and self.server.is_maintenance),
         )
 
     def _release_network_if_idle(self) -> None:
-        if (
-            self.activation is None
-            and self.deactivation is None
-            and self.requests.empty()
-        ):
+        if not self.network_work().effects_pending:
             self.server.set_network_busy(False)
 
     def _manual(self, action: list[str]) -> None:
@@ -200,7 +210,9 @@ class VehicleAccess:
                     None,
                 )
                 if active and active.mode == "ap":
-                    self.deactivation = Activation(active.uuid, time.monotonic())
+                    self.network_job = Deactivating(
+                        Activation(active.uuid, time.monotonic())
+                    )
                     run_nmcli(
                         ["--wait", "0", "connection", "down", "uuid", active.uuid]
                     )
@@ -223,24 +235,26 @@ class VehicleAccess:
 
     def _poll_network_change(self, now: float) -> bool:
         """Finish an outstanding activation/disconnection before admitting new work."""
-        if self.deactivation is not None:
-            pending = self.deactivation
+        if isinstance(self.network_job, Deactivating):
+            pending = self.network_job.operation
             if not self.link[2] and (
                 not self.link[1] or self.link[0] != pending.profile_uuid
             ):
-                self.deactivation = None
+                self.network_job = Idle()
                 self.network_error = None
                 self._release_network_if_idle()
             elif now - pending.started_at >= pending.timeout_s:
                 self.network_error = "hotspot disconnection timed out"
                 if not self.link[2]:
-                    self.deactivation = None
+                    self.network_job = Idle()
                     self._release_network_if_idle()
             return True
-        if self.activation is not None:
-            outcome = poll_activation(self.activation, self.network_snapshot(), now=now)
+        if isinstance(self.network_job, Activating):
+            outcome = poll_activation(
+                self.network_job.operation, self.network_snapshot(), now=now
+            )
             if outcome != "pending":
-                self.activation = None
+                self.network_job = Idle()
                 self._release_network_if_idle()
                 self.network_error = (
                     None if outcome == "connected" else f"network activation {outcome}"
@@ -249,7 +263,7 @@ class VehicleAccess:
         return False
 
     def network_tick(self, now: float) -> None:
-        if self.server.is_maintenance:
+        if self.network_work().blocked:
             return
         self.link = read_link()
         self.link_observed = time.monotonic()
@@ -307,11 +321,7 @@ class VehicleAccess:
                 Path(runtime.socket),
                 self.hub,
                 self.request,
-                network_busy=lambda: (
-                    self.activation is not None
-                    or self.deactivation is not None
-                    or not self.requests.empty()
-                ),
+                network_busy=lambda: self.network_work().effects_pending,
             ) as server:
                 self.server = server
                 publisher = threading.Thread(

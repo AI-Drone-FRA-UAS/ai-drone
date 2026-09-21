@@ -11,7 +11,14 @@ from typing import Any
 import pytest
 
 from ai_drone import network, runtime
-from ai_drone.network import Activation, NetworkAttempt, WifiProfile
+from ai_drone.network import (
+    Activating,
+    Activation,
+    Deactivating,
+    Idle,
+    NetworkAttempt,
+    WifiProfile,
+)
 from ai_drone.settings import OperatorSettings, RuntimeSettings, Settings
 
 EDUROAM = "11111111-1111-4111-8111-111111111111"
@@ -227,7 +234,7 @@ def test_manual_request_is_queued_with_lease_then_runs_after_requester_returns(a
     assert not access.mutations
     access.network_tick(time.monotonic())
     assert access.mutations == [(PHONE, {"explicit_hotspot": False})]
-    assert access.activation is not None
+    assert isinstance(access.network_job, Activating)
     assert access.server.is_network_busy
 
 
@@ -259,9 +266,9 @@ def test_failed_activation_retains_lease_until_next_terminal_nm_observation(
     with pytest.raises(RuntimeError, match="FC became stale"):
         access.network_tick(time.monotonic())
     assert access.server.is_network_busy
-    assert access.activation is not None
+    assert isinstance(access.network_job, Activating)
     access.network_tick(time.monotonic())
-    assert not access.server.is_network_busy and access.activation is None
+    assert not access.server.is_network_busy and isinstance(access.network_job, Idle)
 
 
 def test_immediate_preferred_profile_failure_does_not_starve_fallback(
@@ -305,14 +312,16 @@ def test_hotspot_off_retains_lease_until_asynchronous_disconnect_finishes(access
     access.request({"network": ["hotspot", "off"]})
     access.network_tick(time.monotonic())
     assert access.mutations == [["--wait", "0", "connection", "down", "uuid", HOTSPOT]]
-    assert access.server.is_network_busy and access.deactivation is not None
+    assert access.server.is_network_busy and isinstance(
+        access.network_job, Deactivating
+    )
     assert not access.attempts
     access.link = (HOTSPOT, False, True)
     access.network_tick(time.monotonic())
     assert access.server.is_network_busy
     access.link = (None, False, False)
     access.network_tick(time.monotonic())
-    assert not access.server.is_network_busy and access.deactivation is None
+    assert not access.server.is_network_busy and isinstance(access.network_job, Idle)
 
 
 @pytest.mark.parametrize("failure", ["up_timeout", "post_submit_inhibit"])
@@ -340,13 +349,13 @@ def test_activation_with_uncertain_outcome_keeps_control_blocked_until_settled(
     with pytest.raises(RuntimeError):
         access.network_tick(time.monotonic())
     assert any("up" in command for command in commands)
-    assert access.server.is_network_busy and access.activation is not None
+    assert access.server.is_network_busy and isinstance(access.network_job, Activating)
     access.link = (PHONE, False, True)
     access.network_tick(time.monotonic())
     assert access.server.is_network_busy
     access.link = (PHONE, True, False)
     access.network_tick(time.monotonic())
-    assert not access.server.is_network_busy and access.activation is None
+    assert not access.server.is_network_busy and isinstance(access.network_job, Idle)
 
 
 def test_failed_hotspot_down_keeps_lease_and_unknown_nm_state_cannot_release_it(
@@ -361,7 +370,9 @@ def test_failed_hotspot_down_keeps_lease_and_unknown_nm_state_cannot_release_it(
     monkeypatch.setattr(runtime, "run_nmcli", failure)
     with pytest.raises(RuntimeError):
         access.network_tick(time.monotonic())
-    assert access.deactivation is not None and access.server.is_network_busy
+    assert (
+        isinstance(access.network_job, Deactivating) and access.server.is_network_busy
+    )
     monkeypatch.setattr(runtime, "read_link", failure)
     with pytest.raises(RuntimeError):
         access.network_tick(time.monotonic() + 100)
@@ -374,7 +385,7 @@ def test_hotspot_off_timeout_releases_only_after_a_known_terminal_state(
     access, transitioning
 ):
     now = time.monotonic()
-    access.deactivation = Activation(HOTSPOT, now - 50)
+    access.network_job = Deactivating(Activation(HOTSPOT, now - 50))
     access.server.is_network_busy = True
     access.link = (HOTSPOT, not transitioning, transitioning)
     access.network_tick(now)
@@ -402,16 +413,38 @@ def test_hotspot_off_rechecks_control_lease_before_execution(access):
 def test_terminal_activation_preserves_lease_for_an_already_queued_request(
     access, monkeypatch
 ):
-    access.activation = Activation(PHONE, time.monotonic())
+    access.network_job = Activating(Activation(PHONE, time.monotonic()))
     access.server.is_network_busy = True
     access.request({"network": ["hotspot", "on"]})
     monkeypatch.setattr(
         runtime, "poll_activation", lambda *_args, **_kwargs: "connected"
     )
     access.network_tick(time.monotonic())
-    assert access.activation is None
+    assert isinstance(access.network_job, Idle)
     assert access.server.is_network_busy
     assert not access.requests.empty()
+
+
+@pytest.mark.parametrize("pending", [False, True])
+@pytest.mark.parametrize("maintenance", [False, True])
+@pytest.mark.parametrize(
+    "job",
+    [Idle(), Activating(Activation(PHONE, 1)), Deactivating(Activation(HOTSPOT, 1))],
+)
+def test_network_lease_accounts_for_jobs_queue_and_separate_maintenance(
+    access, pending, maintenance, job
+):
+    access.network_job = job
+    access.server.is_maintenance = maintenance
+    access.server.is_network_busy = True
+    if pending:
+        access.requests.put_nowait(["connect", "phone"])
+    access._release_network_if_idle()
+    assert access.server.is_network_busy is (pending or not isinstance(job, Idle))
+    if maintenance:
+        access.network_tick(10)
+        assert access.network_job == job
+        assert not access.mutations
 
 
 def test_grounded_recording_without_a_control_lease_allows_failover(access):
@@ -456,12 +489,12 @@ def test_previously_seen_operator_loss_does_not_get_a_new_boot_grace(access):
 def test_pending_activation_keeps_lease_until_a_terminal_result(
     access, monkeypatch, outcome
 ):
-    access.activation = Activation(PHONE, time.monotonic())
+    access.network_job = Activating(Activation(PHONE, time.monotonic()))
     access.server.is_network_busy = True
     monkeypatch.setattr(runtime, "poll_activation", lambda *_args, **_kwargs: outcome)
     access.network_tick(time.monotonic())
     assert access.server.is_network_busy is (outcome == "pending")
-    assert (access.activation is not None) is (outcome == "pending")
+    assert (isinstance(access.network_job, Activating)) is (outcome == "pending")
     if outcome in {"failed", "cancelled"}:
         assert outcome in access.network_error
 

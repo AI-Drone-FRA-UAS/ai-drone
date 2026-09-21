@@ -12,7 +12,7 @@ import subprocess
 import time
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 from uuid import UUID
 
 
@@ -56,6 +56,53 @@ class Activation:
     profile_uuid: str
     started_at: float
     timeout_s: float = 45
+
+
+class LinkState(NamedTuple):
+    profile_uuid: str | None = None
+    connected: bool = False
+    transitioning: bool = False
+
+
+@dataclass(frozen=True)
+class Idle:
+    pass
+
+
+@dataclass(frozen=True)
+class Activating:
+    operation: Activation
+
+
+@dataclass(frozen=True)
+class Deactivating:
+    operation: Activation
+
+
+NetworkJob = Idle | Activating | Deactivating
+
+
+@dataclass(frozen=True)
+class NetworkWork:
+    """Outstanding effects, queued intent and maintenance are independent facts.
+
+    An uncertain submit remains an outstanding job until NetworkManager supplies
+    a terminal observation. Maintenance blocks new work but cannot erase a job.
+    The server separately serializes maintenance and control acquisition with
+    its lease; this value never replaces that atomic owner.
+    """
+
+    job: NetworkJob
+    request_pending: bool
+    maintenance: bool
+
+    @property
+    def effects_pending(self) -> bool:
+        return not isinstance(self.job, Idle) or self.request_pending
+
+    @property
+    def blocked(self) -> bool:
+        return self.maintenance
 
 
 @dataclass(frozen=True)
@@ -302,9 +349,7 @@ def read_profiles(
     return tuple(profiles)
 
 
-def read_link(
-    interface: str = "wlan0", *, run: Runner = run_nmcli
-) -> tuple[str | None, bool, bool]:
+def read_link(interface: str = "wlan0", *, run: Runner = run_nmcli) -> LinkState:
     """Return profile UUID, connected, and activation-in-progress."""
     values = _properties(
         run(
@@ -324,7 +369,7 @@ def read_link(
     if state not in range(10, 121, 10):
         raise RuntimeError("NetworkManager Wi-Fi state is unknown")
     identifier = values.get("GENERAL.CON-UUID", "")
-    return (
+    return LinkState(
         _uuid(identifier) if identifier not in {"", "--"} else None,
         state == 100,
         40 <= state < 100 or state == 110,
