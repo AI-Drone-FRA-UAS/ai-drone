@@ -7,6 +7,10 @@ never grants that authorization.
 
 ## Before any deployment or flight qualification
 
+- [ ] Re-establish SSH and inspect/stop only the separate candidate compiler if
+  still running. The native build exhausted swap; targeted cleanup could not be
+  confirmed after connectivity failed. Obtain fresh read-only disarmed FC proof
+  before any further hardware check. Preserve its logs and working environment.
 - [ ] Preserve a fresh complete restoration capture for this aircraft: Pi source,
   selected interpreter/native environment, system/service/network configuration,
   FC image/identity, full parameters, mission, fence and rally state. The current
@@ -15,12 +19,15 @@ never grants that authorization.
   transaction. Live service installation, restart, failover and rollback were not
   executed. Confirm the new shared runtime's normal read-only status and hardware
   exclusion on the actual Pi after a separately authorized deployment.
-- [ ] Resolve the unchanged battery minimum: the live checker measured 14.17 V
-  against 14.4 V, and later passive probes were lower. No flight-readiness claim
-  follows from the other healthy bits.
+- [ ] Repeat the unchanged battery/health gate before future operations. The
+  earlier checker failed at 14.17 V against 14.4 V; the final-source disarmed
+  checker passed at 15.732 V, with no errors/warnings. That observation alone
+  is not flight clearance or a substitute for fresh operational checks.
 - [ ] Verify the installed linked firmware features against the reviewed 4.7.1
-  artifact and ROMFS. Version/hash strings alone are insufficient. The current
-  host SITL binary is a separate target. Reboot-separated readback remains a
+  artifact and ROMFS. One complete closing 35,238-byte ROMFS file exactly matched
+  the reviewed hw.dat hash, despite a client cleanup assertion after file save.
+  Version strings alone are insufficient, and the host SITL is a separate target.
+  Reboot-separated readback remains a
   distinct gate; no FC reboot/flash/parameter writes were performed in this task.
 - [ ] Keep the working Pi Python 3.13 environment selected until the separate
   3.14 native ABI and acquisition gates pass. See the candidate report for the
@@ -44,12 +51,14 @@ never grants that authorization.
   texture/lighting limits under hand motion. The grounded fixed-position capture
   does not demonstrate airborne optical-flow scale or hall coverage.
 - [ ] Repeat camera/tag processing with visible known tags, calibrated intrinsics
-  at the actual crop/resolution and measured camera/body extrinsics. Both current
+  at the actual crop/resolution and measured camera/body extrinsics. All three
   captures found zero tags. Pose accuracy, ambiguity rejection, calibrated
   capture latency and camera-navigation suitability remain unverified.
 - [ ] Measure sustained CPU/RSS/temperature, storage stalls/reserve behavior,
   per-direction serial throughput, delivery backlog and control timing on the
-  deployed runtime. Short passive recordings do not establish flight-load or
+  deployed runtime. Final passive UART measurement established 77,991 RX / 1,075
+  TX bytes over 19.373 s, with zero measured transport errors. Short passive
+  recordings do not establish flight-load or
   thermal-soak margins. GPIO backend compatibility must avoid actuation.
 - [ ] Qualify the checked serial-write policy under UART congestion and reconnect:
   50 ms maximum write timeout, preserved tighter settings, partial-write errors,
@@ -75,8 +84,8 @@ never grants that authorization.
   No physical confined-hall vertical-hold clearance has been demonstrated.
 - [ ] Qualify Loiter progressively at the named duration, floor/lighting and yaw
   disturbance envelope. The compass baseline does not resolve hall magnetic
-  interference: one changing-field simulator trial completed with 117.968°
-  yaw-estimate drift despite only 0.921° of true heading motion. The inertial-yaw
+  interference: the final changing-field simulator trial completed with 117.937°
+  yaw-estimate drift despite only 1.313° of true heading motion. The inertial-yaw
   profile remains simulator-only; do not copy its
   parameter delta onto the aircraft without separate review and qualification.
 - [ ] Measure hold altitude error ≤0.10 m after 2 s settling, Loiter XY movement

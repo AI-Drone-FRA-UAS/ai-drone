@@ -60,6 +60,87 @@ and CPython's [minor-version ABI contract](https://docs.python.org/3.14/c-api/st
 Installing the generic PyPI package named `apriltag` without checking its API
 would not establish compatibility with the existing native backend.
 
+## Matching inputs and actual ARM64 build attempt
+
+After SSH returned, exact matching development packages were downloaded with
+`apt-get download` and extracted using `dpkg-deb --extract` under the candidate's
+`native-build/inputs` and `native-build/sysroot`. No package was installed into
+the OS and no maintainer scripts ran. Inputs were:
+
+| Development input | Exact version |
+| --- | --- |
+| libcamera-dev | 0.7.2+rpt20260817-1 |
+| libkms++-dev | 0~git20250807.1813ada-1 |
+| libdrm-dev | 2.4.134-3~bpo13+1+rpt1 |
+| libcap-dev | 1:2.75-10+deb13u1+b1 |
+| liblgpio-dev | 0.2.2-1~rpt1+trixie |
+| libapriltag-dev | 3.4.2-1+b2 |
+
+The exact libcamera source tag resolves to
+`6c1dd9d55573010f710c9e190a73e7e76f0d9432`. The published binding wrapper's
+patch targets an older source layout and fails against this version. A separate
+minimal Meson wrapper therefore enters the unchanged matching upstream Python
+binding directory, using the extracted headers and installed library SONAMEs.
+Its locked tools include pybind11 3.1.0, Meson 1.12.0 and Ninja 1.13.2. All ten
+binding objects compiled on the x86_64 host under CPython 3.14; this does not
+establish ARM64 linkage or camera compatibility.
+
+The reviewed kit was staged as `native-build/libcamera-kit`, with build files,
+an isolated uv tools environment and relocated candidate-only pkg-config files
+under `native-build/libcamera-314`. The ARM64 build configured successfully
+against the exact installed 0.7.2 library, selected managed CPython 3.14.7 and
+started a single compiler job with O1, no debug symbols and no LTO. During its
+first C++ object, the Pi's 414 MiB swap became fully used, available RAM fell to
+48 MiB, and temperature reached 77.364 °C. No completed wheel or successful
+native import was observed.
+
+Targeted attempts to terminate only the identified candidate compiler could not
+be confirmed because SSH became unresponsive and then timed out. This temporal
+association does not prove the cause of the connectivity loss. Final compiler
+state and cleanup remain unverified until access returns. No swap change,
+system upgrade, service restart, native library replacement or candidate
+promotion was attempted. The original kit/build logs and failed stop attempts
+are retained; resource-bounded retry inputs are prepared separately for review.
+
+## Prepared bounded build inputs
+
+Local evidence includes the original libcamera kit and a separate bounded kit
+(`rpi-native-libcamera314-bounded-kit.tar.gz`, SHA-256
+`145795f5896c7c3eb46783bf89ecbc70b3611c6fdbed18396f884b46ff5e0c0b`).
+The latter uses O0, one job, GCC garbage-collection tuning, a compiler-only
+256 MiB virtual-memory/300 s CPU/wall cap and a 20-minute wheel-build deadline.
+It was not run on the Pi. A cap failure must remain a build failure; do not
+remove the cap or expand system swap automatically to force a result.
+
+A separate pyKMS kit pins upstream
+`1813adae89203e15fc60344864fc2ca0d3c75e07` and the matching development package
+hashes. `rpi-pykms-candidate-kit-r1.tar.gz` has SHA-256
+`2ce6908cfd7a5fa0ad10b7759089bb4088818b727c6aa7d5518af49e069c9dc7`.
+Its three units passed uncapped host CPython 3.14 syntax checks, but compilation
+of the first unit under the 256 MiB cap failed with out-of-memory. This is a
+recorded resource blocker, not an ARM64 compatibility pass. The kit only builds
+and inspects a wheel; it does not access DRM/camera devices or install packages.
+It was not uploaded or run on the Pi.
+
+The small-bindings kit `rpi-native-small314-kit.tar.gz` (SHA-256
+`0e39adbcf55506cc41e84623077fb13a00523e6da9c45366da31b859ae1115d6`)
+contains exact Debian/Raspberry Pi sources for AprilTag 3.4.2, python-prctl 1.8.1
+and lgpio 0.2.2, matching development-package checks, locked uv tools and a
+generated lgpio wrapper pinned to SWIG 4.3.1. SWIG 4.5.0 removed compatibility
+aliases required by this older source; the pinned generator built successfully.
+All three x86_64 extensions built and imported under standard uv CPython 3.14.6
+and NumPy 2.5.3. A generated tag17 passed the exact Debian-native dictionary
+contract and the project's real `NativeAprilTagDetector` adapter. `prctl.get_name`
+and lgpio version reads passed; no GPIO handles were opened. lgpio import creates
+a local notification FIFO/thread, which is documented for any future candidate
+smoke check. Host linkage used separately built matching AprilTag/lgpio runtimes
+and host libcap; it does not prove ARM64 compatibility. The kit was not uploaded
+or run on the Pi; it builds wheels only, sequentially, without installing them.
+
+All three kits and their source/hash/host-check evidence are retained under
+`artifacts/refactor-20260921/bundles/`. They are prepared review inputs, not a
+successful Pi native migration or an instruction to weaken resource limits.
+
 ## Selection and rollback status
 
 The 3.14 candidate is **not eligible for service selection**. Native camera/tag
@@ -72,6 +153,14 @@ runtime creation explicitly to `/usr/bin/python3.13`, checks native imports befo
 restart, and backs up source and environment together. See
 [the deployment and restoration contract](../../docs/PYTHON_RUNTIME.md).
 No live deployment transaction or service restart was executed during this work.
+
+Review also found that the previous generic environment preparation could clear
+an isolated selected 3.14 environment before the native-import failure triggered
+rollback. Commit `0cc15d9` now refuses such deployment before any environment
+rebuild or uv synchronization, preserving metadata and native files. Normal
+3.13 deployment remains supported. A future 3.14 promotion requires a reviewed
+native-wheel manifest and installation/preservation contract; the current
+deployment entry point deliberately does not select it.
 
 The candidate is separate and can remain for review. Removing it later needs no
 system-Python rollback: the working application was never switched. A future

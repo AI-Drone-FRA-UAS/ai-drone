@@ -111,7 +111,7 @@ ROMFS artifact.
 A further bounded readback attempt produced no result when SSH connectivity
 was lost. An independent SSH status request timed out. The identified task SSH
 client was terminated locally to prevent an unobserved resumed check. No fresh
-FC state can now be established, so all further hardware checks are deferred.
+FC state could then be established, so further hardware checks were deferred.
 Creation/completion of its proposed `romfs-download-complete.partial` and
 `romfs-hwdef.dat` outputs is unverified; neither may be treated as a valid readback.
 
@@ -122,6 +122,96 @@ measurement is implemented and mock-tested; earlier captures cannot establish
 actual TX totals retroactively. The metrics capture, final power snapshot and
 complete ROMFS readback remain outstanding until fresh disarmed access returns.
 
-A final bounded SSH-only `date -u; uptime` request also timed out connecting to
+A subsequent bounded SSH-only `date -u; uptime` request also timed out connecting to
 port 22 (`pi-final-connectivity-20260921.log`). It did not open the FC. No later
-successful access or fresh disarmed proof is claimed.
+successful access was claimed at that checkpoint. Access subsequently returned,
+as recorded below.
+
+## Closing reconnection and final-source passive check
+
+The Pi reconnected at 18:39 UTC. The deployed read-only power/ownership path was
+inspected again. A new probe established two disarmed heartbeats, age 0.622 s,
+and a complete ownership snapshot with no hardware users. The final source
+`f5ff571` was staged separately at
+`/home/seb/ai-drone-candidates/20260921-refactor/source-f5ff571/`.
+
+The final recorder's entry point, operation dispatch, telemetry request path and
+servo construction branch were inspected. It ran under working Python 3.13.5,
+with `operation='inspect'`, native tags, two threads, ten seconds, no flight
+permission and no servo construction. An additional sender allowlist admitted
+only COMMAND_LONG/MAV_CMD_SET_MESSAGE_INTERVAL (511); exactly 25 such requests
+were sent. Fresh read-only FC probes before/after reported four disarmed
+heartbeats, ages 0.841/0.577 s. Final battery was 15.863 V, 90%; the earlier
+low-battery checker failure remains historical evidence, not a current reading.
+
+New capture directory:
+`/home/seb/ai-drone/artifacts/refactor-passive-20260921-f5ff571/`.
+The capture completed in 10.056 s with 73 analyzed frames, 240 encoded frames,
+1,254 telemetry messages, zero tags and zero servo pulses. The exact direct UART
+meter counted **77,991 RX / 1,075 TX bytes over 19.373 s**, including startup,
+with zero receive/write/parser errors. The capture window's maximum received
+heartbeat gap was 1.369 s and delivery lag 0.0001921 s; its sequence-gap estimate
+was zero, which is not proof of zero physical packet loss. No control heartbeat
+or setpoint was transmitted. This closes the short passive physical byte-meter
+measurement, not active-control timing or sustained load qualification.
+
+The wrapper elapsed time was 24.120 s, cumulative child user/system CPU
+22.147/4.178 s, peak child RSS 113,272 KiB and final temperature 69.832 °C.
+Cumulative child CPU includes the initial ownership probe; it is not isolated
+recorder CPU. The final ownership snapshot was complete with no hardware users.
+The capture was copied locally and an offline report generated. It does not
+establish tag-recognition accuracy: all three real-camera captures found zero
+tags. Installed source, working environment and services were unchanged.
+
+## Complete closing ROMFS file and client cleanup failure
+
+A new fresh probe established four disarmed heartbeats, age 0.508 s, battery
+15.799 V. A bounded readback allowed only FTP opcodes 1/2/4/5/15 and rejected all
+other outgoing MAVLink messages; UART ownership was locked and disarm monitored.
+The client saved the complete 35,238-byte file, then failed in its internal
+TerminateSession wait: the default 5 s timeout conflicts with the adjusted 25 s
+idle threshold. The command therefore exited unsuccessfully; its traceback is
+retained rather than reported as a passing client run. Final read-only proof
+still established four disarmed heartbeats, age 0.399 s, battery 15.798 V, and
+the complete ownership snapshot was clear.
+
+The saved `/home/seb/ai-drone-candidates/20260921-refactor/romfs-hwdef-final.dat`
+was independently retrieved from the Pi filesystem. Its exact bytes and SHA-256
+`d89b4db7acd2811284c420fb79f0750661f8dfca6865bedf1725a17dfac4babe`
+match the reviewed FlywooF745 candidate `hw.dat` and manifest. The transfer also
+created `romfs-download-final.partial`; that name is retained even though the
+client reached completion. This establishes one complete installed-ROMFS match,
+alongside the separately verified saved ELF/BIN/APJ. It is not full installed
+flash-byte proof or the required reboot-separated repeat; no reboot or flash was
+performed. Local copies and failed/successful observations are preserved in the
+evidence bundle.
+
+## Final-source disarmed checker
+
+The final `f5ff571` checker passed with zero errors/warnings in 20.907 s,
+including its ten-second observation window. Its unchanged battery minimum
+was met: 15.732 V versus 14.4 V. Firmware 4.7.1 / `dbe79216` and required
+parameters matched. Downward range was 0.02 m (ID 0, orientation 25), forward
+2.06 m (ID 1, orientation 0), flow quality 63, RC channel count zero and EKF
+flags 367. Magnetic RAW_IMU values were [-124, 149, 623] in raw wire units;
+these stationary observations are not calibrated heading or a hall survey.
+
+The inspected checker ran without `--prearm`. An additional sender guard
+allowed only parameter reads, message-interval requests and version-message
+requests: 48 PARAM_REQUEST_READ, eight command 511 and two command 512 writes.
+Fresh read-only proof preceded the check; final proof reported four disarmed
+heartbeats, age 0.737 s, battery 15.730 V. The final ownership snapshot was clear.
+The earlier low-battery failure is retained; this new successful observation
+does not grant flight clearance. The JSON result is preserved locally at
+`artifacts/refactor-20260921/pi/final-f5ff571/bench-check.json`.
+
+## Native-build access loss after hardware checks
+
+The subsequent separate Python 3.14 libcamera build touched no hardware and
+issued no FC messages. It exhausted the Pi's swap during its first C++ object;
+SSH then became unresponsive. Targeted attempts to stop only the identified
+candidate compiler could not be confirmed. Its final process state and resource
+recovery remain unverified; obtain a new read-only disarmed proof before any
+further hardware checks. The last completed FC proof is the successful checker
+probe above. See the [candidate report](python-314-candidate.md) for exact inputs,
+created directories, failed attempts and bounded recovery/build preparation.
