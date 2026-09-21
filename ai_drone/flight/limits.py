@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
@@ -11,6 +12,7 @@ from ai_drone.validation import finite_in_range
 
 MAX_PHYSICAL_ALTITUDE_M = 0.8
 TAKEOFF_OVERSHOOT_RESERVE_M = 0.05
+HOLD_ALTITUDE_TOLERANCE_M = 0.10
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,48 @@ def relative_position_ready(
         and flags & required == required
         and not flags & mavlink.EKF_CONST_POS_MODE
     )
+
+
+def hold_violation(
+    floor_target_m: float | None,
+    altitude: float | None,
+    aligned_local_altitude: float | None,
+    *,
+    armed: bool,
+) -> str | None:
+    """Post-takeoff lower bound; callers supply only fresh floor-referenced data.
+
+    This initial engineering policy detects a failed hold. It is not a measured
+    physical recovery guarantee, particularly after loss of all motor thrust.
+    """
+    if not armed:
+        return "flight controller disarmed unexpectedly during the altitude hold"
+    if floor_target_m is None:
+        return "altitude hold requires a declared floor-referenced target"
+    lower = floor_target_m - HOLD_ALTITUDE_TOLERANCE_M
+    for source, value in (
+        ("downward range", altitude),
+        ("aligned local altitude", aligned_local_altitude),
+    ):
+        if (
+            value is not None
+            and value < lower
+            and not math.isclose(value, lower, rel_tol=0.0, abs_tol=1e-12)
+        ):
+            return (
+                f"{source} {value:.2f} m fell below hold lower bound {lower:.2f} m "
+                f"(floor target {floor_target_m:.2f} m minus {HOLD_ALTITUDE_TOLERANCE_M:.2f} m tolerance)"
+            )
+    return None
+
+
+def post_target_altitude(
+    sample: Sample[float] | None, reached_at: float, now: float, max_age: float
+) -> float | None:
+    """A delayed pre-target climb reading cannot prove a subsequent hold loss."""
+    if sample is None or sample.received_at < reached_at:
+        return None
+    return fresh(sample, now, max_age)
 
 
 def takeoff_ceiling_violation(

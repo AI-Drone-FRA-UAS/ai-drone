@@ -25,7 +25,7 @@ def hold_controller(monkeypatch):
         lambda seconds: clock.__setitem__(0, round(clock[0] + seconds, 6)),
     )
     drone = DroneController(device="tcp:127.0.0.1:5760")
-    drone.phase = Flight("holding_altitude", 0.05)
+    drone.phase = Flight("holding_altitude", 0.05, 0.55, 100.0)
     drone.state = VehicleState(
         heartbeat=Sample(Heartbeat(True, "GUIDED_NOGPS"), 100.0),
         altitude=Sample(0.52, 100.0),
@@ -46,7 +46,7 @@ def test_vertical_hold_sends_twenty_hz_neutral_climb_with_no_loiter_claim(
     assert len(sends) == 4
     assert all(call.args[-1] == 0.5 for call in sends)
     assert drone.flight_mode == "GUIDED_NOGPS"
-    assert drone.phase == Flight("holding_altitude", 0.05)
+    assert drone.phase == Flight("holding_altitude", 0.05, 0.55, 100.0)
     # The operation explicitly needs no relative horizontal aiding in flight.
     assert not drone.navigation_is_healthy()
     drone.connection.mav.set_mode_send.assert_not_called()

@@ -16,15 +16,18 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.flight.limits import (
-    MAX_PHYSICAL_ALTITUDE_M as MAX_PHYSICAL_ALTITUDE_M,
-)
-from ai_drone.flight.limits import (
+    HOLD_ALTITUDE_TOLERANCE_M,
     FlightEvidence,
     FlightLimits,
+    hold_violation,
+    post_target_altitude,
     relative_position_ready,
     takeoff_ceiling_violation,
     takeoff_reached,
     violation,
+)
+from ai_drone.flight.limits import (
+    MAX_PHYSICAL_ALTITUDE_M as MAX_PHYSICAL_ALTITUDE_M,
 )
 from ai_drone.flight.ownership import OwnershipPolicy, human_takeover_allowed
 from ai_drone.flight.params import (
@@ -175,6 +178,7 @@ class DroneController:
         self.phase: Phase = Unclaimed()
         self.command_attempts: deque[CommandAttempt] = deque(maxlen=256)
         self._command_sequence = 0
+        self._first_safety_failure: str | None = None
         self._command_outcomes = {"written": 0, "queued": 0, "failed": 0}
         self._command_kind_counts: dict[str, int] = {}
         self._first_command_attempts: dict[str, CommandAttempt] = {}
@@ -511,6 +515,8 @@ class DroneController:
             "profile_elapsed_s": time.monotonic() - self.profile_initialized_at,
             "altitude_hold_limit_s": self.altitude_hold_limit_s,
             "aircraft_clearance_qualified": False,
+            "hold_altitude_tolerance_m": HOLD_ALTITUDE_TOLERANCE_M,
+            "session_first_safety_failure": self._first_safety_failure,
             "arm_requested_monotonic": self._arm_requested_at,
             "arm_request_finished_monotonic": self._arm_request_finished_at,
             "arm_diagnostics": [
@@ -821,6 +827,9 @@ class DroneController:
 
     def _enforce_flight_limits(self) -> None:
         self._require_profile_time()
+        active_hold = (
+            isinstance(self.phase, Flight) and self.phase.stage != "taking_off"
+        )
         evidence = FlightEvidence(
             self.current_altitude,
             self.local_position_altitude_aligned,
@@ -835,11 +844,40 @@ class DroneController:
             self.limits,
             evidence,
             in_loiter=self.flight_mode == "LOITER",
-            require_flight_telemetry=self._ground_reference is not None,
+            require_flight_telemetry=self._ground_reference is not None or active_hold,
         )
+        if reason is None and active_hold:
+            reason = self._hold_violation()
         if reason is not None:
+            if self._first_safety_failure is None:
+                self._first_safety_failure = reason
             self.emergency_stop()
             raise FlightSafetyError(reason)
+
+    def _hold_violation(self) -> str | None:
+        assert isinstance(self.phase, Flight)
+        reached_at = self.phase.target_reached_at
+        if reached_at is None:
+            return "altitude hold requires a recorded target-reaching observation"
+        now = time.monotonic()
+        aligned = self.state.alignment
+        local = (
+            post_target_altitude(
+                aligned.local, reached_at, now, NAVIGATION_SAMPLE_MAX_AGE_S
+            )
+            if aligned is not None
+            and fresh(self.state.local_altitude, now, NAVIGATION_SAMPLE_MAX_AGE_S)
+            is not None
+            else None
+        )
+        return hold_violation(
+            self.phase.floor_target_m,
+            post_target_altitude(
+                self.state.altitude, reached_at, now, NAVIGATION_SAMPLE_MAX_AGE_S
+            ),
+            local,
+            armed=self.is_armed,
+        )
 
     def _require_profile_time(self, requested_duration: float = 0.0) -> None:
         profile = self.navigation_profile
@@ -1412,13 +1450,14 @@ class DroneController:
             self.set_mode("GUIDED_NOGPS")
         ground = self.current_altitude
         _validate_takeoff_ceiling(target, ground, self.max_altitude)
+        assert ground is not None  # required by the validated floor/pad datum
         self.state = align_altitude(
             replace(self.state, alignment=None), time.monotonic()
         )
         # Mark ownership before the first climb target leaves.  From this point
         # cleanup must LAND and never issue a force-disarm, even if no motion is
         # observed or the link fails immediately afterward.
-        self.phase = Flight("taking_off", ground)
+        self.phase = Flight("taking_off", ground, ground + target)
         started = time.monotonic()
         deadline = started + timeout
         while time.monotonic() < deadline:
@@ -1437,7 +1476,13 @@ class DroneController:
                 target=target,
             ):
                 self._send_level_climb(0.0)
-                self.phase = Flight("holding_altitude", ground)
+                assert self.state.altitude is not None
+                self.phase = Flight(
+                    "holding_altitude",
+                    ground,
+                    ground + target,
+                    self.state.altitude.received_at,
+                )
                 return
             self._send_level_climb(GUIDED_TAKEOFF_CLIMB_FRACTION)
             time.sleep(0.05)
@@ -1482,9 +1527,9 @@ class DroneController:
 
         self._require_autonomous_control()
         self._require_mission_not_landing()
-        if not self.is_armed or not self._flight_started_by_controller:
+        if not self.is_armed or not isinstance(self.phase, Flight):
             raise FlightSafetyError("Loiter transition requires a controller takeoff")
-        self.phase = Flight("awaiting_loiter", self._ground_reference)
+        self.phase = replace(self.phase, stage="awaiting_loiter")
         self.wait_for_relative_position(timeout=timeout, stable_for=stable_for)
         if not self.no_rc_input_is_confirmed():
             self.emergency_stop()
@@ -1495,7 +1540,8 @@ class DroneController:
         if not self.navigation_is_healthy():
             self.emergency_stop()
             raise FlightSafetyError("navigation became unhealthy during Loiter entry")
-        self.phase = Flight("loitering", self._ground_reference)
+        assert isinstance(self.phase, Flight)
+        self.phase = replace(self.phase, stage="loitering")
 
     def hold_loiter(self, duration: float) -> None:
         """Hold confirmed Loiter while enforcing flow, EKF, range and link gates."""
@@ -1539,7 +1585,7 @@ class DroneController:
             raise FlightSafetyError(
                 "altitude hold requires confirmed GUIDED_NOGPS mode"
             )
-        self.phase = Flight("holding_altitude", self._ground_reference)
+        self.phase = replace(self.phase, stage="holding_altitude")
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
             self.update_telemetry()

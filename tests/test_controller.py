@@ -1018,6 +1018,10 @@ def test_takeoff_uses_guided_nogps_flag_and_rangefinder_delta(monkeypatch) -> No
     assert sent == [GUIDED_TAKEOFF_CLIMB_FRACTION, 0.0]
     assert controller._ground_reference == 0.05
     assert controller._flight_started_by_controller
+    assert isinstance(controller.phase, Flight)
+    assert controller.phase.floor_target_m == pytest.approx(0.55)
+    assert controller.state.altitude is not None
+    assert controller.phase.target_reached_at == controller.state.altitude.received_at
 
 
 def test_takeoff_refuses_when_target_plus_ground_reference_exceeds_max_alt(

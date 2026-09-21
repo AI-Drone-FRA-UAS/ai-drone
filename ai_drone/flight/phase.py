@@ -28,6 +28,8 @@ Stage = Literal["taking_off", "holding_altitude", "awaiting_loiter", "loitering"
 class Flight:
     stage: Stage
     ground_reference: float | None
+    floor_target_m: float | None = None
+    target_reached_at: float | None = None
 
 
 @dataclass(frozen=True)
