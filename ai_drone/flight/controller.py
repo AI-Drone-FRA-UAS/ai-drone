@@ -1203,6 +1203,44 @@ class DroneController:
                 raise FlightSafetyError("telemetry became stale during Loiter")
             time.sleep(0.05)
 
+    def hold_altitude(self, duration: float) -> None:
+        """Bounded autonomous vertical hold in GuidedNoGPS; XY is not controlled.
+
+        Retain the takeoff pre-arm prerequisites. Once airborne, the vertical
+        operation requires range, attitude, heartbeat, battery and receiver
+        topology; loss of horizontal aiding alone does not establish a vertical
+        failure. Loiter retains its independent flow/relative-position gate.
+        """
+        self._require_autonomous_control()
+        finite_in_range(duration, "duration", minimum=0.1, maximum=30.0)
+        if not isinstance(self.phase, Flight) or not self.is_armed:
+            raise FlightSafetyError("altitude hold requires a controller takeoff")
+        if self.flight_mode != "GUIDED_NOGPS":
+            raise FlightSafetyError(
+                "altitude hold requires confirmed GUIDED_NOGPS mode"
+            )
+        self.phase = Flight("holding_altitude", self._ground_reference)
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            self.update_telemetry()
+            self._require_autonomous_control()
+            if self.flight_mode != "GUIDED_NOGPS":
+                self.emergency_stop()
+                raise FlightSafetyError(
+                    f"altitude hold left GUIDED_NOGPS mode for {self.flight_mode or 'unknown'}"
+                )
+            if not self.altitude_is_fresh() or not self.heartbeat_is_fresh():
+                self.emergency_stop()
+                raise FlightSafetyError("telemetry became stale during altitude hold")
+            try:
+                self._send_level_climb(0.0)
+            except HumanControlTaken:
+                raise
+            except Exception:
+                self.emergency_stop()
+                raise
+            time.sleep(0.05)
+
     def land(self, timeout: float = 30.0) -> None:
         self._resolve_control_ownership()
         self._require_autonomous_control()

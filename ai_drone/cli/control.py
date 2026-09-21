@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
-from typing import Any
 
 from ai_drone.flight.controller import (
     DroneController,
@@ -29,6 +28,7 @@ from ai_drone.operator import OperatorMonitor
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.runtime import operator_has_control_link, read_runtime_status
 from ai_drone.settings import load_settings
+from ai_drone.system import SignalHandler, handled_signals
 from ai_drone.validation import finite_in_range
 
 FLIGHT_CONFIRMATION = "FLIGHT_TEST_READY"
@@ -48,7 +48,12 @@ def _validate_common(args: argparse.Namespace) -> None:
             0.15,
             min(args.max_alt, MAX_AUTONOMOUS_TAKEOFF_M),
         ),
-        (args.duration, "--duration", 0.1, 3_600.0),
+        (
+            args.duration,
+            "--duration",
+            0.1,
+            30.0 if getattr(args, "command", "hover") == "altitude-hold" else 3_600.0,
+        ),
         (args.min_battery, "--min-battery", 0.0, 60.0),
         (args.navigation_timeout, "--navigation-timeout", 1.0, 60.0),
     )
@@ -122,28 +127,16 @@ def _termination_event():
     """
 
     requested = threading.Event()
-    if threading.current_thread() is not threading.main_thread():
-        yield requested
-        return
-
-    previous: dict[signal.Signals, Any] = {}
 
     def request_stop(signum: int, _frame: FrameType | None) -> None:
         logger.warning("received signal %s; requesting guarded LAND", signum)
         requested.set()
 
-    handled = [signal.SIGTERM]
-    try:
-        for handled_signal in handled:
-            previous[handled_signal] = signal.getsignal(handled_signal)
-            signal.signal(handled_signal, request_stop)
-        if hasattr(signal, "SIGHUP"):
-            previous[signal.SIGHUP] = signal.getsignal(signal.SIGHUP)
-            signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    handlers: dict[int, SignalHandler] = {signal.SIGTERM: request_stop}
+    if hasattr(signal, "SIGHUP"):
+        handlers[signal.SIGHUP] = signal.SIG_IGN
+    with handled_signals(handlers):
         yield requested
-    finally:
-        for handled_signal, old_handler in previous.items():
-            signal.signal(handled_signal, old_handler)
 
 
 @contextmanager
@@ -197,6 +190,15 @@ def _flight_session(args: argparse.Namespace):
 
 
 def cmd_hover(args: argparse.Namespace) -> int:
+    """Compatible takeoff, Loiter and LAND operation."""
+    return _run_flight(args, altitude_only=False)
+
+
+def cmd_altitude_hold(args: argparse.Namespace) -> int:
+    return _run_flight(args, altitude_only=True)
+
+
+def _run_flight(args: argparse.Namespace, *, altitude_only: bool) -> int:
     _require_flight_confirmation(args)
     with (
         _operator_link(args) as (operator_alive, human_requested),
@@ -210,10 +212,26 @@ def cmd_hover(args: argparse.Namespace) -> int:
             record.event("control_owner", owner="autonomous")
             record.event("guided_nogps_takeoff_started", target_alt_m=args.takeoff_alt)
             drone.takeoff(args.takeoff_alt)
-            record.event("loiter_acquisition_started")
-            drone.enter_loiter(timeout=args.navigation_timeout)
-            record.event("loiter_started", ekf_flags=drone.ekf_flags)
-            drone.hold_loiter(args.duration)
+            if altitude_only:
+                ground = drone._ground_reference
+                record.event(
+                    "altitude_hold_started",
+                    takeoff_gain_m=args.takeoff_alt,
+                    ground_reference_m=ground,
+                    floor_target_m=None
+                    if ground is None
+                    else ground + args.takeoff_alt,
+                    entry_altitude_m=drone.current_altitude,
+                    duration_s=args.duration,
+                    mode=drone.flight_mode,
+                    horizontal_position_hold=False,
+                )
+                drone.hold_altitude(args.duration)
+            else:
+                record.event("loiter_acquisition_started")
+                drone.enter_loiter(timeout=args.navigation_timeout)
+                record.event("loiter_started", ekf_flags=drone.ekf_flags)
+                drone.hold_loiter(args.duration)
             record.event("landing_started")
             drone.land()
             record.event("landed")
@@ -279,7 +297,7 @@ def _launch_hover(args: argparse.Namespace) -> int:
         "python",
         "-m",
         "ai_drone.cli.control",
-        "hover",
+        "altitude-hold" if args.command == "altitude-hold" else "hover",
         "--worker",
         *forwarded,
     ]
@@ -298,6 +316,30 @@ def _parser() -> argparse.ArgumentParser:
         aliases=["takeoff"],
         help="take off in GuidedNoGPS, hold no-GPS Loiter, then land",
     )
+    _flight_arguments(hover)
+    hover.set_defaults(handler=cmd_hover)
+    altitude = commands.add_parser(
+        "altitude-hold",
+        help="take off, hold altitude in GuidedNoGPS for at most 30 s, then LAND; XY may drift",
+    )
+    _flight_arguments(altitude)
+    altitude.set_defaults(handler=cmd_altitude_hold)
+
+    handoff = commands.add_parser(
+        "handoff",
+        help="request explicit handoff to a radio pilot in a confirmed pilot mode",
+    )
+
+    def _cmd_handoff(_args: argparse.Namespace) -> int:
+        runtime_request(load_settings().runtime.socket, {"human": True})
+        return 0
+
+    handoff.set_defaults(handler=_cmd_handoff)
+
+    return parser
+
+
+def _flight_arguments(hover: argparse.ArgumentParser) -> None:
     hover.add_argument("--device", help="MAVLink serial path or network endpoint")
     hover.add_argument("--baud", type=int, default=115200)
     hover.add_argument("--max-alt", type=float, default=MAX_AUTONOMOUS_CEILING_M)
@@ -323,27 +365,13 @@ def _parser() -> argparse.ArgumentParser:
         help="run here; Pi defaults to a detached service",
     )
     hover.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
-    hover.set_defaults(handler=cmd_hover)
-
-    handoff = commands.add_parser(
-        "handoff",
-        help="request explicit handoff to a radio pilot in a confirmed pilot mode",
-    )
-
-    def _cmd_handoff(_args: argparse.Namespace) -> int:
-        runtime_request(load_settings().runtime.socket, {"human": True})
-        return 0
-
-    handoff.set_defaults(handler=_cmd_handoff)
-
-    return parser
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(arguments)
     try:
-        if args.command in {"hover", "takeoff"}:
+        if args.command in {"hover", "takeoff", "altitude-hold"}:
             _validate_common(args)
             _require_flight_confirmation(args)
             if is_raspberry_pi() and not args.worker and not args.foreground:
