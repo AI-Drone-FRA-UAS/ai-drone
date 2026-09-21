@@ -627,7 +627,9 @@ def test_dependency_install_uses_uv_offline_and_preserves_pi_system_packages(
 ):
     if configured:
         _write_file(
-            tmp_path, ".venv/pyvenv.cfg", "include-system-site-packages = true\n"
+            tmp_path,
+            ".venv/pyvenv.cfg",
+            "include-system-site-packages = true\nversion_info = 3.13.5.final.0\n",
         )
     calls = []
     monkeypatch.setattr(deploy_pi.shutil, "which", lambda _: "/home/seb/.local/bin/uv")
@@ -638,7 +640,7 @@ def test_dependency_install_uses_uv_offline_and_preserves_pi_system_packages(
     )
     deploy_pi._install_local(tmp_path, offline=True)
     commands = [command for command, _kwargs in calls]
-    assert commands[-1] == [
+    assert commands[-2] == [
         "/home/seb/.local/bin/uv",
         "sync",
         "--locked",
@@ -650,18 +652,62 @@ def test_dependency_install_uses_uv_offline_and_preserves_pi_system_packages(
         "--offline",
     ]
     assert all(kwargs == {"cwd": tmp_path, "check": True} for _, kwargs in calls)
+    assert commands[-1][1:5] == ["run", "--no-project", "--no-config", "--offline"]
+    assert commands[-1][6] == str(tmp_path / ".venv/bin/python")
+    assert "Py_GIL_DISABLED" in commands[-1][-2]
+    assert "picamera2, libcamera, pykms" in commands[-1][-2]
+    assert commands[-1][-1] == "3.13"
     if configured:
-        assert len(commands) == 1
+        assert len(commands) == 2
     else:
         assert commands[0] == [
             "/home/seb/.local/bin/uv",
             "venv",
             "--clear",
             "--python",
-            "/usr/bin/python3",
+            "/usr/bin/python3.13",
             "--system-site-packages",
             ".venv",
         ]
+
+
+@pytest.mark.parametrize("version", ["3.13.5", "3.14.7", "3.13.15.final.0"])
+def test_deployment_preserves_separately_selected_interpreter(tmp_path, version):
+    _write_file(
+        tmp_path,
+        ".venv/pyvenv.cfg",
+        f"version = {version}\ninclude-system-site-packages = true\n",
+    )
+    _write_file(tmp_path, ".python-version", "3.14\n")
+    assert deploy_pi._environment_interpreter(tmp_path) == (
+        ".venv/bin/python",
+        False,
+        ".".join(version.split(".")[:2]),
+    )
+
+
+def test_environment_repair_retains_explicit_base_interpreter(tmp_path):
+    _write_file(
+        tmp_path,
+        ".venv/pyvenv.cfg",
+        "version = 3.13.5\ninclude-system-site-packages = false\n"
+        "executable = /usr/bin/python3.13\n",
+    )
+    assert deploy_pi._environment_interpreter(tmp_path) == (
+        "/usr/bin/python3.13",
+        True,
+        "3.13",
+    )
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["", "version = 3.15.0\n", "version = 3.13.5\n", "version = 3.14t.7\n"],
+)
+def test_unknown_environment_cannot_silently_change_python(tmp_path, config):
+    _write_file(tmp_path, ".venv/pyvenv.cfg", config)
+    with pytest.raises(RuntimeError, match=r"interpreter|Python"):
+        deploy_pi._environment_interpreter(tmp_path)
 
 
 def test_arming_during_backup_prevents_source_mutation(maintenance_update, monkeypatch):

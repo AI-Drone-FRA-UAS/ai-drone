@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import stat
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from ai_drone.link.deploy import (
@@ -21,6 +23,40 @@ from ai_drone.link.deploy import (
     _validate_runtime_source,
 )
 from ai_drone.runtime_status import RuntimeStatus
+from ai_drone.system import handled_signals, unit_state
+
+
+@dataclass(frozen=True)
+class Prepared:
+    restart_socket: str | None = None
+
+
+@dataclass(frozen=True)
+class Stopping:
+    restart_socket: str
+
+
+@dataclass(frozen=True)
+class BackedUp:
+    restart_socket: str | None
+
+
+@dataclass(frozen=True)
+class Installing:
+    restart_socket: str | None
+
+
+@dataclass(frozen=True)
+class Installed:
+    restart_socket: str | None
+
+
+@dataclass(frozen=True)
+class Restored:
+    restart_socket: str | None
+
+
+DeployState = Prepared | Stopping | BackedUp | Installing | Installed | Restored
 
 
 def _mutable_paths(root: Path, *, environment: bool) -> list[Path]:
@@ -71,20 +107,18 @@ def _runtime_service_state(*, timeout: float = 10) -> str:
         text=True,
         timeout=timeout,
     )
-    state = dict(
-        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
-    )
-    if state.get("LoadState") == "not-found" and result.returncode in (0, 1):
+    state = unit_state(result)
+    if state.absent:
         return "inactive"
     if (
         result.returncode
-        or state.get("LoadState") != "loaded"
-        or state.get("ActiveState") not in {"active", "inactive", "failed"}
+        or state.load != "loaded"
+        or state.active not in {"active", "inactive", "failed"}
     ):
         raise RuntimeError(
             "runtime service state is unknown or changing; refusing deploy"
         )
-    return state["ActiveState"]
+    return state.active
 
 
 def _runtime_service(action: str) -> None:
@@ -131,22 +165,50 @@ def _wait_runtime_ready(socket: str, *, timeout: float = 12) -> None:
     )
 
 
+def _environment_interpreter(project: Path) -> tuple[str, bool, str]:
+    """Preserve the installed minor version, independently of developer defaults.
+
+    New Pi installs stay on the qualified system 3.13 route. An existing 3.14
+    environment is retained only if separately prepared; deployment never selects
+    or constructs that candidate by following .python-version.
+    """
+    config = project / ".venv/pyvenv.cfg"
+    if not config.exists():
+        if (project / ".venv").exists():
+            raise RuntimeError("existing environment has no interpreter metadata")
+        return "/usr/bin/python3.13", True, "3.13"
+    values = dict(
+        (key.strip(), value.strip())
+        for line in config.read_text().splitlines()
+        if "=" in line
+        for key, value in [line.split("=", 1)]
+    )
+    version = values.get("version_info", values.get("version", ""))
+    if not re.fullmatch(r"3\.(?:11|12|13|14)\.\d+(?:\.final\.0)?", version):
+        raise RuntimeError(
+            "existing environment Python version is unknown or unsupported"
+        )
+    if values.get("include-system-site-packages") == "true":
+        return ".venv/bin/python", False, ".".join(version.split(".")[:2])
+    executable = values.get("executable", "")
+    if not Path(executable).is_absolute():
+        raise RuntimeError("existing environment base interpreter is unknown")
+    return executable, True, ".".join(version.split(".")[:2])
+
+
 def _install_local(project: Path, *, offline: bool) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv is required on the Pi")
-    config = project / ".venv/pyvenv.cfg"
-    if (
-        not config.is_file()
-        or "include-system-site-packages = true" not in config.read_text().splitlines()
-    ):
+    interpreter, rebuild, minor = _environment_interpreter(project)
+    if rebuild:
         subprocess.run(
             [
                 uv,
                 "venv",
                 "--clear",
                 "--python",
-                "/usr/bin/python3",
+                interpreter,
                 "--system-site-packages",
                 ".venv",
             ],
@@ -164,6 +226,37 @@ def _install_local(project: Path, *, offline: bool) -> None:
             "--group",
             "raspi",
             *(["--offline"] if offline else []),
+        ],
+        cwd=project,
+        check=True,
+    )
+    _validate_runtime_interpreter(project, uv, minor)
+
+
+def _validate_runtime_interpreter(project: Path, uv: str, minor: str) -> None:
+    """Import native dependencies without constructing hardware objects.
+
+    A stale CPython extension or a free-threaded candidate must fail the source
+    and environment transaction before the service can be restarted.
+    """
+    subprocess.run(
+        [
+            uv,
+            "run",
+            "--no-project",
+            "--no-config",
+            "--offline",
+            "--python",
+            str(project / ".venv/bin/python"),
+            "python",
+            "-I",
+            "-c",
+            "import sys, sysconfig; "
+            "assert sys.version_info[:2] == tuple(map(int, sys.argv[1].split('.'))); "
+            "assert not sysconfig.get_config_var('Py_GIL_DISABLED'); "
+            "import numpy, PIL, pymavlink, cv2, picamera2, libcamera, pykms, "
+            "gpiozero, lgpio, prctl, apriltag",
+            minor,
         ],
         cwd=project,
         check=True,
@@ -226,57 +319,58 @@ def _apply_staged_update(
             "insufficient free space for source/environment rollback and update"
         )
     backup = Path(tempfile.mkdtemp(prefix=".ai-drone-rollback-", dir=project.parent))
-    acquired = stop_attempted = changed = backed_up = completed = False
-    safe_to_restart = True
+    state: DeployState = Prepared()
     try:
         if runtime is not None:
             response = runtime_request(runtime["socket"], {"maintenance": True})
             if response.get("maintenance") is not True:
                 raise RuntimeError("runtime refused deployment maintenance")
-            acquired = True
-            stop_attempted = True
+            state = Stopping(runtime["socket"])
             _runtime_service("stop")
         quiet = _pi_snapshot()
         _guard_idle(quiet)
         _require_disarmed(_pi_fc(quiet))
         _copy_paths(project, backup, old_paths)
-        backed_up = True
+        state = BackedUp(state.restart_socket)
         # Copying the environment can take time; do not reuse its earlier heartbeat.
         final = _pi_snapshot()
         _guard_idle(final)
         _require_disarmed(_pi_fc(final))
-        changed = True
-        safe_to_restart = False
+        state = Installing(state.restart_socket)
         _remove_mutable(project, environment=False)
         _copy_paths(stage, project, source_paths)
         _install_local(project, offline=offline)
-        completed = True
-        safe_to_restart = True
+        state = Installed(state.restart_socket)
     except BaseException:
-        if changed and backed_up:
+        if isinstance(state, Installing):
             _remove_mutable(project, environment=True)
             _copy_paths(backup, project, _mutable_paths(backup, environment=True))
-            safe_to_restart = True
+            state = Restored(state.restart_socket)
         raise
     finally:
-        restarted = not stop_attempted
-        try:
-            if stop_attempted and safe_to_restart:
-                assert runtime is not None
-                _runtime_service("start")
-                _wait_runtime_ready(runtime["socket"])
-                restarted = True
-            if acquired and not completed:
-                # A failed stop can leave the original process alive and latched.
-                with contextlib.suppress(OSError, RuntimeError, TimeoutError):
-                    runtime_request(runtime["socket"], {"maintenance": False})
-        finally:
-            if (completed and restarted) or not changed:
-                shutil.rmtree(backup)
-            else:
-                print(
-                    f"Previous source/environment retained at {backup}", file=sys.stderr
-                )
+        _finish_deployment(state, backup)
+
+
+def _finish_deployment(state: DeployState, backup: Path) -> None:
+    from ai_drone.mavlink.remote import runtime_request
+
+    restarted = state.restart_socket is None
+    try:
+        if state.restart_socket is not None and not isinstance(state, Installing):
+            _runtime_service("start")
+            _wait_runtime_ready(state.restart_socket)
+            restarted = True
+        if state.restart_socket is not None and not isinstance(state, Installed):
+            # A failed stop can leave the original process alive and latched.
+            with contextlib.suppress(OSError, RuntimeError, TimeoutError):
+                runtime_request(state.restart_socket, {"maintenance": False})
+    finally:
+        if (isinstance(state, Installed) and restarted) or isinstance(
+            state, Prepared | Stopping | BackedUp
+        ):
+            shutil.rmtree(backup)
+        else:
+            print(f"Previous source/environment retained at {backup}", file=sys.stderr)
 
 
 def _transaction_entry(
@@ -287,13 +381,16 @@ def _transaction_entry(
     def interrupted(signum: int, _frame: object) -> None:
         raise RuntimeError(f"deployment interrupted by signal {signum}")
 
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(signum, interrupted)
     lock = Path(project).parent / f".{Path(project).name}.deploy.lock"
     descriptor = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _apply_staged_update(Path(stage), Path(project), deployment_id, offline=offline)
+        with handled_signals(
+            dict.fromkeys((signal.SIGTERM, signal.SIGINT, signal.SIGHUP), interrupted)
+        ):
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _apply_staged_update(
+                Path(stage), Path(project), deployment_id, offline=offline
+            )
     finally:
         os.close(descriptor)
         shutil.rmtree(stage)
