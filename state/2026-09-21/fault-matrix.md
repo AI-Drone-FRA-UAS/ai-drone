@@ -25,8 +25,12 @@ explicitly fails the fixture, and the mocked device has no network address.
   also passed. These regressions supplement existing writer/phase tests.
 - Earlier owned checks passed 209 recording/tag tests, 55 review tests and
   52 checker tests. Scoped Ruff/type checks passed. A prior host-only vision run
-  skipped the OpenCV synthetic-pose test because OpenCV was absent; the final
-  required host environment must supply the Pi dependency group and rerun it.
+  skipped the OpenCV synthetic-pose test because OpenCV was absent. After adding
+  the complete dependency groups, the final recording/tag/AprilTag batch passed
+  **250 tests, no skips**, in 4.08 s under uv-managed Python 3.14.7. This includes
+  the synthetic-pose test and direct transport/delivery measurements added in
+  `6df5903`; scoped Ruff/type checks also passed. These are host tests, not native
+  Pi-library compatibility or physical sensor measurements.
 - The pause checkpoint records five pinned SITL cases passing at `9de5fa1` in an
   immutable checkout. That is evidence for that revision only. No simulator
   result is inferred from the passing host batch above.
@@ -76,6 +80,15 @@ specified simulator portion; physical flight remains deferred throughout.
    both datums and enforces independent ceilings. Choosing an additional
    disagreement threshold requires measured noise/dynamics and independent
    height evidence; that missing policy is recorded rather than silently made up.
+5. **Message counts did not establish serial bandwidth.** `1b89818` measures
+   directly owned transport read/write return lengths, retaining unknown totals
+   when the transport cannot establish an exact count. `6df5903` attaches that
+   meter before recording startup requests and finishes it after connection
+   teardown. The manifest separates actual per-direction bytes from encoded or
+   decoded packet bytes, records receipt gaps/ages and delivery lag, and labels
+   sequence gaps as estimates rather than proven packet loss. Mock tests prove
+   interval boundaries and counter semantics; only the coordinator's actual Pi
+   and simulator measurements can establish achieved rates under their loads.
 
 All remaining physical arming, takeoff, altitude hold, Loiter, LAND, motor, servo,
 payload and flight-qualification steps are explicitly deferred. No assertion in
