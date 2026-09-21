@@ -1298,9 +1298,19 @@ def _set_sitl_parameter(connection: Any, name: str, value: float) -> None:
         value,
         mavlink.MAV_PARAM_TYPE_REAL32,
     )
-    assert request_parameter(
-        connection, name, timeout=5, require_disarmed=False
-    ) == pytest.approx(value), name
+    # Setting a vector component broadcasts all three components in the pinned
+    # AP_Param implementation. A queued old Y/Z value from the prior X write is
+    # not confirmation of this write. Keep the original five-second deadline.
+    deadline = time.monotonic() + 5.0
+    observed = []
+    while (remaining := deadline - time.monotonic()) > 0:
+        actual = request_parameter(
+            connection, name, timeout=remaining, require_disarmed=False
+        )
+        observed.append(actual)
+        if actual == pytest.approx(value):
+            return
+    pytest.fail(f"SITL parameter {name} did not confirm {value}: {observed}")
 
 
 @contextmanager

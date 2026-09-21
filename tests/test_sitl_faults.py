@@ -214,7 +214,7 @@ def test_floor_offset_is_checked_before_climb(
                 assert result != 0, log.read_text()
                 assert True not in sensors.armed_states, log.read_text()
                 assert max(sensors.altitudes_m) < 0.05
-                assert "ceiling" in log.read_text().lower(), log.read_text()
+                assert "maximum altitude" in log.read_text().lower(), log.read_text()
         finally:
             _save_evidence(
                 tmp_path,
