@@ -146,7 +146,7 @@ def create_servo(
     """Start with PWM off, retaining gpiozero's configured pin factory."""
     if factory is None:
         try:
-            from gpiozero import Servo  # ty: ignore[unresolved-import]
+            from gpiozero import Servo
         except ImportError as error:
             raise RuntimeError(
                 "gpiozero is required on the Pi: sudo apt install python3-gpiozero"

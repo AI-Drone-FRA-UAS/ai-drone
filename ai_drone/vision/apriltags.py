@@ -363,7 +363,7 @@ class OpenCvAprilTagDetector:
         if family != "tag36h11":
             raise ValueError("the OpenCV backend currently supports tag36h11 only")
         try:
-            import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+            import cv2  # type: ignore[import-untyped]
         except ImportError as error:
             raise RuntimeError("OpenCV is unavailable") from error
 
@@ -394,7 +394,7 @@ def configure_opencv_threads(threads: int) -> None:
     """Set process-wide OpenCV concurrency once at a caller's startup boundary."""
     _json_positive_int(threads, field="threads")
     try:
-        import cv2  # ty: ignore[unresolved-import]
+        import cv2
     except ImportError as error:
         raise RuntimeError("OpenCV is unavailable") from error
     cv2.setNumThreads(threads)
@@ -438,7 +438,7 @@ def estimate_pose(
         raise ValueError("tag_size_m must be finite and positive")
     camera_matrix, distortion = calibration.arrays_for(image_width, image_height)
     try:
-        import cv2  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
+        import cv2  # type: ignore[import-untyped]
     except ImportError as error:
         raise RuntimeError(
             "OpenCV is required for calibrated pose estimation"

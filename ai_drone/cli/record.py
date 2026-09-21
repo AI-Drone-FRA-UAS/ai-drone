@@ -1082,7 +1082,7 @@ def _prepare_detector(recording: _Recording) -> None:
 
 
 def _open_camera(recording: _Recording) -> None:
-    import cv2  # ty: ignore[unresolved-import]
+    import cv2
     import numpy
     from picamera2 import Picamera2  # ty: ignore[unresolved-import]
 
