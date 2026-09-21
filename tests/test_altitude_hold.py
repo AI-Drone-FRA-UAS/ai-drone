@@ -59,6 +59,12 @@ def test_vertical_duration_is_bounded_before_effects(hold_controller, duration):
     assert hold_controller.connection.mock_calls == []
 
 
+def test_loiter_duration_is_bounded_before_effects(hold_controller):
+    with pytest.raises(ValueError):
+        hold_controller.hold_loiter(30.001)
+    assert hold_controller.connection.mock_calls == []
+
+
 @pytest.mark.parametrize("field", ["altitude", "yaw", "heartbeat", "rc_channels"])
 def test_vertical_required_input_loss_requests_land_without_climb(
     hold_controller, field
@@ -164,14 +170,15 @@ def test_altitude_hold_cli_records_datums_and_uses_dedicated_operation(monkeypat
     assert metadata["horizontal_position_hold"] is False
 
 
-def test_altitude_hold_cli_rejects_unbounded_duration_before_session(monkeypatch):
+@pytest.mark.parametrize("operation", ["altitude-hold", "hover", "takeoff"])
+def test_flight_cli_rejects_unbounded_duration_before_session(monkeypatch, operation):
     monkeypatch.setattr(
         control, "_flight_session", lambda _args: pytest.fail("session opened")
     )
     assert (
         control.main(
             [
-                "altitude-hold",
+                operation,
                 "--duration",
                 "31",
                 "--confirm-flight",

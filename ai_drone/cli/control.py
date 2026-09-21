@@ -49,12 +49,7 @@ def _validate_common(args: argparse.Namespace) -> None:
             0.15,
             min(args.max_alt, MAX_AUTONOMOUS_TAKEOFF_M),
         ),
-        (
-            args.duration,
-            "--duration",
-            0.1,
-            30.0 if getattr(args, "command", "hover") == "altitude-hold" else 3_600.0,
-        ),
+        (args.duration, "--duration", 0.1, 30.0),
         (args.min_battery, "--min-battery", 0.0, 60.0),
         (args.navigation_timeout, "--navigation-timeout", 1.0, 60.0),
     )
@@ -358,7 +353,12 @@ def _flight_arguments(hover: argparse.ArgumentParser) -> None:
         default=14.4,
         help="abort and stop below this pack voltage",
     )
-    hover.add_argument("--duration", type=float, default=5.0)
+    hover.add_argument(
+        "--duration",
+        type=float,
+        default=5.0,
+        help="hold duration in seconds, at most the 30 s engineering envelope",
+    )
     hover.add_argument(
         "--navigation-timeout",
         type=float,

@@ -1222,7 +1222,7 @@ class DroneController:
         """Hold confirmed Loiter while enforcing flow, EKF, range and link gates."""
 
         self._require_autonomous_control()
-        finite_in_range(duration, "duration", minimum=0.1, maximum=3_600.0)
+        finite_in_range(duration, "duration", minimum=0.1, maximum=30.0)
         self._require_profile_time(duration)
         if self.flight_mode != "LOITER":
             raise FlightSafetyError("Loiter hold requires confirmed LOITER mode")
