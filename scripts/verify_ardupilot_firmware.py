@@ -17,12 +17,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from ai_drone.flight.params import EXPECTED_FIRMWARE_COMMIT, EXPECTED_FIRMWARE_VERSION
+
 EXPECTED_BOARD_ID = 1027
 EXPECTED_ARDUPILOT_COMMIT = "dbe792162d06cab66c3475fd5556bf7a120f119e"
-EXPECTED_GIT_IDENTITY = "dbe79216"
+EXPECTED_GIT_IDENTITY = EXPECTED_FIRMWARE_COMMIT.decode("ascii")
 EXPECTED_MAGIC = "APJFWv1"
 EXPECTED_SUMMARY = "FlywooF745"
-EXPECTED_RUNTIME_VERSION_BANNER = b"ArduCopter V4.7.1 (dbe79216)"
+EXPECTED_RUNTIME_VERSION_BANNER = (
+    "ArduCopter V"
+    + ".".join(map(str, EXPECTED_FIRMWARE_VERSION))
+    + f" ({EXPECTED_GIT_IDENTITY})"
+).encode("ascii")
 FORBIDDEN_RUNTIME_VERSION_BANNER = b"ArduCopter V4.7.1 (abcdef)"
 EXPECTED_BASELINE_ROMFS_HWDEF_SHA256 = (
     "67404e7f31d096a010d810db2600617e9b4b8c287f017472136e299f5781e225"
@@ -98,6 +104,33 @@ class ManifestClaims:
 
     image_size: int
     hashes: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ScalarField:
+    name: str
+    kind: type
+    description: str
+
+
+APJ_SCALARS = (
+    ScalarField("board_id", int, "an integer"),
+    ScalarField("git_identity", str, "a string"),
+    ScalarField("image", str, "a base64 string"),
+    ScalarField("image_maxsize", int, "an integer"),
+    ScalarField("image_size", int, "an integer"),
+    ScalarField("flash_total", int, "an integer"),
+    ScalarField("summary", str, "a string"),
+)
+
+
+def _validate_scalars(
+    document: dict, fields: Sequence[ScalarField], prefix: str
+) -> None:
+    """Representation checks only; identity and cross-field contracts stay explicit."""
+    for field in fields:
+        if type(document.get(field.name)) is not field.kind:
+            raise VerificationError(f"{prefix}{field.name} must be {field.description}")
 
 
 def parse_feature_report(output: str) -> dict[str, bool]:
@@ -195,28 +228,15 @@ def load_apj_metadata(apj_path: Path) -> ApjMetadata:
 
 def _validated_apj_metadata(document: dict) -> ApjMetadata:
     """Validate field types and declared format before decoding the payload."""
-    board_id = document.get("board_id")
-    git_identity = document.get("git_identity")
-    image = document.get("image")
-    image_maxsize = document.get("image_maxsize")
-    image_size = document.get("image_size")
-    flash_total = document.get("flash_total")
+    _validate_scalars(document, APJ_SCALARS, "APJ ")
+    board_id = document["board_id"]
+    git_identity = document["git_identity"]
+    image = document["image"]
+    image_maxsize = document["image_maxsize"]
+    image_size = document["image_size"]
+    flash_total = document["flash_total"]
     magic = document.get("magic")
-    summary = document.get("summary")
-    if type(board_id) is not int:  # bool is not valid even though it subclasses int
-        raise VerificationError("APJ board_id must be an integer")
-    if not isinstance(git_identity, str):
-        raise VerificationError("APJ git_identity must be a string")
-    if not isinstance(image, str):
-        raise VerificationError("APJ image must be a base64 string")
-    if type(image_maxsize) is not int:
-        raise VerificationError("APJ image_maxsize must be an integer")
-    if type(image_size) is not int:
-        raise VerificationError("APJ image_size must be an integer")
-    if type(flash_total) is not int:
-        raise VerificationError("APJ flash_total must be an integer")
-    if not isinstance(summary, str):
-        raise VerificationError("APJ summary must be a string")
+    summary = document["summary"]
     if image_size <= 0:
         raise VerificationError("APJ image_size must be positive")
     if magic != EXPECTED_MAGIC:
