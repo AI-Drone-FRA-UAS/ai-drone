@@ -604,9 +604,8 @@ class _ExternalMavlinkSensors:
             mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
             mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
             mavlink2.MAVLINK_MSG_ID_ATTITUDE: SENSOR_RATE_HZ,
+            mavlink2.MAVLINK_MSG_ID_DISTANCE_SENSOR: SENSOR_RATE_HZ,
         }
-        if self.forward_range_enabled:
-            intervals[mavlink2.MAVLINK_MSG_ID_DISTANCE_SENSOR] = SENSOR_RATE_HZ
         request_message_intervals(connection, intervals)
         return mavlink2.MAVLink(
             connection,

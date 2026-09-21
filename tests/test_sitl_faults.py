@@ -34,7 +34,7 @@ class _SensorFault:
         altered = list(values)
         if self.fault == "range-orientation":
             altered[6] = 0
-        elif self.fault == "range-id":
+        elif self.fault == "native-range-id":
             altered[5] = 7
         elif self.fault == "range-discontinuity":
             altered[3] = 120
@@ -76,7 +76,7 @@ def _fault_sensors(fault: str) -> type[_ExternalMavlinkSensors]:
         "flow-quality",
         "range-loss",
         "range-orientation",
-        "range-id",
+        "native-range-id",
         "range-discontinuity",
         "aiding-loss",
     ],
@@ -92,7 +92,10 @@ def test_loiter_sensor_fault_lands(tmp_path: Path, fault: str) -> None:
                 tmp_path, fault, "control", *_production_hover_arguments(30)
             ) as (process, log):
                 result = process.wait(timeout=100)
-                assert result != 0, log.read_text()
+                if fault == "native-range-id":
+                    assert result == 0, log.read_text()
+                else:
+                    assert result != 0, log.read_text()
             sensors.wait_for_disarm(timeout=15)
             assert sensors.injections
             injection = sensors.injections[0]["at"]
@@ -102,7 +105,20 @@ def test_loiter_sensor_fault_lands(tmp_path: Path, fault: str) -> None:
                 if at >= injection and mode == "LAND"
             )
             # Bounded response, including telemetry expiry and FC mode reporting.
-            assert land - injection < 10, log.read_text()
+            if fault == "native-range-id":
+                # Pinned AP_RangeFinder_MAVLink.cpp accepts native packets by
+                # orientation, ignoring their ID; GCS republishes backend ID 0.
+                # A changed upstream ID is therefore NOT an invalid companion
+                # observation. Wrong FC output IDs are rejected in mock tests.
+                readings = [
+                    row
+                    for row in sensors.range_observations
+                    if row["observed_monotonic"] >= injection
+                ]
+                assert readings and {row["id"] for row in readings} == {0}
+                assert land - injection >= 25
+            else:
+                assert land - injection < 10, log.read_text()
             armed = [row for row in sensors.truth if row["armed"]]
             summary = {
                 "fault": fault,
