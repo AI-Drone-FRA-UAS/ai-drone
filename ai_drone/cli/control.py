@@ -19,6 +19,7 @@ from ai_drone.flight.controller import (
     DroneController,
     FlightSafetyError,
     HumanControlTaken,
+    isolated_sitl_environment,
 )
 from ai_drone.flight.dataflash import latest_dataflash_log
 from ai_drone.flight.params import NAVIGATION_PROFILES, altitude_hold_duration_limit
@@ -55,7 +56,7 @@ def _validate_common(args: argparse.Namespace) -> None:
             0.1,
             altitude_hold_duration_limit(
                 str(args.device or ""),
-                isolated_sitl=os.environ.get("AI_DRONE_ISOLATED_SITL") == "1",
+                isolated_sitl=isolated_sitl_environment(),
             )
             if getattr(args, "command", "hover") == "altitude-hold"
             else 30.0,

@@ -195,6 +195,7 @@ def test_extended_vertical_experiment_requires_isolation_and_literal_loopback(
     monkeypatch,
 ):
     monkeypatch.setenv("AI_DRONE_ISOLATED_SITL", "1")
+    monkeypatch.setattr("socket.if_nameindex", lambda: [(1, "lo")])
     local = DroneController(device="tcp:127.0.0.1:5760")
     assert local.altitude_hold_limit_s == 30.0
     remote = DroneController(device="tcp:192.168.1.10:5760")

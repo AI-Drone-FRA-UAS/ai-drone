@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import socket
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
@@ -119,6 +120,17 @@ class HumanControlTaken(FlightSafetyError):
     """Autonomous work must yield; the caller must keep telemetry alive until disarm."""
 
 
+def isolated_sitl_environment() -> bool:
+    """Inspect the I/O shell's namespace before enabling simulation-only policy."""
+    if os.environ.get("AI_DRONE_ISOLATED_SITL") != "1":
+        return False
+    try:
+        interfaces = {name for _index, name in socket.if_nameindex()}
+    except OSError:
+        return False
+    return interfaces == {"lo"}
+
+
 def _validate_takeoff_ceiling(
     target: float, ground_reference: float | None, max_altitude: float
 ) -> None:
@@ -151,13 +163,14 @@ class DroneController:
         if isinstance(baud, bool) or not 1 <= baud <= 4_000_000:
             raise ValueError("baud must be between 1 and 4000000")
         self.device = self.find_device(device)
+        isolated_sitl = isolated_sitl_environment()
         self.altitude_hold_limit_s = altitude_hold_duration_limit(
-            self.device, isolated_sitl=os.environ.get("AI_DRONE_ISOLATED_SITL") == "1"
+            self.device, isolated_sitl=isolated_sitl
         )
         self.navigation_profile = select_navigation_profile(
             navigation_profile,
             self.device,
-            isolated_sitl=os.environ.get("AI_DRONE_ISOLATED_SITL") == "1",
+            isolated_sitl=isolated_sitl,
         )
         self.profile_initialized_at = time.monotonic()
         if self.navigation_profile.experimental:

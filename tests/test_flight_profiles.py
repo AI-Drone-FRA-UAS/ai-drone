@@ -69,6 +69,7 @@ def test_candidate_uses_normal_arming_checks_and_exact_candidate_parameter_contr
     monkeypatch,
 ):
     monkeypatch.setenv("AI_DRONE_ISOLATED_SITL", "1")
+    monkeypatch.setattr("socket.if_nameindex", lambda: [(1, "lo")])
     drone = DroneController(
         device="tcp:127.0.0.1:5760", navigation_profile="flow-inertial-experimental"
     )
@@ -99,6 +100,7 @@ def test_whole_sequence_experiment_budget_includes_prearm_and_reserves_landing(
     clock = [100.0]
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
     monkeypatch.setenv("AI_DRONE_ISOLATED_SITL", "1")
+    monkeypatch.setattr("socket.if_nameindex", lambda: [(1, "lo")])
     drone = DroneController(
         device="tcp:127.0.0.1:5760", navigation_profile="flow-inertial-experimental"
     )
@@ -119,6 +121,7 @@ def test_an_earlier_explicit_simulator_reference_is_not_restarted_at_connection(
     monkeypatch,
 ):
     monkeypatch.setenv("AI_DRONE_ISOLATED_SITL", "1")
+    monkeypatch.setattr("socket.if_nameindex", lambda: [(1, "lo")])
     monkeypatch.setenv("AI_DRONE_PROFILE_REFERENCE_MONOTONIC", "50")
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: 100.0)
     drone = DroneController(
