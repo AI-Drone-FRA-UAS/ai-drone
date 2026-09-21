@@ -69,61 +69,50 @@ def test_calibration_rejects_aspect_ratio_change() -> None:
 
 @pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf])
 def test_calibration_rejects_non_finite_matrix_values(bad_value: float) -> None:
-    calibration = replace(
-        _calibration(),
-        camera_matrix=(
-            (800.0, 0.0, 640.0),
-            (0.0, 810.0, bad_value),
-            (0.0, 0.0, 1.0),
-        ),
-    )
-
     with pytest.raises(ValueError, match="camera_matrix values must be finite"):
-        calibration.validate()
+        replace(
+            _calibration(),
+            camera_matrix=(
+                (800.0, 0.0, 640.0),
+                (0.0, 810.0, bad_value),
+                (0.0, 0.0, 1.0),
+            ),
+        )
 
 
 @pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf])
-def test_calibration_rejects_non_finite_distortion_values(
-    bad_value: float,
-) -> None:
-    calibration = replace(
-        _calibration(),
-        distortion_coefficients=(0.1, -0.2, 0.0, 0.0, bad_value),
-    )
-
+def test_calibration_rejects_non_finite_distortion_values(bad_value: float) -> None:
     with pytest.raises(
         ValueError, match="distortion_coefficients values must be finite"
     ):
-        calibration.validate()
+        replace(
+            _calibration(), distortion_coefficients=(0.1, -0.2, 0.0, 0.0, bad_value)
+        )
 
 
 def test_calibration_rejects_invalid_pinhole_semantics() -> None:
-    outside_image = replace(
-        _calibration(),
-        camera_matrix=(
-            (800.0, 0.0, 1280.0),
-            (0.0, 810.0, 480.0),
-            (0.0, 0.0, 1.0),
-        ),
-    )
-    invalid_shape = replace(
-        _calibration(),
-        camera_matrix=(
-            (800.0, 0.1, 640.0),
-            (0.0, 810.0, 480.0),
-            (0.0, 0.0, 1.0),
-        ),
-    )
-    invalid_distortion_count = replace(
-        _calibration(), distortion_coefficients=(0.0, 0.0, 0.0)
-    )
-
     with pytest.raises(ValueError, match="principal point"):
-        outside_image.validate()
+        replace(
+            _calibration(),
+            camera_matrix=((800.0, 0.0, 1280.0), (0.0, 810.0, 480.0), (0.0, 0.0, 1.0)),
+        )
     with pytest.raises(ValueError, match="OpenCV pinhole form"):
-        invalid_shape.validate()
+        replace(
+            _calibration(),
+            camera_matrix=((800.0, 0.1, 640.0), (0.0, 810.0, 480.0), (0.0, 0.0, 1.0)),
+        )
     with pytest.raises(ValueError, match="distortion_coefficients must contain"):
-        invalid_distortion_count.validate()
+        replace(_calibration(), distortion_coefficients=(0.0, 0.0, 0.0))
+
+
+def test_calibration_freezes_nested_input_values():
+    matrix = [[800.0, 0.0, 640.0], [0.0, 810.0, 480.0], [0.0, 0.0, 1.0]]
+    distortion = [0.0] * 5
+    calibration = CameraCalibration(1280, 960, matrix, distortion)  # ty: ignore[invalid-argument-type]
+    matrix[0][0] = 0.0
+    distortion[0] = 100.0
+    assert calibration.camera_matrix[0][0] == 800.0
+    assert calibration.distortion_coefficients[0] == 0.0
 
 
 def test_calibration_load_rejects_lossy_dimensions_and_json_nan(tmp_path) -> None:
@@ -372,7 +361,11 @@ def test_pose_configuration_errors_remain_fatal(monkeypatch, invalid_calibration
     monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
     calibration = _calibration()
     if invalid_calibration:
-        calibration = replace(calibration, distortion_coefficients=(math.nan,) * 5)
+        with pytest.raises(
+            ValueError, match="distortion_coefficients values must be finite"
+        ):
+            replace(calibration, distortion_coefficients=(math.nan,) * 5)
+        return
 
     with pytest.raises(ValueError) as error:
         estimate_pose(

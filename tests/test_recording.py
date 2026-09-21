@@ -476,10 +476,12 @@ def test_detection_worker_keeps_pose_setup_and_backend_failures_fatal(
     calibration = _recording_calibration()
     resolution = (4, 4)
     if failure == "invalid_calibration":
-        calibration = replace(
-            calibration,
-            camera_matrix=((-2.0, 0.0, 2.0), (0.0, 2.0, 2.0), (0.0, 0.0, 1.0)),
-        )
+        with pytest.raises(ValueError, match=expected_error):
+            replace(
+                calibration,
+                camera_matrix=((-2.0, 0.0, 2.0), (0.0, 2.0, 2.0), (0.0, 0.0, 1.0)),
+            )
+        return
     elif failure == "aspect_ratio":
         resolution = (4, 2)
 
@@ -1637,7 +1639,9 @@ def test_camera_startup_interrupt_releases_acquired_camera(tmp_path, monkeypatch
         "create_detector",
         lambda *_a, **_kw: SimpleNamespace(backend_name="mock"),
     )
-    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules, "cv2", SimpleNamespace(setNumThreads=lambda _threads: None)
+    )
     monkeypatch.setitem(
         sys.modules, "picamera2", SimpleNamespace(Picamera2=lambda: camera)
     )
@@ -1880,7 +1884,9 @@ def test_camera_stall_writes_failed_manifest_and_attempts_camera_cleanup(
         "create_detector",
         lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("no detector")),
     )
-    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules, "cv2", SimpleNamespace(setNumThreads=lambda _threads: None)
+    )
     monkeypatch.setitem(
         sys.modules, "picamera2", SimpleNamespace(Picamera2=lambda: camera)
     )
@@ -2044,6 +2050,7 @@ def test_video_storage_policy_preserves_analysis_logs_and_optional_preview(
         sys.modules,
         "cv2",
         SimpleNamespace(
+            setNumThreads=lambda _threads: None,
             imwrite=_write_test_preview,
             imencode=lambda *_args: (True, np.array([1, 2, 3], dtype=np.uint8)),
             IMWRITE_JPEG_QUALITY=1,

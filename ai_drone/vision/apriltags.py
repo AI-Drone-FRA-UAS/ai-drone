@@ -16,6 +16,8 @@ from typing import Protocol
 
 import numpy as np
 
+from ai_drone.validation import json_int, json_number
+
 _VALID_DISTORTION_COEFFICIENT_COUNTS = frozenset({4, 5, 8, 12, 14})
 
 
@@ -25,19 +27,33 @@ class PoseEstimationError(RuntimeError):
 
 def _json_number(value: object, *, field: str) -> float:
     """Parse one finite JSON number without accepting booleans or strings."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"{field} must be a number")
-    parsed = float(value)
-    if not math.isfinite(parsed):
-        raise ValueError(f"{field} must be finite")
-    return parsed
+    try:
+        return json_number(value, field)
+    except ValueError:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"{field} must be a number") from None
+        raise ValueError(f"{field} must be finite") from None
 
 
 def _json_positive_int(value: object, *, field: str) -> int:
     """Parse a strictly positive JSON integer without lossy coercion."""
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
-    return value
+    try:
+        parsed = json_int(value, field)
+        if parsed > 0:
+            return parsed
+    except ValueError:
+        pass
+    raise ValueError(f"{field} must be a positive integer")
+
+
+def _non_negative_int(value: object, *, field: str) -> int:
+    try:
+        parsed = json_int(value, field)
+        if parsed >= 0:
+            return parsed
+    except ValueError:
+        pass
+    raise ValueError(f"{field} must be a non-negative integer")
 
 
 def _validate_detector_options(
@@ -90,7 +106,7 @@ class CameraCalibration:
                     for column_index, value in enumerate(row)
                 )
             )
-        calibration = cls(
+        return cls(
             image_width=_json_positive_int(
                 data.get("image_width"), field="image_width"
             ),
@@ -103,10 +119,8 @@ class CameraCalibration:
                 for index, value in enumerate(distortion_data)
             ),
         )
-        calibration.validate()
-        return calibration
 
-    def validate(self) -> None:
+    def __post_init__(self) -> None:
         """Reject malformed or physically implausible intrinsics."""
         if (
             isinstance(self.image_width, bool)
@@ -121,8 +135,14 @@ class CameraCalibration:
             len(row) != 3 for row in self.camera_matrix
         ):
             raise ValueError("camera_matrix must be a 3x3 array")
-        if not all(math.isfinite(value) for row in self.camera_matrix for value in row):
-            raise ValueError("camera_matrix values must be finite")
+        try:
+            matrix = tuple(
+                tuple(json_number(value, "camera_matrix") for value in row)
+                for row in self.camera_matrix
+            )
+        except ValueError:
+            raise ValueError("camera_matrix values must be finite") from None
+        object.__setattr__(self, "camera_matrix", matrix)
         fx = self.camera_matrix[0][0]
         fy = self.camera_matrix[1][1]
         if fx <= 0 or fy <= 0:
@@ -156,12 +176,17 @@ class CameraCalibration:
             raise ValueError(
                 f"distortion_coefficients must contain {valid_counts} values"
             )
-        if not all(math.isfinite(value) for value in self.distortion_coefficients):
-            raise ValueError("distortion_coefficients values must be finite")
+        try:
+            distortion = tuple(
+                json_number(value, "distortion_coefficients")
+                for value in self.distortion_coefficients
+            )
+        except ValueError:
+            raise ValueError("distortion_coefficients values must be finite") from None
+        object.__setattr__(self, "distortion_coefficients", distortion)
 
     def arrays_for(self, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
         """Return intrinsics scaled to a resolution with the same aspect ratio."""
-        self.validate()
         if (
             isinstance(width, bool)
             or not isinstance(width, int)
@@ -201,12 +226,7 @@ class TagDetection:
     decision_margin: float | None = None
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.tag_id, bool)
-            or not isinstance(self.tag_id, int)
-            or self.tag_id < 0
-        ):
-            raise ValueError("tag_id must be a non-negative integer")
+        _non_negative_int(self.tag_id, field="tag_id")
         try:
             corners = np.asarray(self.corners, dtype=np.float64)
         except (TypeError, ValueError) as error:
@@ -215,7 +235,7 @@ class TagDetection:
             raise ValueError("tag corners must be a 4x2 array")
         if not np.isfinite(corners).all():
             raise ValueError("tag corners must be finite")
-        corners = np.ascontiguousarray(corners)
+        corners = np.ascontiguousarray(corners).copy()
         corners.setflags(write=False)
         object.__setattr__(self, "corners", corners)
 
@@ -226,12 +246,8 @@ class TagDetection:
         if len(center) != 2 or not all(math.isfinite(value) for value in center):
             raise ValueError("tag center must contain two finite values")
         object.__setattr__(self, "center", center)
-        if self.hamming is not None and (
-            isinstance(self.hamming, bool)
-            or not isinstance(self.hamming, int)
-            or self.hamming < 0
-        ):
-            raise ValueError("tag hamming distance must be a non-negative integer")
+        if self.hamming is not None:
+            _non_negative_int(self.hamming, field="tag hamming distance")
         if self.decision_margin is not None and (
             not math.isfinite(self.decision_margin) or self.decision_margin < 0
         ):
@@ -249,12 +265,7 @@ class TagPose:
     reprojection_error_px: float
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.tag_id, bool)
-            or not isinstance(self.tag_id, int)
-            or self.tag_id < 0
-        ):
-            raise ValueError("tag_id must be a non-negative integer")
+        _non_negative_int(self.tag_id, field="tag_id")
         if len(self.rotation_vector) != 3 or not all(
             math.isfinite(value) for value in self.rotation_vector
         ):
@@ -339,7 +350,11 @@ class NativeAprilTagDetector:
 
 
 class OpenCvAprilTagDetector:
-    """OpenCV detector used when native AprilTag bindings are unavailable."""
+    """OpenCV detector; direct callers own process-wide thread configuration.
+
+    The CLI and ``create_detector`` configure OpenCV at startup. Code constructing
+    this backend directly may call ``configure_opencv_threads`` explicitly.
+    """
 
     backend_name = "opencv-aruco"
 
@@ -352,7 +367,6 @@ class OpenCvAprilTagDetector:
         except ImportError as error:
             raise RuntimeError("OpenCV is unavailable") from error
 
-        cv2.setNumThreads(threads)
         dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
         parameters = cv2.aruco.DetectorParameters()
         parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
@@ -376,6 +390,16 @@ class OpenCvAprilTagDetector:
         ]
 
 
+def configure_opencv_threads(threads: int) -> None:
+    """Set process-wide OpenCV concurrency once at a caller's startup boundary."""
+    _json_positive_int(threads, field="threads")
+    try:
+        import cv2  # ty: ignore[unresolved-import]
+    except ImportError as error:
+        raise RuntimeError("OpenCV is unavailable") from error
+    cv2.setNumThreads(threads)
+
+
 def create_detector(
     backend: str = "auto",
     family: str = "tag36h11",
@@ -397,6 +421,7 @@ def create_detector(
         except RuntimeError:
             if backend == "native":
                 raise
+    configure_opencv_threads(threads)
     return OpenCvAprilTagDetector(family, threads=threads)
 
 

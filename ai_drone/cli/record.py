@@ -56,6 +56,7 @@ from ai_drone.settings import load_settings
 from ai_drone.storage import StorageMonitor, StoragePolicy
 from ai_drone.vision.apriltags import (
     CameraCalibration,
+    configure_opencv_threads,
     create_detector,
 )
 
@@ -1066,6 +1067,7 @@ def _open_camera(recording: _Recording) -> None:
 
     camera, args = recording.camera, recording.args
     camera.cv2, camera.numpy = cv2, numpy
+    configure_opencv_threads(args.threads)
     _prepare_detector(recording)
     camera.device = Picamera2()
     camera.device.configure(
