@@ -52,7 +52,9 @@ def test_vertical_hold_sends_twenty_hz_neutral_climb_with_no_loiter_claim(
     drone.connection.mav.set_mode_send.assert_not_called()
 
 
-@pytest.mark.parametrize("duration", [0, -1, float("nan"), float("inf"), 30.001])
+@pytest.mark.parametrize(
+    "duration", [0, -1, float("nan"), float("inf"), 10.001, 30.001]
+)
 def test_vertical_duration_is_bounded_before_effects(hold_controller, duration):
     with pytest.raises(ValueError):
         hold_controller.hold_altitude(duration)
@@ -181,6 +183,39 @@ def test_flight_cli_rejects_unbounded_duration_before_session(monkeypatch, opera
                 operation,
                 "--duration",
                 "31",
+                "--confirm-flight",
+                control.FLIGHT_CONFIRMATION,
+            ]
+        )
+        == 1
+    )
+
+
+def test_extended_vertical_experiment_requires_isolation_and_literal_loopback(
+    monkeypatch,
+):
+    monkeypatch.setenv("AI_DRONE_ISOLATED_SITL", "1")
+    local = DroneController(device="tcp:127.0.0.1:5760")
+    assert local.altitude_hold_limit_s == 30.0
+    remote = DroneController(device="tcp:192.168.1.10:5760")
+    assert remote.altitude_hold_limit_s == 10.0
+    monkeypatch.delenv("AI_DRONE_ISOLATED_SITL")
+    assert DroneController(device="tcp:127.0.0.1:5760").altitude_hold_limit_s == 10.0
+
+
+def test_normal_vertical_cli_rejects_over_ten_seconds_before_hardware_access(
+    monkeypatch,
+):
+    monkeypatch.delenv("AI_DRONE_ISOLATED_SITL", raising=False)
+    monkeypatch.setattr(
+        control, "_flight_session", lambda _args: pytest.fail("session opened")
+    )
+    assert (
+        control.main(
+            [
+                "altitude-hold",
+                "--duration",
+                "10.01",
                 "--confirm-flight",
                 control.FLIGHT_CONFIRMATION,
             ]

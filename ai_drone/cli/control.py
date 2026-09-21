@@ -21,7 +21,7 @@ from ai_drone.flight.controller import (
     HumanControlTaken,
 )
 from ai_drone.flight.dataflash import latest_dataflash_log
-from ai_drone.flight.params import NAVIGATION_PROFILES
+from ai_drone.flight.params import NAVIGATION_PROFILES, altitude_hold_duration_limit
 from ai_drone.flight.recording import FlightRecorder
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.mavlink.shared import SharedMavlink
@@ -49,7 +49,17 @@ def _validate_common(args: argparse.Namespace) -> None:
             0.15,
             min(args.max_alt, MAX_AUTONOMOUS_TAKEOFF_M),
         ),
-        (args.duration, "--duration", 0.1, 30.0),
+        (
+            args.duration,
+            "--duration",
+            0.1,
+            altitude_hold_duration_limit(
+                str(args.device or ""),
+                isolated_sitl=os.environ.get("AI_DRONE_ISOLATED_SITL") == "1",
+            )
+            if getattr(args, "command", "hover") == "altitude-hold"
+            else 30.0,
+        ),
         (args.min_battery, "--min-battery", 0.0, 60.0),
         (args.navigation_timeout, "--navigation-timeout", 1.0, 60.0),
     )
@@ -249,6 +259,7 @@ def _run_flight(args: argparse.Namespace, *, altitude_only: bool) -> int:
                     duration_s=args.duration,
                     mode=drone.flight_mode,
                     horizontal_position_hold=False,
+                    clearance_qualification="unverified over the whole armed sequence",
                 )
                 drone.hold_altitude(args.duration)
             else:
@@ -357,7 +368,7 @@ def _parser() -> argparse.ArgumentParser:
     hover.set_defaults(handler=cmd_hover)
     altitude = commands.add_parser(
         "altitude-hold",
-        help="take off, hold altitude in GuidedNoGPS for at most 30 s, then LAND; XY may drift",
+        help="take off, hold altitude in GuidedNoGPS for at most 10 s, then LAND; XY clearance remains unqualified (30 s only in isolated SITL)",
     )
     _flight_arguments(altitude)
     altitude.set_defaults(handler=cmd_altitude_hold)

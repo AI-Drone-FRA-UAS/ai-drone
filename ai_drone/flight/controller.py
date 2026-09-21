@@ -43,6 +43,7 @@ from ai_drone.flight.params import (
     REQUIRED_NOGPS_LOITER_PARAMETERS as REQUIRED_NOGPS_LOITER_PARAMETERS,
 )
 from ai_drone.flight.params import (
+    altitude_hold_duration_limit,
     select_navigation_profile,
 )
 from ai_drone.flight.phase import (
@@ -144,6 +145,9 @@ class DroneController:
         if isinstance(baud, bool) or not 1 <= baud <= 4_000_000:
             raise ValueError("baud must be between 1 and 4000000")
         self.device = self.find_device(device)
+        self.altitude_hold_limit_s = altitude_hold_duration_limit(
+            self.device, isolated_sitl=os.environ.get("AI_DRONE_ISOLATED_SITL") == "1"
+        )
         self.navigation_profile = select_navigation_profile(
             navigation_profile,
             self.device,
@@ -457,6 +461,8 @@ class DroneController:
             "profile": self.navigation_profile.name,
             "profile_initialized_monotonic": self.profile_initialized_at,
             "profile_elapsed_s": time.monotonic() - self.profile_initialized_at,
+            "altitude_hold_limit_s": self.altitude_hold_limit_s,
+            "aircraft_clearance_qualified": False,
         }
 
     def _perform_command(self, command: Command) -> None:
@@ -1407,7 +1413,9 @@ class DroneController:
         failure. Loiter retains its independent flow/relative-position gate.
         """
         self._require_autonomous_control()
-        finite_in_range(duration, "duration", minimum=0.1, maximum=30.0)
+        finite_in_range(
+            duration, "duration", minimum=0.1, maximum=self.altitude_hold_limit_s
+        )
         self._require_profile_time(duration)
         if not isinstance(self.phase, Flight) or not self.is_armed:
             raise FlightSafetyError("altitude hold requires a controller takeoff")

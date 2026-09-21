@@ -96,6 +96,27 @@ NAVIGATION_PROFILES = MappingProxyType(
 )
 
 
+def isolated_loopback_endpoint(endpoint: str, *, isolated_sitl: bool) -> bool:
+    fields = endpoint.split(":")
+    return (
+        isolated_sitl
+        and len(fields) == 3
+        and fields[:2] == ["tcp", "127.0.0.1"]
+        and fields[2].isascii()
+        and fields[2].isdigit()
+        and 1 <= int(fields[2]) <= 65535
+    )
+
+
+def altitude_hold_duration_limit(endpoint: str, *, isolated_sitl: bool) -> float:
+    """Provisional software bounds; neither value is aircraft clearance qualification."""
+    return (
+        30.0
+        if isolated_loopback_endpoint(endpoint, isolated_sitl=isolated_sitl)
+        else 10.0
+    )
+
+
 def select_navigation_profile(
     name: str, endpoint: str, *, isolated_sitl: bool
 ) -> NavigationProfile:
@@ -103,17 +124,10 @@ def select_navigation_profile(
         profile = NAVIGATION_PROFILES[name]
     except KeyError as error:
         raise ValueError(f"unknown navigation profile {name!r}") from error
-    if profile.experimental:
-        fields = endpoint.split(":")
-        loopback_tcp = (
-            len(fields) == 3
-            and fields[:2] == ["tcp", "127.0.0.1"]
-            and fields[2].isascii()
-            and fields[2].isdigit()
-            and 1 <= int(fields[2]) <= 65535
+    if profile.experimental and not isolated_loopback_endpoint(
+        endpoint, isolated_sitl=isolated_sitl
+    ):
+        raise ValueError(
+            "experimental navigation requires an isolated local SITL namespace and literal tcp:127.0.0.1:<port> endpoint"
         )
-        if not isolated_sitl or not loopback_tcp:
-            raise ValueError(
-                "experimental navigation requires an isolated local SITL namespace and literal tcp:127.0.0.1:<port> endpoint"
-            )
     return profile
