@@ -21,6 +21,7 @@ from pymavlink.dialects.v10 import ardupilotmega as mavlink
 import ai_drone.capture.reporting as capture_reporting
 import ai_drone.capture.workers as capture_workers
 import ai_drone.cli.record as inspect_cli
+from ai_drone.capture.metrics import DeliveryMetrics
 from ai_drone.capture.reporting import _component_report, _observe_sensor_message
 from ai_drone.capture.state import (
     AnalysisFrame,
@@ -2817,3 +2818,107 @@ def test_passive_tlog_sync_failure_is_reported_and_stops_capture(tmp_path, monke
         ).run()
     assert stop.is_set()
     assert "tlog fsync failed" in (state.worker_error or "")
+
+
+def test_delivery_metrics_preserve_bytes_age_source_and_sequence_uncertainty():
+    metrics = DeliveryMetrics()
+
+    def packet(sequence, source=1, size=17):
+        return SimpleNamespace(
+            get_srcSystem=lambda: source,
+            get_srcComponent=lambda: 1,
+            get_type=lambda: "HEARTBEAT",
+            get_seq=lambda: sequence,
+            get_msgbuf=lambda: b"x" * size,
+        )
+
+    for seq, received in ((250, 1.0), (252, 3.0), (251, 2.0), (252, 4.0)):
+        metrics.observe(packet(seq), received_at=received, delivered_at=5.0)
+    metrics.observe(packet(70, source=2, size=9), received_at=4.0, delivered_at=5.0)
+    snapshot = metrics.snapshot()
+    report = snapshot.to_dict(4.0, observed_at=5.0)
+    assert report["known_packet_bytes"] == 77
+    assert report["known_packet_bytes_per_s"] == 19.25
+    assert report["maximum_delivery_lag_s"] == 4.0
+    assert report["sequence_gap_estimate"] == 1
+    assert report["duplicate_sequences"] == 1
+    assert report["reordered_or_reset_sequences"] == 1
+    assert report["streams"]["1/1/HEARTBEAT"]["maximum_receipt_gap_s"] == 2.0
+    assert report["streams"]["1/1/HEARTBEAT"]["delivered_hz"] == 1.0
+    assert report["streams"]["1/1/HEARTBEAT"]["last_receipt_age_s"] == 1.0
+    assert report["streams"]["2/1/HEARTBEAT"]["maximum_receipt_gap_s"] is None
+    metrics.observe(packet(71, source=2), received_at=5.0, delivered_at=5.0)
+    assert snapshot.to_dict(4.0)["known_packet_bytes"] == 77
+
+
+def test_unknown_packet_sizes_are_explicit_and_never_reported_as_exact_zero():
+    metrics = DeliveryMetrics()
+    metrics.observe(
+        SimpleNamespace(
+            get_srcSystem=lambda: 1,
+            get_srcComponent=lambda: 1,
+            get_type=lambda: "ATTITUDE",
+        ),
+        received_at=1,
+        delivered_at=1,
+    )
+    report = metrics.snapshot().to_dict(1)
+    assert report["known_packet_bytes"] == 0
+    assert report["packet_sizes_complete"] is False
+    assert report["unknown_packet_size_messages"] == 1
+    assert report["unknown_sequence_messages"] == 1
+
+
+def test_direct_transport_interval_includes_startup_and_has_separate_rx_tx(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "direct-transport"
+    clock = [10.0]
+    monkeypatch.setattr(inspect_cli.time, "monotonic", lambda: clock[0])
+    connection = SimpleNamespace(
+        recv=lambda *_args: b"received-data",
+        write=lambda data: len(data),
+        close=lambda: None,
+        logfile=None,
+    )
+    connection.mav = SimpleNamespace(
+        file=connection,
+        total_bytes_received=0,
+        total_bytes_sent=0,
+        total_receive_errors=0,
+    )
+
+    def heartbeat(**_kwargs):
+        # Meter must already exist for bytes read before camera epoch/startup requests.
+        assert connection._ai_drone_transport_metrics is not None
+        connection.recv()
+        connection.write(b"startup-request")
+        return _TelemetryMessage("HEARTBEAT")
+
+    connection.wait_heartbeat = heartbeat
+    monkeypatch.setattr(
+        inspect_cli, "resolve_mavlink_endpoint", lambda *_a, **_kw: "/dev/mock-fc"
+    )
+    monkeypatch.setattr(
+        inspect_cli, "open_ardupilot_connection", lambda *_a, **_kw: connection
+    )
+
+    def startup(recording):
+        inspect_cli._initial_heartbeat(recording)
+        clock[0] = 12.0
+
+    monkeypatch.setattr(inspect_cli, "_start_recording", startup)
+    monkeypatch.setattr(inspect_cli, "_record_capture", lambda _recording: None)
+    assert run(["--output-dir", str(output)]) == 0
+    report = json.loads((output / "manifest.json").read_text())["telemetry"][
+        "transport"
+    ]
+    assert report["rx_bytes"] == 13
+    assert report["tx_bytes"] == 15
+    assert report["rx_bytes_per_s"] == 6.5
+    assert report["tx_bytes_per_s"] == 7.5
+    assert report["started_monotonic"] == 10
+    assert report["ended_monotonic"] == 12
+    assert report["includes_startup_requests"] is True
+    assert report["nominal_serial_capacity_bytes_per_direction_s"] == 11520
+    assert not hasattr(connection, "_ai_drone_transport_metrics")

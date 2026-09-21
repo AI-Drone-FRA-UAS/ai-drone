@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ai_drone.capture.metrics import DeliveryMetrics, DeliverySnapshot
 from ai_drone.mavlink.safety import is_fresh
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 class CaptureSnapshot:
     """One immutable observation; contains neither worker resources nor locks."""
 
+    delivery: DeliverySnapshot
     telemetry_counts: Mapping[str, int]
     vehicle_telemetry_counts: Mapping[str, int]
     camera_frames: int
@@ -62,6 +64,7 @@ class CaptureSnapshot:
 class CaptureState:
     """Cross-thread sink; mutations use lock and readers take coherent snapshots."""
 
+    delivery: DeliveryMetrics = field(default_factory=DeliveryMetrics, repr=False)
     telemetry_counts: Counter[str] = field(default_factory=Counter)
     vehicle_telemetry_counts: Counter[str] = field(default_factory=Counter)
     camera_frames: int = 0
@@ -116,6 +119,7 @@ class CaptureState:
         """Freeze all counters and status from one locked observation."""
         with self.lock:
             return CaptureSnapshot(
+                delivery=self.delivery.snapshot(),
                 telemetry_counts=MappingProxyType(self.telemetry_counts.copy()),
                 vehicle_telemetry_counts=MappingProxyType(
                     self.vehicle_telemetry_counts.copy()

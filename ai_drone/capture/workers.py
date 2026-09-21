@@ -97,6 +97,9 @@ class TelemetryWorker(threading.Thread):
     ) -> None:
         message_type = message.get_type()
         with self.state.lock:
+            self.state.delivery.observe(
+                message, received_at=received_at, delivered_at=time.monotonic()
+            )
             self.state.telemetry_counts[message_type] += 1
             if selected_vehicle:
                 self.state.vehicle_telemetry_counts[message_type] += 1

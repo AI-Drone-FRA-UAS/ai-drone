@@ -43,6 +43,7 @@ from ai_drone.durability import (
 )
 from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
+from ai_drone.mavlink.metrics import TransportMetrics, attach_transport_metrics
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import heartbeat_is_armed
 from ai_drone.mavlink.shared import received_monotonic
@@ -859,6 +860,7 @@ class _FlightCapture:
     requested_messages: list[str] = field(default_factory=list)
     arming_skipchk: float | None = None
     worker: TelemetryWorker | None = None
+    transport: TransportMetrics | None = None
 
 
 @dataclass
@@ -962,6 +964,7 @@ def _initial_heartbeat(recording: _Recording) -> Any:
         missing_message="No ArduPilot serial device found",
     )
     flight.connection = open_ardupilot_connection(flight.endpoint, baud=args.baud)
+    flight.transport = attach_transport_metrics(flight.connection)
     heartbeat = flight.connection.wait_heartbeat(timeout=args.timeout)
     _raise_if_startup_stopped(
         recording.stop, recording.state, "flight-controller startup"
@@ -1047,6 +1050,12 @@ def _start_flight_capture(recording: _Recording) -> None:
         recording.details["flight_controller"] = str(error)
         if flight.connection is not None:
             _cleanup_mavlink_connection(flight.connection, recording.state)
+            if flight.transport is not None:
+                _cleanup_action(
+                    recording.state,
+                    "finish failed transport metrics",
+                    flight.transport.close,
+                )
             flight.connection = None
             flight.status = "unavailable"
     if flight.connection is None or recording.state.armed_abort:
@@ -1519,6 +1528,14 @@ def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
                 lambda: recording.storage.close() if recording.storage else None,
             ),
             (
+                "finish transport metrics",
+                lambda: (
+                    recording.flight.transport.close()
+                    if recording.flight.transport
+                    else None
+                ),
+            ),
+            (
                 "close flight capture",
                 lambda: _cleanup_mavlink_connection(
                     recording.flight.connection, recording.state
@@ -1630,6 +1647,33 @@ def run(
         return 1
 
 
+def _transport_report(recording: _Recording) -> dict[str, object]:
+    meter = recording.flight.transport
+    if meter is None:
+        return {
+            "schema": 1,
+            "supported": False,
+            "scope": "unavailable",
+            "rx_bytes": None,
+            "tx_bytes": None,
+            "reason": "No directly owned transport meter; shared-owner counters require runtime status.",
+        }
+    report = meter.snapshot()
+    duration = report["elapsed_s"]
+    report["includes_startup_requests"] = True
+    for direction in ("rx", "tx"):
+        measured = report[f"{direction}_bytes"]
+        report[f"{direction}_bytes_per_s"] = (
+            measured / duration if measured is not None and duration > 0 else None
+        )
+    report["nominal_serial_capacity_bytes_per_direction_s"] = (
+        recording.args.baud / 10
+        if (recording.flight.endpoint or "").startswith("/dev/")
+        else None
+    )
+    return report
+
+
 def _finish_recording(recording: _Recording) -> int:
     timestamp_summary = _safe_video_timestamp_summary(
         recording.paths.video_timestamps, recording.state
@@ -1726,6 +1770,10 @@ def _finish_recording(recording: _Recording) -> int:
             **timestamp_summary,
         },
         telemetry={
+            "delivery": state.delivery.to_dict(
+                actual_duration, observed_at=recording.ended_monotonic
+            ),
+            "transport": _transport_report(recording),
             "endpoint": recording.flight.endpoint,
             "baud": recording.args.baud,
             "requested_messages": recording.flight.requested_messages,
