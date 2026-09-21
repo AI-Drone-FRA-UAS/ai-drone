@@ -28,6 +28,7 @@ raspi = [
 ]
 dev = [
     "deptry>=0.25.1",
+    "gpiozero>=2.0.1",
     "import-linter>=2.13",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
