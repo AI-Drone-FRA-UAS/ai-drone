@@ -25,10 +25,11 @@ Vortrag frei geredet werden kann.
 - **Links:** Kennzahlen und der Blick von unten mit nummerierten Markern
   und Führungslinien (Servo, MTF-01P, Kamera).
 - **Mitte:** die Ablaufgrafik „Tag erkannt → Last fällt", das Foto des
-  Abwurfmechanismus und die gedruckten Teile.
+  Abwurfmechanismus und die gedruckten Teile. Die Last ist im senkrechten Fall
+  vor dem Auftreffen dargestellt, damit der AprilTag sichtbar bleibt.
 - **Rechts:** die Geschichte von oben nach unten — erst der Simulator, dann die
-  Flugversuche, der Absturz mit Messkurve und QR-Code zum Video, die drei
-  gemessenen Befunde, die Konsequenzen und der datierte Projektstand.
+  Flugversuche, der Absturz mit Messkurve und QR-Code zum Video, die beiden
+  dargestellten Befunde, die Konsequenzen und der datierte Projektstand.
 
 ## Bilder
 
