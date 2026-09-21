@@ -227,3 +227,30 @@ def test_audit_includes_failed_writes_and_heartbeat_recovery_gap(monkeypatch):
     assert audit["heartbeat_failures"] == 1
     assert audit["heartbeat_writes"] == 2
     assert audit["maximum_heartbeat_gap_s"] == 3.0
+
+
+def test_remote_submission_is_queued_and_cannot_claim_physical_delivery(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    drone = controller_in(Unclaimed())
+    drone.connection.write_confirmation = "queued"
+    drone._write_command(Arm())
+    assert isinstance(drone.phase, ArmPending)
+    assert not drone.is_armed
+    drone.phase = Armed()
+    drone._write_command(Climb(0.0, 0.0))
+    drone._pump_gcs_heartbeat()
+    clock[0] = 101.0
+    drone._write_command(Climb(0.0, 0.0))
+    drone._pump_gcs_heartbeat()
+    audit = drone.command_audit()
+    assert audit["attempted"] == audit["queued"] == 3
+    assert audit["written"] == audit["failed"] == 0
+    assert audit["first_attempts"]["Arm"]["outcome"] == "queued"
+    assert audit["last_climb_written_monotonic"] is None
+    assert audit["maximum_climb_queue_gap_s"] == 1.0
+    assert audit["heartbeat_writes"] == 0
+    assert audit["heartbeat_queued"] == 2
+    assert audit["last_heartbeat_written_monotonic"] is None
+    assert audit["maximum_heartbeat_queue_gap_s"] == 1.0
+    assert audit["write_confirmation"] == "unix_submission"

@@ -141,7 +141,7 @@ class CommandAttempt:
     sequence: int
     command: Command
     attempted_at: float
-    outcome: Literal["attempting", "written", "failed"]
+    outcome: Literal["attempting", "written", "queued", "failed"]
     error: str | None = None
 
 

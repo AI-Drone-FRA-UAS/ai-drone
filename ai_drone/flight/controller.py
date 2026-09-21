@@ -175,15 +175,20 @@ class DroneController:
         self.phase: Phase = Unclaimed()
         self.command_attempts: deque[CommandAttempt] = deque(maxlen=256)
         self._command_sequence = 0
-        self._command_outcomes = {"written": 0, "failed": 0}
+        self._command_outcomes = {"written": 0, "queued": 0, "failed": 0}
         self._command_kind_counts: dict[str, int] = {}
         self._first_command_attempts: dict[str, CommandAttempt] = {}
         self._last_climb_attempt: float | None = None
         self._last_climb_written: float | None = None
+        self._last_climb_queued: float | None = None
         self._maximum_climb_attempt_gap = 0.0
         self._maximum_climb_write_gap = 0.0
+        self._maximum_climb_queue_gap = 0.0
         self._maximum_heartbeat_gap = 0.0
         self._heartbeat_writes = 0
+        self._heartbeat_queued = 0
+        self._maximum_heartbeat_queue_gap = 0.0
+        self._last_heartbeat_queued: float | None = None
         self._heartbeat_failures = 0
         self._last_heartbeat_written: float | None = None
         self._arm_requested_at: float | None = None
@@ -370,8 +375,9 @@ class DroneController:
     def _write_command(self, command: Command) -> None:
         """The autonomous write boundary; heartbeat and passive requests are separate.
 
-        Intent precedes a potentially ambiguous transport write. A written command
-        is not an FC acknowledgement or an observed arming/landing confirmation.
+        Intent precedes a potentially ambiguous transport write. Remote commands
+        report Unix submission as queued; written denotes a checked physical-port
+        write. Neither is an FC acknowledgement or an observed flight confirmation.
         """
         self._resolve_control_ownership()
         self._require_autonomous_control()
@@ -412,7 +418,14 @@ class DroneController:
                 )
             )
             raise
-        self._record_command_outcome(replace(attempt, outcome="written"))
+        self._record_command_outcome(replace(attempt, outcome=self._delivery_outcome()))
+
+    def _delivery_outcome(self) -> Literal["written", "queued"]:
+        return (
+            "queued"
+            if getattr(self.connection, "write_confirmation", "physical") == "queued"
+            else "written"
+        )
 
     def _record_command_intent(self, attempt: CommandAttempt) -> None:
         self._arm_diagnostic_boundary(attempt)
@@ -454,6 +467,13 @@ class DroneController:
                     self._maximum_climb_write_gap, now - self._last_climb_written
                 )
             self._last_climb_written = now
+        elif isinstance(attempt.command, Climb) and attempt.outcome == "queued":
+            now = time.monotonic()
+            if self._last_climb_queued is not None:
+                self._maximum_climb_queue_gap = max(
+                    self._maximum_climb_queue_gap, now - self._last_climb_queued
+                )
+            self._last_climb_queued = now
 
     def command_audit(self) -> dict[str, object]:
         """Snapshot bounded details and whole-session aggregates without performing I/O."""
@@ -473,11 +493,19 @@ class DroneController:
             - len(self.command_attempts),
             "maximum_climb_attempt_gap_s": self._maximum_climb_attempt_gap,
             "maximum_climb_write_gap_s": self._maximum_climb_write_gap,
+            "maximum_climb_queue_gap_s": self._maximum_climb_queue_gap,
             "last_climb_written_monotonic": self._last_climb_written,
+            "last_climb_queued_monotonic": self._last_climb_queued,
             "maximum_heartbeat_gap_s": self._maximum_heartbeat_gap,
             "heartbeat_writes": self._heartbeat_writes,
+            "heartbeat_queued": self._heartbeat_queued,
+            "maximum_heartbeat_queue_gap_s": self._maximum_heartbeat_queue_gap,
             "heartbeat_failures": self._heartbeat_failures,
             "last_heartbeat_written_monotonic": self._last_heartbeat_written,
+            "last_heartbeat_queued_monotonic": self._last_heartbeat_queued,
+            "write_confirmation": "unix_submission"
+            if self._delivery_outcome() == "queued"
+            else "physical_port_write",
             "profile": self.navigation_profile.name,
             "profile_initialized_monotonic": self.profile_initialized_at,
             "profile_elapsed_s": time.monotonic() - self.profile_initialized_at,
@@ -697,13 +725,24 @@ class DroneController:
             self._heartbeat_failures += 1
             raise
         written_at = time.monotonic()
-        if self._last_heartbeat_written is not None:
-            self._maximum_heartbeat_gap = max(
-                self._maximum_heartbeat_gap, written_at - self._last_heartbeat_written
-            )
-        self._heartbeat_writes += 1
-        self._last_heartbeat_written = written_at
+        self._record_heartbeat_delivery(written_at)
         self._last_gcs_heartbeat_time = now
+
+    def _record_heartbeat_delivery(self, now: float) -> None:
+        if self._delivery_outcome() == "queued":
+            if self._last_heartbeat_queued is not None:
+                self._maximum_heartbeat_queue_gap = max(
+                    self._maximum_heartbeat_queue_gap, now - self._last_heartbeat_queued
+                )
+            self._heartbeat_queued += 1
+            self._last_heartbeat_queued = now
+        else:
+            if self._last_heartbeat_written is not None:
+                self._maximum_heartbeat_gap = max(
+                    self._maximum_heartbeat_gap, now - self._last_heartbeat_written
+                )
+            self._heartbeat_writes += 1
+            self._last_heartbeat_written = now
 
     def _matching_vehicle_message(self, message: Any) -> bool:
         return is_vehicle_message(
