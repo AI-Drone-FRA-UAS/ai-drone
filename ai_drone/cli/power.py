@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from ai_drone.link.targets import (
-    REMOTE_UV,
     preferred_pi_addresses,
+    remote_uv_command,
     resolve_connection_target,
     resolve_deploy_target,
     ssh_base_command,
@@ -25,8 +25,10 @@ from ai_drone.mavlink.ownership import SerialDeviceBusyError, require_available_
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
 from ai_drone.platform import is_raspberry_pi
+from ai_drone.power_state import FcObserved, PiSnapshot, parse_fc_probe
 from ai_drone.runtime_status import RuntimeStatus
 from ai_drone.settings import load_settings
+from ai_drone.system import unit_state
 
 WALK_UNIT = "ai-drone-walk.service"
 RUNTIME_UNIT = "ai-drone-runtime.service"
@@ -142,9 +144,10 @@ def _walk_state(*, deadline: float | None = None) -> dict[str, str]:
     value = dict(
         line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
     )
-    if value.get("LoadState") == "not-found" and result.returncode in (0, 1):
+    state = unit_state(result)
+    if state.absent:
         return {"LoadState": "not-found", "ActiveState": "inactive"}
-    if result.returncode or value.get("LoadState") != "loaded":
+    if result.returncode or state.load != "loaded":
         raise RuntimeError("cannot establish recorder service state")
     return value
 
@@ -181,11 +184,12 @@ def _runtime_fc(status: dict[str, Any]) -> dict[str, Any]:
 
 
 def _guard_idle(snapshot: dict[str, Any], *, allow_walk: bool = False) -> None:
-    if snapshot.get("complete") is not True:
+    parsed = PiSnapshot.parse(snapshot)
+    if not parsed.complete:
         raise RuntimeError("hardware-owner status is unknown")
-    if snapshot.get("packages") or snapshot.get("package_database_ok") is not True:
+    if parsed.packages_active or not parsed.package_database_ok:
         raise RuntimeError("package maintenance is active or dpkg is incomplete")
-    runtime = snapshot.get("runtime")
+    runtime = parsed.runtime
     if runtime is not None:
         _runtime_fc(runtime)
         if (
@@ -197,26 +201,21 @@ def _guard_idle(snapshot: dict[str, Any], *, allow_walk: bool = False) -> None:
                 "runtime control or network operation is active or unknown"
             )
         clients = runtime.get("clients")
-        allowed = (
-            2 if allow_walk and snapshot["walk"].get("ActiveState") in _ACTIVE else 1
-        )
+        allowed = 2 if allow_walk and parsed.walk_active else 1
         if type(clients) is not int or not 1 <= clients <= allowed:
             raise RuntimeError(
                 "recorder or another runtime client is active or unknown"
             )
     owners = [
         owner
-        for owner in snapshot["hardware"]
-        if not (
-            (allow_walk and owner.get("walk"))
-            or (runtime is not None and owner.get("runtime"))
-        )
+        for owner in parsed.hardware
+        if not ((allow_walk and owner.walk) or (runtime is not None and owner.runtime))
     ]
     if owners:
         raise RuntimeError(
             "hardware is busy; close other camera, serial or GPIO tools first"
         )
-    if not allow_walk and snapshot["walk"].get("ActiveState") in _ACTIVE:
+    if not allow_walk and parsed.walk_active:
         raise RuntimeError("recorder has not finished")
 
 
@@ -468,10 +467,7 @@ def _ssh_commands(action: str) -> list[list[str]]:
             for host in preferred_pi_addresses(connection)
         ]
     )
-    remote = (
-        f"cd {shlex.quote(target.project_dir)} && "
-        f"{REMOTE_UV} run --no-sync python -m ai_drone.cli.power --remote " + action
-    )
+    remote = remote_uv_command(target, "ai_drone.cli.power", ["--remote", action])[-1]
     return [
         [
             *ssh_base_command(target.ssh_config),
@@ -529,13 +525,8 @@ def _fresh_fc(command: list[str], *, fallback: bool = True) -> dict[str, Any]:
 
 
 def _require_disarmed(fc: dict[str, Any]) -> None:
-    age = fc.get("heartbeat_age_s")
-    if (
-        fc.get("status") != "disarmed"
-        or isinstance(age, bool)
-        or not isinstance(age, int | float)
-        or not 0 <= age <= 2
-    ):
+    observation = parse_fc_probe(fc)
+    if not isinstance(observation, FcObserved) or not observation.fresh_disarmed:
         raise RuntimeError(
             "fresh selected-FC disarmed state is not established; do not disconnect"
         )
