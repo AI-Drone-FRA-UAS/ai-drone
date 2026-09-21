@@ -884,6 +884,28 @@ def test_takeoff_uses_guided_nogps_flag_and_rangefinder_delta(monkeypatch) -> No
     assert controller._flight_started_by_controller
 
 
+def test_takeoff_refuses_when_target_plus_ground_reference_exceeds_max_alt(
+    monkeypatch,
+) -> None:
+    controller = DroneController(device="udp:127.0.0.1:14550", max_altitude=0.5)
+    controller.connection = MagicMock()
+    controller.is_armed = True
+    controller._armed_by_controller = True
+    controller.flight_mode = "GUIDED_NOGPS"
+    controller.current_altitude = 0.1
+    now = time.monotonic()
+    controller.yaw_rad = 0.0
+    controller.last_attitude_time = now
+    controller.flow_quality = 67
+    controller.last_flow_time = now
+    controller.last_heartbeat_time = now
+    controller.last_telemetry_time = now
+    monkeypatch.setattr(controller, "wait_for_altitude", lambda **_kwargs: 0.1)
+
+    with pytest.raises(FlightSafetyError, match="exceeds maximum altitude"):
+        controller.takeoff(0.45)
+
+
 def test_guided_nogps_climb_is_level_and_uses_climb_rate_field(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()

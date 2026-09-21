@@ -10,8 +10,9 @@ import queue
 import signal
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import CancelledError
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1473,25 +1474,51 @@ def _close_recording(recording: _Recording) -> None:
         )
 
 
+def _write_minimal_manifest(recording: _Recording, error: BaseException) -> None:
+    if recording.paths.manifest.exists():
+        return
+    manifest = {
+        "schema": 1,
+        "operation": recording.operation,
+        "error": str(error),
+        "stop_reason": recording.state.stop_reason or "capture_failed",
+        "completed": False,
+    }
+    with suppress(OSError):
+        atomic_write_text(
+            recording.paths.manifest,
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        )
+
+
 def run(
-    arguments: list[str] | None = None, *, operation: str = _INSPECT_OPERATION
+    arguments: Sequence[str] | None = None,
+    *,
+    operation: str = "inspect",
 ) -> int:
     parser = _parser(operation=operation)
     args = parser.parse_args(arguments)
     _validate_args(parser, args, operation=operation)
     recording = _recording(args, operation)
     try:
-        _start_recording(recording)
-        _record_capture(recording)
-    except KeyboardInterrupt:
-        recording.state.set_stop_reason("operator_interrupt")
-        recording.state.record_error("interrupted by user during startup or capture")
+        try:
+            _start_recording(recording)
+            _record_capture(recording)
+        except KeyboardInterrupt:
+            recording.state.set_stop_reason("operator_interrupt")
+            recording.state.record_error(
+                "interrupted by user during startup or capture"
+            )
+        except Exception as error:
+            recording.state.record_error(str(error))
+            recording.state.set_stop_reason("capture_failed")
+        finally:
+            _close_recording(recording)
+        return _finish_recording(recording)
     except Exception as error:
-        recording.state.record_error(str(error))
-        recording.state.set_stop_reason("capture_failed")
-    finally:
-        _close_recording(recording)
-    return _finish_recording(recording)
+        _write_minimal_manifest(recording, error)
+        print(f"FAILED: recording terminated unexpectedly: {error}", flush=True)
+        return 1
 
 
 def _finish_recording(recording: _Recording) -> int:

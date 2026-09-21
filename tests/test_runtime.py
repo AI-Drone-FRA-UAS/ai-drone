@@ -84,13 +84,14 @@ def access(monkeypatch, tmp_path):
     manifest.write_text(
         json.dumps(
             {
+                "schema": 1,
                 "profiles": {
                     profile.uuid: {
                         "autoconnect": profile.autoconnect,
                         "mode": profile.mode,
                     }
                     for profile in PROFILES
-                }
+                },
             }
         )
     )
@@ -132,6 +133,21 @@ def access(monkeypatch, tmp_path):
     )
     value.mutations = mutations
     return value
+
+
+def test_network_profiles_rejects_missing_or_invalid_schema(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"profiles": {}}))
+    settings = Settings(
+        runtime=RuntimeSettings(
+            socket=str(tmp_path / "vehicle.sock"),
+            status=str(tmp_path / "status.json"),
+            network_profiles=str(bad),
+        )
+    )
+    hub: Any = Hub()
+    with pytest.raises(ValueError, match="schema must be 1"):
+        runtime.VehicleAccess(hub, settings, manage_network=True)
 
 
 @pytest.mark.parametrize(

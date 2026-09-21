@@ -425,10 +425,12 @@ class VehicleServer:
         for thread in threads:
             if thread is not None and thread.ident is not None:
                 thread.join(max(0, deadline - time.monotonic()))
-        self._remove_socket()
-        if any(thread is not None and thread.is_alive() for thread in threads):
-            raise TimeoutError("vehicle server did not stop boundedly")
-        self._release_socket()
+        try:
+            self._remove_socket()
+            if any(thread is not None and thread.is_alive() for thread in threads):
+                raise TimeoutError("vehicle server did not stop boundedly")
+        finally:
+            self._release_socket()
 
     def __enter__(self) -> VehicleServer:
         return self.start()

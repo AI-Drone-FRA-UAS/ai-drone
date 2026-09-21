@@ -24,7 +24,7 @@ DEFAULT_SETTLE_S = 0.5
 MOUNT_OPEN_VALUE = 0.0
 MOUNT_CLOSE_VALUE = -1.0
 
-_LOCK_PATH = Path("/tmp/ai-drone-bcm12-servo.lock")
+_LOCK_PATH = Path("/run/ai-drone/bcm12-servo.lock")
 
 
 def parse_servo_input(
@@ -74,12 +74,21 @@ def pulse_us(
 class ServoProcessLock:
     """Prevent cooperating ai-drone processes from sharing BCM12 concurrently."""
 
-    def __init__(self, path: Path = _LOCK_PATH) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         import fcntl
 
         self._fcntl = fcntl
-
-        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        target_path = Path(path or _LOCK_PATH)
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(target_path, flags, 0o600)
+        except OSError:
+            if path is None:
+                target_path = Path("/tmp/ai-drone-bcm12-servo.lock")
+                descriptor = os.open(target_path, flags, 0o600)
+            else:
+                raise
         self._handle = os.fdopen(descriptor, "r+")
         try:
             self._fcntl.flock(

@@ -443,6 +443,7 @@ def _shared_final_action(action: str, runtime: dict[str, Any]) -> dict[str, Any]
         snapshot = _pi_snapshot()
         _guard_idle(snapshot)
         fc = _pi_fc(snapshot)
+        _require_disarmed(fc)
         deadline = time.monotonic() + 2 - fc["heartbeat_age_s"]
         if action == "shutdown":
             result = _run(

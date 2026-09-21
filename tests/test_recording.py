@@ -8,7 +8,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,6 +65,15 @@ def test_create_recording_paths_creates_expected_dataset(tmp_path) -> None:
     assert paths.video == paths.root / "camera.h264"
     assert paths.telemetry_tlog == paths.root / "telemetry.tlog"
     assert paths.manifest == paths.root / "manifest.json"
+
+
+def test_create_recording_paths_uses_utc_when_output_omitted(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    now_utc = datetime(2026, 9, 21, 14, 30, 0, tzinfo=UTC)
+    paths = create_recording_paths(now=now_utc)
+    assert paths.root.name == "20260921-143000"
 
 
 def test_create_recording_paths_reserves_unique_directories_concurrently(

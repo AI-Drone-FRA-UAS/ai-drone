@@ -69,11 +69,27 @@ class VehicleAccess:
         self._publish_error: Exception | None = None
         self._eligible: tuple[str, ...] | None = None
         if manage_network:
-            document = json.loads(Path(settings.runtime.network_profiles).read_text())
+            try:
+                document = json.loads(
+                    Path(settings.runtime.network_profiles).read_text()
+                )
+            except (OSError, json.JSONDecodeError) as error:
+                raise ValueError(f"failed to read network profiles: {error}") from error
+            if (
+                not isinstance(document, dict)
+                or document.get("schema") != 1
+                or "profiles" not in document
+                or not isinstance(document["profiles"], dict)
+            ):
+                raise ValueError(
+                    "invalid network profiles file: schema must be 1 and profiles dict required"
+                )
             self._eligible = tuple(
                 identifier
                 for identifier, profile in document["profiles"].items()
-                if profile["autoconnect"] and profile["mode"] in {"", "infrastructure"}
+                if isinstance(profile, dict)
+                and profile.get("autoconnect") is True
+                and profile.get("mode") in {"", "infrastructure"}
             )
             if not self._eligible:
                 raise ValueError(

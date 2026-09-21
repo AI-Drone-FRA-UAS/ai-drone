@@ -69,7 +69,7 @@ def create_recording_paths(
 ) -> RecordingPaths:
     """Create a unique output directory and return its standard file paths."""
     if output is None:
-        current = now or datetime.now().astimezone()
+        current = now or datetime.now(UTC)
         base = Path("artifacts") / "sensor-recordings"
         candidate = base / current.strftime("%Y%m%d-%H%M%S")
     else:

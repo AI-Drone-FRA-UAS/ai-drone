@@ -6,6 +6,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from ai_drone.mavlink.safety import (
     require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
 )
-from ai_drone.mavlink.shared import received_monotonic
+from ai_drone.mavlink.shared import SharedMavlinkError, received_monotonic
 from ai_drone.recording import request_message_intervals
 from ai_drone.validation import finite_in_range
 
@@ -136,6 +137,17 @@ def _reported_battery_voltage(message: Any) -> float | None:
     )
     # UINT16_MAX means voltage was not supplied.
     return millivolts / 1_000.0 if healthy and 0.0 < millivolts < 65_535.0 else None
+
+
+def _validate_takeoff_ceiling(
+    target: float, ground_reference: float | None, max_altitude: float
+) -> None:
+    ground = ground_reference or 0.0
+    if ground + target > max_altitude:
+        raise FlightSafetyError(
+            f"takeoff target {target:.2f} m above ground reference {ground:.2f} m "
+            f"exceeds maximum altitude {max_altitude:.2f} m"
+        )
 
 
 class DroneController:
@@ -1016,7 +1028,12 @@ class DroneController:
         while time.monotonic() < deadline:
             if self._connection().recv_match(type="HEARTBEAT", blocking=False) is None:
                 break
+        next_request = time.monotonic() + 1.0
         while (remaining := deadline - time.monotonic()) > 0:
+            now = time.monotonic()
+            if now >= next_request:
+                self._request_disarm()
+                next_request = now + 1.0
             message = self._connection().recv_match(
                 type="HEARTBEAT", blocking=True, timeout=min(remaining, 0.5)
             )
@@ -1086,6 +1103,7 @@ class DroneController:
         if self.flight_mode != "GUIDED_NOGPS":
             self.set_mode("GUIDED_NOGPS")
         self._ground_reference = self.current_altitude
+        _validate_takeoff_ceiling(target, self._ground_reference, self.max_altitude)
         self._local_altitude_offset = None
         self.local_position_altitude_aligned = None
         self._align_local_altitude(time.monotonic())
@@ -1196,7 +1214,8 @@ class DroneController:
         deadline = time.monotonic() + timeout
         next_request = 0.0
         while time.monotonic() < deadline:
-            self.update_telemetry()
+            with suppress(SharedMavlinkError):
+                self.update_telemetry()
             self._require_autonomous_control()
             now = time.monotonic()
             if now >= next_request:
@@ -1216,7 +1235,7 @@ class DroneController:
             return
         self._landing_commanded = True
         mapping = self.connection.mode_mapping()
-        if "LAND" not in mapping:
+        if not mapping or "LAND" not in mapping:
             raise FlightSafetyError("flight controller does not expose LAND mode")
         self.connection.mav.set_mode_send(
             self.target_system,

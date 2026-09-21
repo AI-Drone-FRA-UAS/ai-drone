@@ -350,11 +350,12 @@ def _parser() -> argparse.ArgumentParser:
         "handoff",
         help="request explicit handoff to a radio pilot in a confirmed pilot mode",
     )
-    handoff.set_defaults(
-        handler=lambda _args: (
-            runtime_request(load_settings().runtime.socket, {"human": True}) and 0
-        )
-    )
+
+    def _cmd_handoff(_args: argparse.Namespace) -> int:
+        runtime_request(load_settings().runtime.socket, {"human": True})
+        return 0
+
+    handoff.set_defaults(handler=_cmd_handoff)
 
     return parser
 

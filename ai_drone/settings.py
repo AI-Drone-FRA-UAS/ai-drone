@@ -6,6 +6,7 @@ import ipaddress
 import math
 import os
 import re
+import sys
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
@@ -127,6 +128,10 @@ def load_settings(
     except FileNotFoundError:
         if selected:
             raise ValueError(f"configuration file does not exist: {source}") from None
+        print(
+            f"Warning: {source} not found; falling back to default settings",
+            file=sys.stderr,
+        )
         return Settings()
     except tomllib.TOMLDecodeError as error:
         raise ValueError(f"invalid TOML configuration: {source}") from error
