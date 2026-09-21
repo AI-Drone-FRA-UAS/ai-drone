@@ -95,7 +95,6 @@ with pymupdf.open("plakat-a1.pdf") as quelle:
             seite.show_pdf_page(seite.rect, quelle, 0, keep_proportion=True)
             ziel.save(f"plakat-{name}.pdf", garbage=4, deflate=True)
         print(f"plakat-{name}.pdf: {breite:.0f} x {hoehe:.0f} mm")
-
 ```
 
 Alternativ im Browser öffnen und drucken: Papierformat wählen, Ränder **keine**,
