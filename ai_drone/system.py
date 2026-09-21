@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import shlex
-import shutil
 import signal
 import subprocess
 import threading
@@ -39,26 +38,14 @@ def unit_state(result: subprocess.CompletedProcess[str]) -> UnitState:
     )
 
 
-def run(
-    command: Sequence[str],
-    *,
-    dry_run: bool = False,
-    capture: bool = False,
-    timeout: float | None = None,
-) -> subprocess.CompletedProcess[str]:
+def print_command(command: Sequence[str]) -> None:
     print(f"  {shlex.join(command)}", flush=True)
-    if dry_run:
-        return subprocess.CompletedProcess(list(command), 0, "", "")
-    return subprocess.run(
-        command, check=True, capture_output=capture, text=True, timeout=timeout
-    )
 
 
-def require_uv() -> str:
-    executable = shutil.which("uv")
-    if executable is None:
-        raise FileNotFoundError("uv is required for Python execution")
-    return executable
+def run(command: Sequence[str], *, dry_run: bool = False) -> None:
+    print_command(command)
+    if not dry_run:
+        subprocess.run(command, check=True)
 
 
 def namespace_to_flags(

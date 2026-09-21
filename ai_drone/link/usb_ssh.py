@@ -19,6 +19,8 @@ from ai_drone.link.targets import (
     ssh_base_command,
     wait_for_ping,
 )
+from ai_drone.system import print_command
+from ai_drone.system import run as run_command
 
 MTU = "1412"
 _SAFE_INTERFACE = re.compile(r"[^\x00-\x1f\x7f]{1,128}\Z")
@@ -162,16 +164,6 @@ def ssh_command(
     return [*ssh_base_command(ssh_config), "-t", f"{pi_user}@{pi_ip}", remote]
 
 
-def _print_command(command: Sequence[str]) -> None:
-    print(f"  {shlex.join(command)}", flush=True)
-
-
-def _run(command: Sequence[str], *, dry_run: bool) -> None:
-    _print_command(command)
-    if not dry_run:
-        subprocess.run(command, check=True)
-
-
 def run_usb_transport(
     args: argparse.Namespace,
     defaults: ConnectionTarget,
@@ -200,12 +192,12 @@ def run_usb_transport(
     print(f"Configuring laptop side as {args.host_ip}/24...", flush=True)
     if args.dry_run or not has_host_ip(iface, args.host_ip, system):
         for command in config_commands(iface, args.host_ip, system):
-            _run(command, dry_run=args.dry_run)
+            run_command(command, dry_run=args.dry_run)
 
     print(f"Waiting for Pi at {args.pi_ip}...", flush=True)
     reachable = True
     if args.dry_run:
-        _print_command(ping_command(args.pi_ip, system))
+        print_command(ping_command(args.pi_ip, system))
     else:
         reachable = wait_for_ping(args.pi_ip, args.timeout, system)
     if not reachable:
@@ -219,7 +211,7 @@ def run_usb_transport(
     print(
         "Connecting with SSH. Use the Pi password you set while flashing.", flush=True
     )
-    _run(
+    run_command(
         ssh_command(args.pi_user, args.pi_ip, args.ssh_config),
         dry_run=args.dry_run,
     )

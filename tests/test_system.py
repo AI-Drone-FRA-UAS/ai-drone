@@ -6,7 +6,40 @@ from pathlib import Path
 
 import pytest
 
-from ai_drone.system import handled_signals, namespace_to_flags, unit_state
+from ai_drone.system import handled_signals, namespace_to_flags, run, unit_state
+
+
+def test_command_dry_run_prints_quoted_arguments_without_execution(monkeypatch, capsys):
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_args, **_kwargs: pytest.fail("executed command")
+    )
+    assert run(["tool", "a b", "$(literal)"], dry_run=True) is None
+    assert capsys.readouterr().out == "  tool 'a b' '$(literal)'\n"
+
+
+def test_command_keeps_inherited_io_and_none_result(monkeypatch):
+    calls = []
+
+    def execute(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    assert run(["tool"]) is None
+    assert calls == [(["tool"], {"check": True})]
+
+
+@pytest.mark.parametrize(
+    "error", [OSError("unavailable"), subprocess.CalledProcessError(7, ["tool"])]
+)
+def test_command_errors_reach_the_callers_policy(monkeypatch, error):
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(type(error)) as raised:
+        run(["tool"])
+    assert raised.value is error
 
 
 def test_namespace_flags_roundtrip_values():

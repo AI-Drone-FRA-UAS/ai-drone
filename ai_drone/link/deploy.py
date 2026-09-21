@@ -22,6 +22,8 @@ from ai_drone.link.targets import (
     resolve_deploy_target,
     ssh_base_command,
 )
+from ai_drone.system import print_command
+from ai_drone.system import run as run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_NAME = ".__ai_drone_manifest"
@@ -451,19 +453,9 @@ def _manifest_paths(root: Path, deployment_id: str) -> set[str]:
     return allowed
 
 
-def _print_command(command: Sequence[str]) -> None:
-    print(f"  {shlex.join(command)}", flush=True)
-
-
-def _run(command: Sequence[str], *, dry_run: bool) -> None:
-    _print_command(command)
-    if not dry_run:
-        subprocess.run(command, check=True)
-
-
 def _run_remote_preflight(plan: DeployPlan) -> None:
     print("Checking remote deployment directory safety ...", flush=True)
-    _run(remote_preflight_command(plan), dry_run=plan.dry_run)
+    run_command(remote_preflight_command(plan), dry_run=plan.dry_run)
 
 
 def _deploy_transaction(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
@@ -496,8 +488,8 @@ def _deploy_transaction(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
         "Stage runtime; verify disarmed idle state; back up source/environment; update and restart.",
         flush=True,
     )
-    _print_command(upload)
-    _print_command(command)
+    print_command(upload)
+    print_command(command)
     if plan.dry_run:
         return
     archive = _create_sync_archive(repo_root, deployment_id)
