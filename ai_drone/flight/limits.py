@@ -10,6 +10,7 @@ from ai_drone.flight.state import Sample, fresh
 from ai_drone.validation import finite_in_range
 
 MAX_PHYSICAL_ALTITUDE_M = 0.8
+TAKEOFF_OVERSHOOT_RESERVE_M = 0.05
 
 
 @dataclass(frozen=True)
@@ -84,9 +85,11 @@ def relative_position_ready(
 def takeoff_ceiling_violation(
     target: float, ground_reference: float | None, ceiling: float
 ) -> str | None:
-    ground = ground_reference or 0.0
-    if ground + target > ceiling:
-        return f"takeoff target {target:.2f} m above ground reference {ground:.2f} m exceeds maximum altitude {ceiling:.2f} m"
+    if ground_reference is None:
+        return "takeoff requires a fresh ground reference"
+    ground = ground_reference
+    if ground + target + TAKEOFF_OVERSHOOT_RESERVE_M > ceiling:
+        return f"takeoff target {target:.2f} m above ground reference {ground:.2f} m including {TAKEOFF_OVERSHOOT_RESERVE_M:.2f} m overshoot reserve exceeds maximum altitude {ceiling:.2f} m"
     return None
 
 

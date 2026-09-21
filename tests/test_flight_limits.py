@@ -49,8 +49,9 @@ def test_inclusive_floor_ceiling_and_conservative_local_range_are_independent():
         )
         is None
     )
-    assert takeoff_ceiling_violation(0.5, 0.3, 0.8) is None
-    assert takeoff_ceiling_violation(0.5, 0.31, 0.8) is not None
+    assert takeoff_ceiling_violation(0.5, 0.25, 0.8) is None
+    assert takeoff_ceiling_violation(0.5, 0.251, 0.8) is not None
+    assert takeoff_ceiling_violation(0.5, None, 0.8) is not None
 
 
 def test_navigation_is_operation_specific_but_not_ignored_in_loiter():

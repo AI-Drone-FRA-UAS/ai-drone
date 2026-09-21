@@ -1634,3 +1634,37 @@ def test_emergency_stop_preserves_original_error_on_failed_write():
     controller.connection.mav.set_mode_send.side_effect = OSError("write failed")
     controller.emergency_stop()
     assert controller._landing_commanded
+
+
+def test_takeoff_reserves_overshoot_and_refuses_before_first_arm_write(monkeypatch):
+    controller = DroneController(device="tcp:127.0.0.1:5760")
+    controller.connection = MagicMock()
+    _stub_arm_preconditions(monkeypatch, controller)
+    controller.state = replace(
+        controller.state, altitude=Sample(0.26, time.monotonic())
+    )
+    with pytest.raises(FlightSafetyError, match=r"0\.05 m overshoot reserve"):
+        controller.takeoff(0.5)
+    controller.connection.arducopter_arm.assert_not_called()
+    controller.connection.mav.set_attitude_target_send.assert_not_called()
+
+
+def test_prearm_rechecks_ground_envelope_after_mode_and_disarm_confirmation(
+    monkeypatch,
+):
+    controller = DroneController(device="tcp:127.0.0.1:5760")
+    controller.connection = MagicMock()
+    _stub_arm_preconditions(monkeypatch, controller)
+    controller.state = replace(
+        controller.state, altitude=Sample(0.05, time.monotonic())
+    )
+
+    def move_pad():
+        controller.state = replace(
+            controller.state, altitude=Sample(0.26, time.monotonic())
+        )
+
+    monkeypatch.setattr(controller, "_fresh_disarmed", move_pad)
+    with pytest.raises(FlightSafetyError, match="overshoot reserve"):
+        controller.arm(takeoff_gain_m=0.5)
+    controller.connection.arducopter_arm.assert_not_called()

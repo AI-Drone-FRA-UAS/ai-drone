@@ -936,7 +936,9 @@ class DroneController:
                 return
         raise TimeoutError(f"flight controller did not confirm {requested} mode")
 
-    def arm(self, timeout: float = 10.0) -> None:
+    def arm(
+        self, timeout: float = 10.0, *, takeoff_gain_m: float | None = None
+    ) -> None:
         self._require_autonomous_control()
         self._require_operator()
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
@@ -956,6 +958,7 @@ class DroneController:
         self.verify_onboard_logging()
         if self.wait_for_altitude(timeout=min(timeout, 3.0)) is None:
             raise FlightSafetyError("no fresh downward DISTANCE_SENSOR altitude")
+        self._verify_takeoff_reference(takeoff_gain_m)
         self.wait_for_optical_flow(timeout=min(timeout, 3.0))
         self.wait_for_attitude(timeout=min(timeout, 3.0))
         self.wait_for_no_rc_input(timeout=min(timeout, 3.0))
@@ -968,6 +971,7 @@ class DroneController:
         self._require_operator()
         if not self.altitude_is_fresh():
             raise FlightSafetyError("downward altitude became stale before arming")
+        self._verify_takeoff_reference(takeoff_gain_m)
         self._write_command(Arm())
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -982,6 +986,18 @@ class DroneController:
                 self.phase = Armed()
                 return
         raise TimeoutError("flight controller did not confirm arming")
+
+    def _verify_takeoff_reference(self, takeoff_gain_m: float | None) -> None:
+        if takeoff_gain_m is not None:
+            gain = finite_in_range(
+                takeoff_gain_m,
+                "takeoff_gain_m",
+                minimum=0.15,
+                maximum=self.max_altitude,
+            )
+            if not self.altitude_is_fresh():
+                raise FlightSafetyError("takeoff requires a fresh ground reference")
+            _validate_takeoff_ceiling(gain, self.current_altitude, self.max_altitude)
 
     def _drain_messages(self) -> None:
         connection = self._connection()
@@ -1121,7 +1137,7 @@ class DroneController:
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=60.0)
         self._require_profile_time(timeout)
         if not self.is_armed:
-            self.arm()
+            self.arm(takeoff_gain_m=target)
         if not self._armed_by_controller:
             raise FlightSafetyError("takeoff requires arming by this controller")
         if self.wait_for_altitude(timeout=3.0) is None:
