@@ -80,10 +80,10 @@ def host(tmp_path, monkeypatch):
 
     def run(command, **_kwargs):
         events.append(command)
-        if command[:2] == ["systemctl", "start"]:
-            states[command[2]]["active"] = "active"
-        elif command[:2] == ["systemctl", "stop"]:
-            states[command[2]]["active"] = "inactive"
+        if command[0] == "systemctl" and command[1] in {"start", "stop"}:
+            states[command[2]]["active"] = (
+                "active" if command[1] == "start" else "inactive"
+            )
         elif command[:2] == ["systemd-tmpfiles", "--create"]:
             locks_directory.mkdir(mode=0o700, exist_ok=True)
         return subprocess.CompletedProcess(command, 0, "", "")
