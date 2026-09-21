@@ -172,6 +172,7 @@ def _ardupilot_root() -> Path:
     value = os.environ.get("ARDUPILOT_ROOT")
     if not value:
         pytest.skip("set ARDUPILOT_ROOT to the pinned ArduPilot checkout")
+    _require_loopback_namespace()
     root = Path(value).expanduser().resolve()
     binary = root / "build" / "sitl" / "bin" / "arducopter"
     if not binary.is_file():
@@ -184,6 +185,15 @@ def _ardupilot_root() -> Path:
     if head != ARDUPILOT_COMMIT:
         pytest.fail(f"ARDUPILOT_ROOT must be checked out at {ARDUPILOT_COMMIT}")
     return root
+
+
+def _require_loopback_namespace() -> None:
+    """No simulator or child process can route commands to a physical aircraft."""
+    interfaces = {name for _index, name in socket.if_nameindex()}
+    if os.environ.get("AI_DRONE_ISOLATED_SITL") != "1" or interfaces != {"lo"}:
+        raise RuntimeError(
+            "SITL requires a loopback-only network namespace; use scripts/run_sitl.py"
+        )
 
 
 def _wait_for_tcp(process: subprocess.Popen[bytes], timeout: float = 30.0) -> None:
@@ -253,6 +263,8 @@ class _ExternalMavlinkSensors:
         self.status_texts: list[str] = []
         self.status_by_mode: list[tuple[str | None, str]] = []
         self.range_observations: list[dict[str, Any]] = []
+        self.truth: list[dict[str, Any]] = []
+        self.attitudes: list[dict[str, float]] = []
         self._current_mode: str | None = None
         self._current_armed: bool | None = None
 
@@ -296,6 +308,8 @@ class _ExternalMavlinkSensors:
             self.status_texts.clear()
             self.status_by_mode.clear()
             self.range_observations.clear()
+            self.truth.clear()
+            self.attitudes.clear()
 
     def wait_for_mode(
         self,
@@ -524,7 +538,11 @@ class _ExternalMavlinkSensors:
     def _observe_vehicle_message(self, message: Any) -> None:
         message_type = message.get_type()
         with self._condition:
-            if message_type == "HEARTBEAT":
+            if message_type == "ATTITUDE":
+                self.attitudes.append(
+                    {"at": time.monotonic(), "yaw": float(message.yaw)}
+                )
+            elif message_type == "HEARTBEAT":
                 mode = _mode_from_heartbeat(message)
                 armed = heartbeat_is_armed(message)
                 self._current_mode = mode
@@ -585,6 +603,7 @@ class _ExternalMavlinkSensors:
             mavlink2.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 20.0,
             mavlink2.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 10.0,
             mavlink2.MAVLINK_MSG_ID_RC_CHANNELS: 10.0,
+            mavlink2.MAVLINK_MSG_ID_ATTITUDE: SENSOR_RATE_HZ,
         }
         if self.forward_range_enabled:
             intervals[mavlink2.MAVLINK_MSG_ID_DISTANCE_SENSOR] = SENSOR_RATE_HZ
@@ -622,6 +641,22 @@ class _ExternalMavlinkSensors:
                     altitude_m = max(0.0, float(state.alt) - ground_altitude_m)
                     self.altitudes_m.append(altitude_m)
                     self.altitudes_by_mode.append((self._current_mode, altitude_m))
+                    self.truth.append(
+                        {
+                            "at": last_state_at,
+                            "mode": self._current_mode,
+                            "armed": self._current_armed,
+                            "height": altitude_m,
+                            "yaw": float(state.yaw),
+                            "roll": float(state.roll),
+                            "pitch": float(state.pitch),
+                            "lat": int(state.lat_int),
+                            "lon": int(state.lon_int),
+                            "vn": float(state.vn),
+                            "ve": float(state.ve),
+                            "vd": float(state.vd),
+                        }
+                    )
                     self._condition.notify_all()
                 self._send_sensors(sender, state, ground_altitude_m)
                 self._ready.set()
@@ -704,15 +739,31 @@ def _assert_sitl_parameters(
 
 
 @contextmanager
-def _running_sitl(root: Path, tmp_path: Path, *, forward_range_enabled: bool = False):
+def _running_sitl(
+    root: Path,
+    tmp_path: Path,
+    *,
+    forward_range_enabled: bool = False,
+    heading: float = 353,
+    overlay: dict[str, float] | None = None,
+):
+    _require_loopback_namespace()
     with closing(socket.socket()) as probe:
         if probe.connect_ex(("127.0.0.1", 5760)) == 0:
-            pytest.skip("TCP port 5760 is already in use")
+            pytest.fail(
+                "TCP port 5760 is already in use; required SITL case cannot run"
+            )
 
     log_path = tmp_path / "sitl.log"
     binary = root / "build" / "sitl" / "bin" / "arducopter"
     defaults = root / "Tools" / "autotest" / "default_params" / "copter.parm"
     defaults_paths = [str(defaults), str(PARAMETERS.resolve())]
+    if overlay:
+        experiment = tmp_path / "experiment.parm"
+        experiment.write_text(
+            "".join(f"{name},{value:g}\n" for name, value in overlay.items())
+        )
+        defaults_paths.append(str(experiment))
     if forward_range_enabled:
         forward_defaults = tmp_path / "forward-rangefinder.parm"
         forward_defaults.write_text(
@@ -728,7 +779,7 @@ def _running_sitl(root: Path, tmp_path: Path, *, forward_range_enabled: bool = F
         "-I0",
         "-w",
         "--home",
-        "-35.363261,149.165230,584,353",
+        f"-35.363261,149.165230,584,{heading:g}",
         "--model",
         "x",
         "--speedup",
