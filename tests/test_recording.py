@@ -1421,6 +1421,32 @@ def test_summary_failure_writes_minimal_manifest(tmp_path, monkeypatch, failure)
     assert manifest["finalization_error"] == (str(failure) or type(failure).__name__)
 
 
+def test_capture_snapshot_is_coherent_and_owns_counter_copies():
+    state = CaptureState()
+    done = threading.Event()
+
+    def produce():
+        for index in range(1000):
+            with state.lock:
+                state.telemetry_counts[str(index)] += 1
+                state.vehicle_telemetry_counts[str(index)] += 1
+        done.set()
+
+    worker = threading.Thread(target=produce)
+    worker.start()
+    while not done.is_set():
+        snapshot = state.snapshot()
+        assert snapshot.telemetry_counts == snapshot.vehicle_telemetry_counts
+    worker.join(timeout=1)
+    snapshot = state.snapshot()
+    state.telemetry_counts.clear()
+    assert sum(snapshot.telemetry_counts.values()) == 1000
+    state.record_error("first")
+    state.record_error("cleanup")
+    assert state.snapshot().errors == ["first", "cleanup"]
+    assert state.worker_error == "first"
+
+
 class _UartRetryConnection:
     target_system = target_component = 1
     logfile = None

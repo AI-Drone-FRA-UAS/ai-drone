@@ -30,8 +30,12 @@ from ai_drone.cli.record import (
 from ai_drone.cli.tag_servo_record import (
     ARMED_FLIGHT_CONFIRMATION,
     ActuationStop,
+    StreakState,
     TagServoConfig,
     TagServoSession,
+    advance_streaks,
+    qualify,
+    select_trigger,
 )
 from ai_drone.durability import IntervalSync
 from ai_drone.mavlink.parameters import request_parameter
@@ -73,6 +77,39 @@ def _mount_config(*arguments: str) -> TagServoConfig:
     assert args.duration is None
     assert args.backend == "native"
     return TagServoConfig.from_args(args)
+
+
+@pytest.mark.parametrize(
+    "captured, now, expected",
+    [
+        (10.0, 10.0, True),
+        (10.0, 10.5, True),
+        (10.0, 10.5001, False),
+        (10.0, 9.0, False),
+        (None, 10.0, False),
+        (float("nan"), 10.0, False),
+    ],
+)
+def test_pure_qualification_age_boundary(captured, now, expected):
+    result = qualify([_detection(3)], _mount_config(), now, captured)
+    assert (3 in result.qualifying) is expected
+
+
+def test_pure_streak_resets_on_gap_readiness_and_missing_tag():
+    config = _mount_config()
+    state = StreakState()
+    for captured in (1.0, 1.1, 1.2):
+        state = advance_streaks(state, frozenset({3}), captured, True, config)
+    assert select_trigger(state, set(), set(), config) == 3
+    assert select_trigger(state, {3}, set(), config) is None
+    assert select_trigger(state, set(), {3}, config) is None
+    for captured, ready, tags in (
+        (2.0, True, {3}),
+        (1.3, False, {3}),
+        (1.3, True, set()),
+    ):
+        reset = advance_streaks(state, frozenset(tags), captured, ready, config)
+        assert select_trigger(reset, set(), set(), config) is None
 
 
 def test_active_parser_accepts_optional_count_or_unbounded_runtime() -> None:

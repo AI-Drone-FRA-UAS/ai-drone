@@ -96,10 +96,11 @@ class TelemetryWorker(threading.Thread):
         started: float,
     ) -> None:
         message_type = message.get_type()
-        self.state.telemetry_counts[message_type] += 1
-        if selected_vehicle:
-            self.state.vehicle_telemetry_counts[message_type] += 1
-            _observe_sensor_message(self.state, message, observed_at=received_at)
+        with self.state.lock:
+            self.state.telemetry_counts[message_type] += 1
+            if selected_vehicle:
+                self.state.vehicle_telemetry_counts[message_type] += 1
+                _observe_sensor_message(self.state, message, observed_at=received_at)
         record = telemetry_record(message, elapsed_s=received_at - started)
         timestamp = getattr(message, "_timestamp", None)
         if isinstance(timestamp, int | float) and not isinstance(timestamp, bool):
@@ -263,11 +264,14 @@ class DetectionWorker(threading.Thread):
                             if not pose_rejected:
                                 observer_detections.append(detection)
                             tags.append(tag)
-                            self.state.tag_ids[detection.tag_id] += 1
-                        self.state.tag_detections += len(tags)
-                        self.state.processed_frames += 1
                         current_ids = {int(tag["id"]) for tag in tags}
-                        self.state.visible_tag_ids = tuple(sorted(current_ids))
+                        with self.state.lock:
+                            self.state.tag_ids.update(
+                                detection.tag_id for detection in detections
+                            )
+                            self.state.tag_detections += len(tags)
+                            self.state.processed_frames += 1
+                            self.state.visible_tag_ids = tuple(sorted(current_ids))
                         if self.observer is not None:
                             self.observer.observe(item, observer_detections, tags)
                         for event, identifiers in (

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import math
 import threading
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
+
+from ai_drone.mavlink.safety import is_fresh
 
 if TYPE_CHECKING:
     import numpy as np
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class CaptureState:
-    """Thread-safe-enough counters written by one worker per field."""
+    """Cross-thread sink; mutations use lock and readers take coherent snapshots."""
 
     telemetry_counts: Counter[str] = field(default_factory=Counter)
     vehicle_telemetry_counts: Counter[str] = field(default_factory=Counter)
@@ -49,7 +50,8 @@ class CaptureState:
     stop_reason: str | None = None
     armed_abort: bool = False
     worker_error: str | None = None
-    _error_lock: threading.RLock = field(
+    errors: list[str] = field(default_factory=list)
+    lock: threading.RLock = field(
         default_factory=threading.RLock,
         repr=False,
     )
@@ -65,45 +67,59 @@ class CaptureState:
     def record_error(self, message: str) -> None:
         """Retain the first capture or cleanup error across all worker threads."""
 
-        with self._error_lock:
+        with self.lock:
+            self.errors.append(message)
             if self.worker_error is None:
                 self.worker_error = message
 
+    def snapshot(self) -> CaptureState:
+        """Return an isolated copy of the counters from one locked observation."""
+        with self.lock:
+            return replace(
+                self,
+                telemetry_counts=self.telemetry_counts.copy(),
+                vehicle_telemetry_counts=self.vehicle_telemetry_counts.copy(),
+                tag_ids=self.tag_ids.copy(),
+                distance_samples=self.distance_samples.copy(),
+                latest_distance_m=self.latest_distance_m.copy(),
+                distance_observed_monotonic=self.distance_observed_monotonic.copy(),
+                errors=self.errors.copy(),
+                lock=threading.RLock(),
+            )
+
     def heartbeat_is_current(self, observed_at: float) -> bool:
-        return (
-            math.isfinite(observed_at)
-            and 0 <= time.monotonic() - observed_at <= 2.5
-            and (
+        with self.lock:
+            return is_fresh(observed_at, time.monotonic(), 2.5) and (
                 self.last_vehicle_heartbeat_monotonic is None
                 or observed_at > self.last_vehicle_heartbeat_monotonic
             )
-        )
 
     def observe_vehicle_state(
         self, *, armed: bool, observed_at: float | None = None
     ) -> bool:
         """Track selected-vehicle arm transitions from the telemetry worker."""
 
-        observed_at = time.monotonic() if observed_at is None else observed_at
-        if not self.heartbeat_is_current(observed_at):
-            return False
-        self.last_vehicle_heartbeat_monotonic = observed_at
-        self.vehicle_heartbeat.set()
-        if armed:
-            self.disarmed_heartbeat.clear()
-            self.saw_armed = True
-            self.last_vehicle_state = "armed"
-        else:
-            if self.saw_armed:
-                self.saw_disarmed_after_arm = True
-            self.last_vehicle_state = "disarmed"
-            self.disarmed_heartbeat.set()
-        return True
+        with self.lock:
+            observed_at = time.monotonic() if observed_at is None else observed_at
+            if not self.heartbeat_is_current(observed_at):
+                return False
+            self.last_vehicle_heartbeat_monotonic = observed_at
+            self.vehicle_heartbeat.set()
+            if armed:
+                self.disarmed_heartbeat.clear()
+                self.saw_armed = True
+                self.last_vehicle_state = "armed"
+            else:
+                if self.saw_armed:
+                    self.saw_disarmed_after_arm = True
+                self.last_vehicle_state = "disarmed"
+                self.disarmed_heartbeat.set()
+            return True
 
     def set_stop_reason(self, reason: str) -> None:
         """Retain the first intentional or error stop reason."""
 
-        with self._error_lock:
+        with self.lock:
             if self.stop_reason is None:
                 self.stop_reason = reason
 

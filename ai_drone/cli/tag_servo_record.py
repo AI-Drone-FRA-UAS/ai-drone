@@ -20,6 +20,7 @@ from typing import Any
 
 from ai_drone.capture.state import AnalysisFrame, CaptureState
 from ai_drone.cli.servo import ACTUATION_CONFIRMATION
+from ai_drone.mavlink.safety import is_fresh
 from ai_drone.mount import (
     ABSOLUTE_MAX_PULSE_US,
     ABSOLUTE_MIN_PULSE_US,
@@ -128,6 +129,111 @@ class ServoTrigger:
     frame_index: int
     elapsed_s: float
     captured_monotonic: float
+
+
+@dataclass(frozen=True)
+class Qualification:
+    visible: tuple[int, ...]
+    qualifying: frozenset[int]
+    reasons: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True)
+class StreakState:
+    counts: tuple[tuple[int, int], ...] = ()
+    captured: float | None = None
+    ready: bool = False
+
+
+def qualify(
+    detections: list[TagDetection],
+    config: TagServoConfig,
+    now: float,
+    captured: float | None,
+) -> Qualification:
+    """Choose the best detection per ID and explain each quality decision."""
+    by_id: dict[int, TagDetection] = {}
+    for detection in detections:
+        previous = by_id.get(detection.tag_id)
+        margin = (
+            detection.decision_margin if detection.decision_margin is not None else -1.0
+        )
+        old_margin = previous.decision_margin if previous is not None else None
+        if previous is None or margin > (
+            old_margin if old_margin is not None else -1.0
+        ):
+            by_id[detection.tag_id] = detection
+    reasons: dict[int, str] = {}
+    for tag_id, detection in by_id.items():
+        if config.allowed_tag_ids is not None and tag_id not in config.allowed_tag_ids:
+            reason = "id_not_allowed"
+        elif detection.hamming != 0:
+            reason = "hamming_not_zero"
+        elif detection.decision_margin is None:
+            reason = "decision_margin_unavailable"
+        elif detection.decision_margin < config.minimum_decision_margin:
+            reason = "decision_margin_too_low"
+        elif not is_fresh(captured, now, config.maximum_detection_age_s):
+            reason = "stale_frame"
+        else:
+            reason = "qualifying"
+        reasons[tag_id] = reason
+    return Qualification(
+        tuple(sorted(by_id)),
+        frozenset(
+            tag_id for tag_id, reason in reasons.items() if reason == "qualifying"
+        ),
+        tuple(sorted(reasons.items())),
+    )
+
+
+def advance_streaks(
+    previous: StreakState,
+    qualifying: frozenset[int],
+    captured: float | None,
+    ready: bool,
+    config: TagServoConfig,
+) -> StreakState:
+    """Advance only consecutive qualifying frames in the same ready epoch."""
+    counts = dict(previous.counts)
+    contiguous = (
+        ready
+        and previous.ready
+        and captured is not None
+        and is_fresh(previous.captured, captured, config.maximum_detection_age_s)
+    )
+    return StreakState(
+        tuple(
+            (tag_id, counts.get(tag_id, 0) + 1 if contiguous else 1)
+            for tag_id in sorted(qualifying)
+        ),
+        captured,
+        ready,
+    )
+
+
+def select_trigger(
+    streak: StreakState,
+    scheduled: set[int],
+    completed: set[int],
+    config: TagServoConfig,
+) -> int | None:
+    """Choose at most one confirmed ID within the run's lifetime budget."""
+    if not streak.ready or (
+        config.stop_after is not None
+        and len(completed) + len(scheduled) >= config.stop_after
+    ):
+        return None
+    return next(
+        (
+            tag_id
+            for tag_id, count in streak.counts
+            if count >= config.confirmation_frames
+            and tag_id not in scheduled
+            and tag_id not in completed
+        ),
+        None,
+    )
 
 
 def _tag_range(value: str) -> range:
@@ -419,10 +525,7 @@ class TagServoSession:
         self._hold_completed_ids: set[int] = set()
         self._detached_ids: set[int] = set()
         self._interrupted_ids: set[int] = set()
-        self._streaks: dict[int, int] = {}
-        self._previous_qualifying_ids: set[int] = set()
-        self._previous_capture_monotonic: float | None = None
-        self._was_ready = False
+        self._streak = StreakState()
         self._accepting = True
         self._ever_commanded = False
         self._closed = False
@@ -514,89 +617,11 @@ class TagServoSession:
         self._signal_handlers.clear()
 
     def _publish_state(self) -> None:
-        with self._lock:
+        with self._lock, self.state.lock:
             self.state.confirmed_tag_ids = tuple(sorted(self._confirmed_ids))
             self.state.completed_servo_tag_ids = tuple(sorted(self._completed_ids))
             self.state.pending_servo_tag_ids = tuple(sorted(self._scheduled_ids))
             self.state.servo_pulses_completed = len(self._completed_ids)
-
-    def _allowed(self, tag_id: int) -> bool:
-        allowed = self.config.allowed_tag_ids
-        return allowed is None or tag_id in allowed
-
-    def _best_detection_by_id(
-        self, detections: list[TagDetection]
-    ) -> dict[int, TagDetection]:
-        by_id: dict[int, TagDetection] = {}
-        for detection in detections:
-            current = by_id.get(detection.tag_id)
-            current_margin = (
-                -1.0
-                if current is None or current.decision_margin is None
-                else float(current.decision_margin)
-            )
-            candidate_margin = (
-                -1.0
-                if detection.decision_margin is None
-                else float(detection.decision_margin)
-            )
-            if current is None or candidate_margin > current_margin:
-                by_id[detection.tag_id] = detection
-        return by_id
-
-    def _quality_results(
-        self,
-        by_id: dict[int, TagDetection],
-        *,
-        fresh_frame: bool,
-    ) -> tuple[set[int], dict[int, str]]:
-        qualifying: set[int] = set()
-        reasons: dict[int, str] = {}
-        for tag_id, detection in by_id.items():
-            if not self._allowed(tag_id):
-                reasons[tag_id] = "id_not_allowed"
-            elif detection.hamming != 0:
-                reasons[tag_id] = "hamming_not_zero"
-            elif detection.decision_margin is None:
-                reasons[tag_id] = "decision_margin_unavailable"
-            elif detection.decision_margin < self.config.minimum_decision_margin:
-                reasons[tag_id] = "decision_margin_too_low"
-            elif not fresh_frame:
-                reasons[tag_id] = "stale_frame"
-            else:
-                qualifying.add(tag_id)
-                reasons[tag_id] = "qualifying"
-        return qualifying, reasons
-
-    def _advance_confirmation_streaks(
-        self,
-        qualifying: set[int],
-        *,
-        captured_monotonic: float | None,
-        ready_now: bool,
-    ) -> None:
-        if not ready_now or not self._was_ready:
-            self._streaks = {}
-            self._previous_qualifying_ids = set()
-            self._previous_capture_monotonic = None
-        self._was_ready = ready_now
-        gap_ok = (
-            captured_monotonic is not None
-            and self._previous_capture_monotonic is not None
-            and 0.0
-            <= captured_monotonic - self._previous_capture_monotonic
-            <= self.config.maximum_detection_age_s
-        )
-        self._streaks = {
-            tag_id: (
-                self._streaks.get(tag_id, 0) + 1
-                if gap_ok and tag_id in self._previous_qualifying_ids
-                else 1
-            )
-            for tag_id in qualifying
-        }
-        self._previous_qualifying_ids = qualifying
-        self._previous_capture_monotonic = captured_monotonic
 
     def _annotate_tag_records(
         self,
@@ -609,7 +634,7 @@ class TagServoSession:
             scheduled_ids = self._scheduled_ids.copy()
         for tag_id, record in record_by_id.items():
             record["actuation_quality"] = reasons.get(tag_id, "duplicate_detection")
-            record["confirmation_streak"] = self._streaks.get(tag_id, 0)
+            record["confirmation_streak"] = dict(self._streak.counts).get(tag_id, 0)
             if tag_id in completed_ids:
                 record["actuation_state"] = "completed_for_run"
             elif tag_id in scheduled_ids:
@@ -627,50 +652,33 @@ class TagServoSession:
 
         now = time.monotonic()
         self._last_processed_monotonic = now
-        by_id = self._best_detection_by_id(detections)
-
-        self.state.visible_tag_ids = tuple(sorted(by_id))
         captured = frame.captured_monotonic
-        fresh_frame = (
-            captured is not None
-            and 0.0 <= now - captured <= self.config.maximum_detection_age_s
-        )
-        qualifying, reasons = self._quality_results(by_id, fresh_frame=fresh_frame)
+        quality = qualify(detections, self.config, now, captured)
+        with self.state.lock:
+            self.state.visible_tag_ids = quality.visible
         ready_now = self.ready.is_set()
-        self._advance_confirmation_streaks(
-            qualifying,
-            captured_monotonic=captured,
-            ready_now=ready_now,
+        self._streak = advance_streaks(
+            self._streak, quality.qualifying, captured, ready_now, self.config
         )
-        self._annotate_tag_records(tag_records, reasons)
-
-        if not ready_now or not self._accepting or captured is None:
+        self._annotate_tag_records(tag_records, dict(quality.reasons))
+        if not ready_now or captured is None:
             return
-        for tag_id in sorted(qualifying):
-            if self._streaks[tag_id] < self.config.confirmation_frames:
-                continue
-            with self._lock:
-                if not self._accepting or self.capture_stop.is_set():
-                    return
-                if tag_id in self._completed_ids or tag_id in self._scheduled_ids:
-                    continue
-                if self.config.open_mount and tag_id in self._issued_ids:
-                    continue
-                if (
-                    self.config.stop_after is not None
-                    and len(self._completed_ids) + len(self._scheduled_ids)
-                    >= self.config.stop_after
-                ):
-                    return
-                trigger = ServoTrigger(
-                    tag_id=tag_id,
-                    frame_index=frame.frame_index,
-                    elapsed_s=frame.elapsed_s,
-                    captured_monotonic=captured,
-                )
-                self._scheduled_ids.add(tag_id)
-            self._enqueue_trigger(trigger, tag_records)
-            return
+        with self._lock:
+            if not self._accepting or self.capture_stop.is_set():
+                return
+            unavailable = self._completed_ids | (
+                self._issued_ids if self.config.open_mount else set()
+            )
+            tag_id = select_trigger(
+                self._streak, self._scheduled_ids, unavailable, self.config
+            )
+            if tag_id is None:
+                return
+            self._scheduled_ids.add(tag_id)
+        self._enqueue_trigger(
+            ServoTrigger(tag_id, frame.frame_index, frame.elapsed_s, captured),
+            tag_records,
+        )
 
     def _enqueue_trigger(
         self, trigger: ServoTrigger, tag_records: list[dict[str, Any]]
@@ -684,7 +692,7 @@ class TagServoSession:
                 tag_id=tag_id,
                 frame=trigger.frame_index,
                 elapsed_s=round(trigger.elapsed_s, 6),
-                confirmation_frames=self._streaks[tag_id],
+                confirmation_frames=dict(self._streak.counts)[tag_id],
             )
         except BaseException:
             self.capture_stop.set()
@@ -711,7 +719,7 @@ class TagServoSession:
             tag_id=tag_id,
             frame=trigger.frame_index,
             elapsed_s=round(trigger.elapsed_s, 6),
-            confirmation_frames=self._streaks[tag_id],
+            confirmation_frames=dict(self._streak.counts)[tag_id],
         )
         print(
             json.dumps(
@@ -727,10 +735,9 @@ class TagServoSession:
         )
 
     def _selected_heartbeat_is_fresh(self, now: float) -> bool:
-        observed = self.state.last_vehicle_heartbeat_monotonic
-        return observed is not None and (
-            0.0 <= now - observed <= self.config.maximum_heartbeat_age_s
-        )
+        with self.state.lock:
+            observed = self.state.last_vehicle_heartbeat_monotonic
+        return is_fresh(observed, now, self.config.maximum_heartbeat_age_s)
 
     def health_error(self, now: float) -> str | None:
         """Return a fail-closed runtime-watchdog error after READY."""
@@ -1074,31 +1081,32 @@ class TagServoSession:
             raise interruption
 
     def manifest(self) -> dict[str, object]:
-        return {
-            "gpio": SERVO_GPIO_PIN,
-            "feedback_available": False,
-            "open_mount": self.config.open_mount,
-            "active_us": self.config.active_pulse_us,
-            "rest_us": self.config.rest_pulse_us,
-            "pulse_duration_s": self.config.pulse_duration_s,
-            "settle_duration_s": self.config.settle_duration_s,
-            "confirmation_frames": self.config.confirmation_frames,
-            "minimum_decision_margin": self.config.minimum_decision_margin,
-            "allowed_tag_ids": (
-                "all"
-                if self.config.allowed_tag_ids is None
-                else sorted(self.config.allowed_tag_ids)
-            ),
-            "stop_after": self.config.stop_after,
-            "confirmed_tag_ids": list(self.state.confirmed_tag_ids),
-            "completed_tag_ids": list(self.state.completed_servo_tag_ids),
-            "completed_commanded_pulses": self.state.servo_pulses_completed,
-            "attempted_tag_ids": sorted(self._attempted_ids),
-            "issued_tag_ids": sorted(self._issued_ids),
-            "hold_completed_tag_ids": sorted(self._hold_completed_ids),
-            "pwm_detached_tag_ids": sorted(self._detached_ids),
-            "interrupted_tag_ids": sorted(self._interrupted_ids),
-        }
+        with self._lock, self.state.lock:
+            return {
+                "gpio": SERVO_GPIO_PIN,
+                "feedback_available": False,
+                "open_mount": self.config.open_mount,
+                "active_us": self.config.active_pulse_us,
+                "rest_us": self.config.rest_pulse_us,
+                "pulse_duration_s": self.config.pulse_duration_s,
+                "settle_duration_s": self.config.settle_duration_s,
+                "confirmation_frames": self.config.confirmation_frames,
+                "minimum_decision_margin": self.config.minimum_decision_margin,
+                "allowed_tag_ids": (
+                    "all"
+                    if self.config.allowed_tag_ids is None
+                    else sorted(self.config.allowed_tag_ids)
+                ),
+                "stop_after": self.config.stop_after,
+                "confirmed_tag_ids": list(self.state.confirmed_tag_ids),
+                "completed_tag_ids": list(self.state.completed_servo_tag_ids),
+                "completed_commanded_pulses": self.state.servo_pulses_completed,
+                "attempted_tag_ids": sorted(self._attempted_ids),
+                "issued_tag_ids": sorted(self._issued_ids),
+                "hold_completed_tag_ids": sorted(self._hold_completed_ids),
+                "pwm_detached_tag_ids": sorted(self._detached_ids),
+                "interrupted_tag_ids": sorted(self._interrupted_ids),
+            }
 
 
 def main(arguments: list[str] | None = None) -> int:

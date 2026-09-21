@@ -7,12 +7,13 @@ import time
 from typing import Any
 
 from ai_drone.capture.state import CaptureState
+from ai_drone.mavlink.safety import distance_sensor_valid, is_fresh
 
 _OBSERVATION_FRESHNESS_S = 2.0
 
 
 def _observation_is_fresh(observed: float | None, now: float) -> bool:
-    return observed is not None and 0 <= now - observed <= _OBSERVATION_FRESHNESS_S
+    return is_fresh(observed, now, _OBSERVATION_FRESHNESS_S)
 
 
 def _heartbeat_status(state: CaptureState, observed_at: float) -> str:
@@ -30,34 +31,27 @@ def _observe_sensor_message(
 ) -> None:
     """Keep the small live summary separate from the lossless JSONL record."""
 
-    observed_at = time.monotonic() if observed_at is None else observed_at
-    message_type = message.get_type()
-    if message_type == "DISTANCE_SENSOR":
-        orientation = int(message.orientation)
-        current_cm = int(message.current_distance)
-        minimum_cm = int(message.min_distance)
-        maximum_cm = int(message.max_distance)
-        # MAVLink defines 0 as unknown/not supplied and 1 as invalid.
-        signal_quality = int(getattr(message, "signal_quality", 0))
-        if (
-            current_cm > 0
-            and minimum_cm <= current_cm <= maximum_cm
-            and signal_quality != 1
-        ):
-            state.distance_samples[orientation] += 1
-            state.latest_distance_m[orientation] = current_cm / 100.0
-            state.distance_observed_monotonic[orientation] = observed_at
-    elif message_type == "RANGEFINDER":
-        distance = float(message.distance)
-        if math.isfinite(distance) and distance > 0:
-            state.legacy_range_samples += 1
-            state.latest_legacy_range_m = distance
-            state.legacy_range_observed_monotonic = observed_at
-    elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
-        state.optical_flow_samples += 1
-        quality = getattr(message, "quality", None)
-        state.latest_flow_quality = int(quality) if quality is not None else None
-        state.flow_observed_monotonic = observed_at
+    with state.lock:
+        observed_at = time.monotonic() if observed_at is None else observed_at
+        message_type = message.get_type()
+        if message_type == "DISTANCE_SENSOR":
+            orientation = int(message.orientation)
+            current_cm = int(message.current_distance)
+            if distance_sensor_valid(message, require_bounds=True):
+                state.distance_samples[orientation] += 1
+                state.latest_distance_m[orientation] = current_cm / 100.0
+                state.distance_observed_monotonic[orientation] = observed_at
+        elif message_type == "RANGEFINDER":
+            distance = float(message.distance)
+            if math.isfinite(distance) and distance > 0:
+                state.legacy_range_samples += 1
+                state.latest_legacy_range_m = distance
+                state.legacy_range_observed_monotonic = observed_at
+        elif message_type in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
+            state.optical_flow_samples += 1
+            quality = getattr(message, "quality", None)
+            state.latest_flow_quality = int(quality) if quality is not None else None
+            state.flow_observed_monotonic = observed_at
 
 
 def _downward_range_summary(
@@ -119,6 +113,7 @@ def _component_report(
     duration: float,
     observed_at: float | None = None,
 ) -> dict[str, dict[str, object]]:
+    state = state.snapshot()
     observed_at = time.monotonic() if observed_at is None else observed_at
     downward, downward_m, range_source, range_fresh = _downward_range_summary(
         state, observed_at
@@ -196,6 +191,7 @@ def _print_live_status(
             return "stale"
         return str(value) if value is not None else "unavailable"
 
+    state = state.snapshot()
     observed_at = time.monotonic()
     down_count, downward, _, down_fresh = _downward_range_summary(state, observed_at)
     down_display = live_sample(downward, down_count, fresh=down_fresh)

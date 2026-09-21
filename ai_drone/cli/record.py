@@ -337,7 +337,8 @@ def _stop_detection_worker(
             else:
                 frames.task_done()
                 if discarded is not None:
-                    state.dropped_analysis_frames += 1
+                    with state.lock:
+                        state.dropped_analysis_frames += 1
 
     worker.join(timeout=max(0.0, deadline - time.monotonic()))
     if worker.is_alive():
@@ -819,7 +820,8 @@ def _queue_analysis_frame(
         frames.put_nowait(item)
         return
     except queue.Full:
-        state.dropped_analysis_frames += 1
+        with state.lock:
+            state.dropped_analysis_frames += 1
     if not latest_wins:
         return
     try:
@@ -833,7 +835,8 @@ def _queue_analysis_frame(
     try:
         frames.put_nowait(item)
     except queue.Full:
-        state.dropped_analysis_frames += 1
+        with state.lock:
+            state.dropped_analysis_frames += 1
 
 
 @dataclass
@@ -1365,7 +1368,8 @@ def _capture_frame(
     if deadline is not None and captured_at >= deadline:
         state.set_stop_reason("duration_elapsed")
         return False
-    state.camera_frames += 1
+    with state.lock:
+        state.camera_frames += 1
     if camera.first_frame is None:
         camera.first_frame = grayscale.copy()
     camera.last_frame = grayscale.copy()
