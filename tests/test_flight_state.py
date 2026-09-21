@@ -192,3 +192,76 @@ def test_alignment_does_not_reanchor_from_stale_range():
         apply(state, TimedReading("local_altitude", 12.2, 1_000)).alignment
         is state.alignment
     )
+
+
+@pytest.mark.parametrize(
+    "kind,value",
+    [("altitude", 0.4), ("local_altitude", 0.4), ("yaw", 0.2), ("rc_channels", 0)],
+)
+def test_invalid_current_timed_sample_revokes_old_good_evidence(kind, value):
+    state = apply(VehicleState(), TimedReading(kind, value, 1_000))
+    state = apply(state, TimedReading(kind, None, 1_010), 100.01, 100.01)
+    assert getattr(state, kind) is None
+    # A delayed older valid packet cannot undo the invalidation.
+    assert apply(state, TimedReading(kind, value, 1_005), 100.005, 100.02) is state
+    recovered = apply(state, TimedReading(kind, value, 1_020), 100.02, 100.02)
+    assert getattr(recovered, kind) == Sample(value, 100.02)
+
+
+def test_replayed_same_source_time_cannot_refresh_range_or_erase_it():
+    state = apply(VehicleState(), TimedReading("altitude", 0.4, 1_000))
+    for value in (0.6, None):
+        assert (
+            apply(state, TimedReading("altitude", value, 1_000), 100.1, 100.1) is state
+        )
+    assert state.altitude == Sample(0.4, 100.0)
+
+
+def test_cross_stream_clock_advance_does_not_make_an_older_range_current():
+    state = apply(VehicleState(), TimedReading("altitude", 0.4, 1_000))
+    state = apply(state, TimedReading("yaw", 0.2, 1_100), 100.1, 100.1)
+    state = apply(state, TimedReading("altitude", 0.5, 1_050), 100.15, 100.15)
+    assert state.altitude == Sample(0.5, 100.15)
+    assert apply(state, TimedReading("altitude", 0.8, 1_020), 100.2, 100.2) is state
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        Reading("flow_quality", 60),
+        Reading("battery", 16.0),
+        TimedReading("yaw", 0.1, 1_000),
+    ],
+)
+@pytest.mark.parametrize("received", [100.001, float("nan"), float("inf")])
+def test_no_payload_type_can_install_future_or_nonfinite_receipt_time(
+    payload, received
+):
+    state = VehicleState()
+    assert apply(state, payload, received) is state
+
+
+def test_out_of_order_flow_cannot_restore_revoked_quality():
+    state = apply(VehicleState(), Reading("flow_quality", 60), 99.0)
+    state = apply(state, Reading("flow_quality", 0), 99.5)
+    assert apply(state, Reading("flow_quality", 60), 99.2) is state
+    assert state.flow_quality == Sample(0, 99.5)
+
+
+@pytest.mark.parametrize("identifier", [1, 2, 255, False])
+def test_other_downward_instance_cannot_replace_selected_range(identifier):
+    assert (
+        decode(
+            packet(
+                "DISTANCE_SENSOR",
+                id=identifier,
+                orientation=25,
+                time_boot_ms=1_000,
+                current_distance=45,
+                min_distance=2,
+                max_distance=100,
+            ),
+            received=100.0,
+        )
+        is None
+    )

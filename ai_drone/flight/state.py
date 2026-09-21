@@ -57,6 +57,13 @@ class AltitudeAlignment:
 
 
 @dataclass(frozen=True)
+class ObservationClock:
+    kind: str
+    received_at: float
+    boot_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class VehicleState:
     heartbeat: Sample[Heartbeat] | None = None
     altitude: Sample[float] | None = None
@@ -69,6 +76,7 @@ class VehicleState:
     firmware: Sample[Firmware] | None = None
     boot: BootClock | None = None
     alignment: AltitudeAlignment | None = None
+    clocks: tuple[ObservationClock, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,11 @@ def _pose_reading(message: Any, kind: str) -> TimedReading | None:
     boot = getattr(message, "time_boot_ms", None)
     if kind == "DISTANCE_SENSOR":
         if int(message.orientation) != mavlink.MAV_SENSOR_ROTATION_PITCH_270:
+            return None
+        identifier = getattr(message, "id", 0)
+        # The reviewed RNGFND1 backend is emitted as FC instance 0. Forward
+        # RNGFND2 and another downward instance cannot supply the flight datum.
+        if isinstance(identifier, bool) or identifier != 0:
             return None
         value = (
             int(message.current_distance) / 100.0
@@ -220,15 +233,53 @@ def _reading(state: VehicleState, payload: Reading, received: float) -> VehicleS
             assert_never(impossible)
 
 
+def _advance_observation(
+    state: VehicleState, kind: str, received: float, *, boot_ms: int | None = None
+) -> VehicleState | None:
+    previous = next((clock for clock in state.clocks if clock.kind == kind), None)
+    if previous is not None:
+        if received < previous.received_at:
+            return None
+        if boot_ms is not None and previous.boot_ms is not None:
+            delta = (boot_ms - previous.boot_ms + 2**31) % 2**32 - 2**31
+            if delta <= 0:
+                return None
+    clock = ObservationClock(kind, received, boot_ms)
+    return replace(
+        state,
+        clocks=(*(item for item in state.clocks if item.kind != kind), clock),
+    )
+
+
+def _invalidate_timed(state: VehicleState, kind: str) -> VehicleState:
+    match kind:
+        case "altitude":
+            return replace(state, altitude=None)
+        case "local_altitude":
+            return replace(state, local_altitude=None)
+        case "yaw":
+            return replace(state, yaw=None)
+        case "rc_channels":
+            return replace(state, rc_channels=None)
+        case _:
+            raise ValueError(f"unknown timed reading {kind!r}")
+
+
 def _timed_reading(
     state: VehicleState, payload: TimedReading, received: float
 ) -> VehicleState:
     boot = advance_boot(state.boot, payload.boot_ms, received)
     if boot is None:
         return state
-    state = replace(state, boot=boot)
-    if payload.value is None:
+    assert isinstance(payload.boot_ms, int)  # advance_boot validated representation
+    accepted = _advance_observation(
+        state, payload.kind, received, boot_ms=payload.boot_ms
+    )
+    if accepted is None:
         return state
+    state = replace(accepted, boot=boot)
+    if payload.value is None:
+        return _invalidate_timed(state, payload.kind)
     match payload.kind:
         case "altitude":
             return align_altitude(
@@ -260,6 +311,8 @@ def observe(
     if (observation.system, observation.component) != (target_system, target_component):
         return state
     received = observation.received_at
+    if not math.isfinite(received) or not math.isfinite(now) or received > now:
+        return state
     match observation.payload:
         case Heartbeat() as heartbeat:
             if not is_fresh(received, now, heartbeat_max_age) or (
@@ -274,9 +327,15 @@ def observe(
                 alignment=state.alignment if heartbeat.armed else None,
             )
         case Firmware() as firmware:
-            return replace(state, firmware=Sample(firmware, received))
+            accepted = _advance_observation(state, "firmware", received)
+            return (
+                state
+                if accepted is None
+                else replace(accepted, firmware=Sample(firmware, received))
+            )
         case Reading() as payload:
-            return _reading(state, payload, received)
+            accepted = _advance_observation(state, payload.kind, received)
+            return state if accepted is None else _reading(accepted, payload, received)
         case TimedReading() as payload:
             return _timed_reading(state, payload, received)
         case _ as impossible:
