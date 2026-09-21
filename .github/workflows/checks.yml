@@ -72,6 +72,11 @@ jobs:
       - name: Install locked development and documentation dependencies
         run: uv sync --locked --group dev --group docs --group raspi
 
+      - name: Install recording workload test codecs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+
       - name: Check formatting
         run: uv run --locked --group dev --group docs ruff format --check .
 

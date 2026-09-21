@@ -28,6 +28,12 @@ until native bindings and disarmed workload checks qualify a candidate. See
 [Python environments and rollback](docs/PYTHON_RUNTIME.md). Flight remains
 separate qualification work within the existing height limits.
 
+The full Linux host test suite also requires `ffmpeg` with `libx264` and
+`ffprobe` (`sudo apt-get install --no-install-recommends ffmpeg` on Debian/Ubuntu).
+Its synthetic camera workload exercises OpenCV and H.264 encoding without camera
+hardware; missing codecs fail the required test. Use
+`uv sync --locked --group dev --group docs --group raspi` for these checks.
+
 The new source and boot service were **not installed** at the last Pi check on
 September 16, 2026. See [deployment status](docs/pi-networking.md#deployment-status)
 before using the Pi commands in this guide.
