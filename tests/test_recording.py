@@ -1423,6 +1423,61 @@ def test_summary_failure_writes_minimal_manifest(tmp_path, monkeypatch, failure)
     assert manifest["finalization_error"] == (str(failure) or type(failure).__name__)
 
 
+def test_lifecycle_attempts_all_cleanup_before_finalization(tmp_path, monkeypatch):
+    output = tmp_path / "lifecycle-failures"
+    calls = []
+    captured = []
+
+    def fail(label):
+        def action(*_args, **_kwargs):
+            calls.append(label)
+            assert captured[0].stop.is_set()
+            raise RuntimeError(label)
+
+        return action
+
+    def startup(recording):
+        captured.append(recording)
+        recording.signals.callback(fail("signals"))
+        recording.storage = SimpleNamespace(close=fail("storage"))
+        recording.servo_session = SimpleNamespace(close=fail("servo"))
+        recording.camera.server = SimpleNamespace(
+            shutdown=fail("stream-stop"), server_close=fail("stream-close")
+        )
+        raise RuntimeError("partial startup")
+
+    def finish(recording):
+        calls.append("manifest")
+        assert recording.state.worker_error == "partial startup"
+        assert len(recording.state.errors) == 10
+        assert recording.ended_utc is not None
+        raise RuntimeError("summary unavailable")
+
+    monkeypatch.setattr(inspect_cli, "_start_recording", startup)
+    monkeypatch.setattr(inspect_cli, "_cleanup_camera", fail("camera"))
+    monkeypatch.setattr(inspect_cli, "_stop_capture_workers", fail("workers"))
+    monkeypatch.setattr(inspect_cli, "_finalize_camera_artifacts", fail("artifacts"))
+    monkeypatch.setattr(inspect_cli, "_cleanup_mavlink_connection", fail("flight"))
+    monkeypatch.setattr(inspect_cli, "_finish_recording", finish)
+
+    assert run(["--output-dir", str(output)]) == 1
+    assert calls == [
+        "servo",
+        "stream-stop",
+        "stream-close",
+        "camera",
+        "workers",
+        "artifacts",
+        "flight",
+        "storage",
+        "signals",
+        "manifest",
+    ]
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["error"] == "partial startup"
+    assert manifest["finalization_error"] == "summary unavailable"
+
+
 def test_capture_snapshot_is_coherent_and_owns_counter_copies():
     state = CaptureState()
     done = threading.Event()

@@ -11,7 +11,7 @@ import signal
 import threading
 import time
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +35,7 @@ from ai_drone.mount import (
     pulse_us,
 )
 from ai_drone.recording import json_safe, write_json_line
+from ai_drone.system import handled_signals
 from ai_drone.vision.apriltags import TagDetection
 
 ARMED_FLIGHT_CONFIRMATION = "ARMED_FLIGHT_TAG_SERVO_CLEAR"
@@ -533,7 +534,8 @@ class TagServoSession:
         self._events_closed = False
         self._last_processed_monotonic: float | None = None
         self._health_started_monotonic: float | None = None
-        self._signal_handlers: dict[int, Any] = {}
+        self._signals = ExitStack()
+        self._signals_installed = False
 
         self._process_lock = process_lock_factory()
         servo_instance: Any = None
@@ -596,12 +598,16 @@ class TagServoSession:
 
         if threading.current_thread() is not threading.main_thread():
             raise RuntimeError("signal handlers must be installed from the main thread")
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            if signum in self._signal_handlers:
-                continue
-            previous = signal.getsignal(signum)
-            self._signal_handlers[signum] = previous
-            signal.signal(signum, self._handle_stop_signal)
+        if not self._signals_installed:
+            self._signals.enter_context(
+                handled_signals(
+                    {
+                        signum: self._handle_stop_signal
+                        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+                    }
+                )
+            )
+            self._signals_installed = True
 
     def _handle_stop_signal(self, signum: int, _frame: FrameType | None) -> None:
         with self._lock:
@@ -612,9 +618,8 @@ class TagServoSession:
     def _restore_signal_handlers(self) -> None:
         if threading.current_thread() is not threading.main_thread():
             return
-        for signum, previous in self._signal_handlers.items():
-            signal.signal(signum, previous)
-        self._signal_handlers.clear()
+        self._signals.close()
+        self._signals_installed = False
 
     def _publish_state(self) -> None:
         with self._lock, self.state.lock:
@@ -1076,7 +1081,9 @@ class TagServoSession:
         finally:
             # Termination remains a cooperative stop throughout rest/detach and
             # resource release, including repeated signals during cleanup.
-            self._restore_signal_handlers()
+            cleanup(
+                "restore payload servo signal handlers", self._restore_signal_handlers
+            )
         if interruption is not None:
             raise interruption
 

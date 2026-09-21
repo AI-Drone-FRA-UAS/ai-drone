@@ -10,9 +10,9 @@ import queue
 import signal
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import CancelledError
-from contextlib import suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +54,7 @@ from ai_drone.recording import (
 )
 from ai_drone.settings import load_settings
 from ai_drone.storage import StorageMonitor, StoragePolicy
+from ai_drone.system import handled_signals
 from ai_drone.vision.apriltags import (
     CameraCalibration,
     configure_opencv_threads,
@@ -478,6 +479,17 @@ def _cleanup_capture(
         encoder_started=encoder_started,
     )
     _stop_capture_workers(telemetry_worker, detection_worker, frames, state)
+    _finalize_camera_artifacts(cv2, paths, first_frame, last_frame, state)
+    _cleanup_mavlink_connection(connection, state)
+
+
+def _finalize_camera_artifacts(
+    cv2: Any,
+    paths: RecordingPaths,
+    first_frame: NDArray[np.uint8] | None,
+    last_frame: NDArray[np.uint8] | None,
+    state: CaptureState,
+) -> None:
     if cv2 is not None and first_frame is not None:
         _cleanup_action(
             state,
@@ -507,7 +519,6 @@ def _cleanup_capture(
         _cleanup_action(
             state, f"sync {label}", lambda path=path: _sync_existing_file(path)
         )
-    _cleanup_mavlink_connection(connection, state)
 
 
 def _start_capture_epoch(
@@ -892,7 +903,7 @@ class _Recording:
     started_utc: datetime | None = None
     ended_monotonic: float = 0.0
     ended_utc: datetime | None = None
-    previous_signals: dict[int, Any] = field(default_factory=dict)
+    signals: ExitStack = field(default_factory=ExitStack)
 
 
 def _recording(args: argparse.Namespace, operation: str) -> _Recording:
@@ -928,9 +939,14 @@ def _install_capture_signals(recording: _Recording) -> None:
             f"operator_signal_{signal.Signals(signum).name}"
         )
 
-    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        recording.previous_signals[signum] = signal.getsignal(signum)
-        signal.signal(signum, stop_signal)
+    recording.signals.enter_context(
+        handled_signals(
+            {
+                signum: stop_signal
+                for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+            }
+        )
+    )
 
 
 def _initial_heartbeat(recording: _Recording) -> Any:
@@ -1209,7 +1225,11 @@ def _camera_startup_failed(recording: _Recording, error: Exception) -> None:
         recording.state.set_stop_reason("startup_failed")
         recording.stop.set()
     if recording.servo_session is not None:
-        recording.servo_session.close()
+        _cleanup_action(
+            recording.state,
+            "close failed payload servo session",
+            recording.servo_session.close,
+        )
         recording.servo_session = None
     _cleanup_camera(
         camera.device,
@@ -1218,8 +1238,17 @@ def _camera_startup_failed(recording: _Recording, error: Exception) -> None:
         camera_started=camera.started,
         encoder_started=camera.encoder_started,
     )
-    camera.device = camera.encoder = None
-    camera.started = camera.encoder_started = False
+    recording.camera = _CameraCapture(
+        cv2=camera.cv2,
+        numpy=camera.numpy,
+        detector=camera.detector,
+        detector_status=camera.detector_status,
+        calibration=camera.calibration,
+        server=camera.server,
+        push_stream_frame=camera.push_stream_frame,
+        first_frame=camera.first_frame,
+        last_frame=camera.last_frame,
+    )
 
 
 def _start_camera_capture(recording: _Recording) -> None:
@@ -1442,42 +1471,92 @@ def _record_capture(recording: _Recording) -> None:
         recording.state.set_stop_reason("runtime_error")
 
 
-def _close_recording(recording: _Recording) -> None:
-    recording.stop.set()
-    recording.ended_monotonic = time.monotonic()
-    recording.ended_utc = datetime.now(UTC)
-    state, camera = recording.state, recording.camera
-    if recording.servo_session is not None:
+@contextmanager
+def _resource(
+    state: CaptureState,
+    label: str,
+    close: Callable[[], object],
+) -> Iterator[None]:
+    """Keep every independent cleanup reachable after a failed teardown."""
+    try:
+        yield
+    finally:
+        _cleanup_action(state, label, close)
+
+
+def _close_stream(recording: _Recording) -> None:
+    if recording.camera.server is not None:
         _cleanup_action(
-            state, "close payload servo session", recording.servo_session.close
+            recording.state, "stop browser stream", recording.camera.server.shutdown
         )
-    if camera.server is not None:
-        _cleanup_action(state, "stop browser stream", camera.server.shutdown)
-        _cleanup_action(state, "close browser stream", camera.server.server_close)
-    _cleanup_capture(
-        camera=camera.device,
-        encoder=camera.encoder,
-        camera_started=camera.started,
-        encoder_started=camera.encoder_started,
-        telemetry_worker=recording.flight.worker,
-        detection_worker=camera.worker,
-        frames=recording.frames,
-        cv2=camera.cv2,
-        paths=recording.paths,
-        first_frame=camera.first_frame,
-        last_frame=camera.last_frame,
-        connection=recording.flight.connection,
-        stop=recording.stop,
-        state=state,
-    )
-    if recording.storage is not None:
-        _cleanup_action(state, "close storage event log", recording.storage.close)
-    for signum, previous in recording.previous_signals.items():
         _cleanup_action(
-            state,
-            "restore capture signal handler",
-            lambda signum=signum, previous=previous: signal.signal(signum, previous),
+            recording.state,
+            "close browser stream",
+            recording.camera.server.server_close,
         )
+
+
+@contextmanager
+def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
+    """Own partial startup and the producer -> worker -> artifact shutdown order."""
+    with ExitStack() as resources:
+        # Explicit dependency order, rather than reverse acquisition order.
+        for label, close in (
+            ("restore capture signal handlers", recording.signals.close),
+            (
+                "close storage event log",
+                lambda: recording.storage.close() if recording.storage else None,
+            ),
+            (
+                "close flight capture",
+                lambda: _cleanup_mavlink_connection(
+                    recording.flight.connection, recording.state
+                ),
+            ),
+            (
+                "finalize camera artifacts",
+                lambda: _finalize_camera_artifacts(
+                    recording.camera.cv2,
+                    recording.paths,
+                    recording.camera.first_frame,
+                    recording.camera.last_frame,
+                    recording.state,
+                ),
+            ),
+            (
+                "stop capture workers",
+                lambda: _stop_capture_workers(
+                    recording.flight.worker,
+                    recording.camera.worker,
+                    recording.frames,
+                    recording.state,
+                ),
+            ),
+            (
+                "close camera capture",
+                lambda: _cleanup_camera(
+                    recording.camera.device,
+                    recording.camera.encoder,
+                    recording.state,
+                    camera_started=recording.camera.started,
+                    encoder_started=recording.camera.encoder_started,
+                ),
+            ),
+            ("close browser stream", lambda: _close_stream(recording)),
+            (
+                "close payload servo session",
+                lambda: (
+                    recording.servo_session.close() if recording.servo_session else None
+                ),
+            ),
+        ):
+            resources.enter_context(_resource(recording.state, label, close))
+        try:
+            yield
+        finally:
+            recording.stop.set()
+            recording.ended_monotonic = time.monotonic()
+            recording.ended_utc = datetime.now(UTC)
 
 
 def _write_minimal_manifest(recording: _Recording, error: BaseException) -> None:
@@ -1519,19 +1598,18 @@ def run(
     _validate_args(parser, args, operation=operation)
     recording = _recording(args, operation)
     try:
-        try:
-            _start_recording(recording)
-            _record_capture(recording)
-        except KeyboardInterrupt:
-            recording.state.set_stop_reason("operator_interrupt")
-            recording.state.record_error(
-                "interrupted by user during startup or capture"
-            )
-        except Exception as error:
-            recording.state.record_error(str(error))
-            recording.state.set_stop_reason("capture_failed")
-        finally:
-            _close_recording(recording)
+        with _recording_lifecycle(recording):
+            try:
+                _start_recording(recording)
+                _record_capture(recording)
+            except KeyboardInterrupt:
+                recording.state.set_stop_reason("operator_interrupt")
+                recording.state.record_error(
+                    "interrupted by user during startup or capture"
+                )
+            except Exception as error:
+                recording.state.record_error(str(error))
+                recording.state.set_stop_reason("capture_failed")
         return _finish_recording(recording)
     except (Exception, KeyboardInterrupt) as error:
         _write_minimal_manifest(recording, error)
