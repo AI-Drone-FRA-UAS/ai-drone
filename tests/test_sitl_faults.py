@@ -221,3 +221,52 @@ def test_floor_offset_is_checked_before_climb(
                 sensors,
                 {"launch_platform_m_above_floor": offset, "expected_to_arm": allowed},
             )
+
+
+def test_compass_changing_field_response(tmp_path: Path) -> None:
+    """Retain the baseline profile's response to a field step after liftoff."""
+    from tests.test_sitl_profiles import _DisturbedSensors, _yaw_metrics
+
+    with _running_sitl(
+        _ardupilot_root(), tmp_path, sensor_factory=_DisturbedSensors
+    ) as sensors:
+        try:
+            _assert_running_sitl_configuration(sensors)
+            sensors.reset_observations()
+            with _running_cli(
+                tmp_path, "compass-field", "control", *_production_hover_arguments(30)
+            ) as (process, log):
+                result = process.wait(timeout=110)
+            sensors.wait_for_disarm(timeout=15)
+            assert sensors.injections
+            for name, value in sensors.disturbance.items():
+                assert sensors.parameter_readback.get(name) == pytest.approx(value)
+            armed = [row for row in sensors.truth if row["armed"]]
+            summary = {
+                "exit_code": result,
+                "maximum_height_m": max(row["height"] for row in armed),
+                "armed_xy_displacement_m": _xy_displacement(armed),
+                "armed_yaw": _yaw_metrics(armed, sensors.attitudes),
+                "final_disarmed": sensors._current_armed is False,
+                "diagnostic": log.read_text()[-2000:],
+            }
+            (tmp_path / "summary.json").write_text(json.dumps(summary, indent=2))
+            print(json.dumps(summary))
+            assert summary["maximum_height_m"] < 0.8
+            assert summary["final_disarmed"]
+            assert sensors.mode_transitions()[-1] == "LAND"
+            # A completed operation must still satisfy independent motion bounds.
+            # A refused/aborted operation must retain its concrete error instead
+            # of claiming a qualified hold through the disturbance.
+            if result == 0:
+                assert summary["armed_xy_displacement_m"] <= 0.5
+                assert summary["armed_yaw"]["truth_heading_motion_deg"] <= 10
+                assert summary["armed_yaw"]["estimate_drift_deg"] <= 10
+            else:
+                assert summary["diagnostic"].strip()
+        finally:
+            _save_evidence(
+                tmp_path,
+                sensors,
+                {"profile": "flow-compass", "fault": "changing-field-after-liftoff"},
+            )
