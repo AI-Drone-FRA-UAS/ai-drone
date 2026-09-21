@@ -6,7 +6,6 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +97,7 @@ FORWARD_RANGEFINDER_PARAMETERS: Mapping[str, float] = {
 
 EXPECTED_FIRMWARE_VERSION = (4, 7, 1)
 EXPECTED_FIRMWARE_COMMIT = b"dbe79216"
+COPTER_MODES = mavutil.mode_mapping_byname(mavlink.MAV_TYPE_QUADROTOR)
 
 
 class FlightSafetyError(RuntimeError):
@@ -899,7 +899,7 @@ class DroneController:
         finite_in_range(timeout, "timeout", minimum=0.1, maximum=30.0)
         connection = self._connection()
         requested = mode_name.upper()
-        mapping = connection.mode_mapping()
+        mapping = COPTER_MODES
         if requested not in mapping:
             raise ValueError(f"flight mode {requested!r} is not supported")
         connection.mav.set_mode_send(
@@ -1019,41 +1019,61 @@ class DroneController:
         )
 
     def _request_disarm(self) -> None:
+        self._resolve_control_ownership()
         self._require_autonomous_control()
         self._connection().arducopter_disarm()
+
+    def _drain_cleanup_evidence(self) -> None:
+        # Bound the drain and isolate transport errors: queued pilot evidence
+        # takes precedence, while a broken receive path cannot veto LAND.
+        try:
+            for _ in range(50):
+                message = self._connection().recv_match(blocking=False)
+                if message is None:
+                    break
+                self._process_message(message, time.monotonic())
+        except (OSError, SharedMavlinkError) as error:
+            logger.warning("cleanup receive failed: %s", error)
+        self._resolve_control_ownership()
+        self._require_autonomous_control()
+
+    def _best_effort_disarm(self) -> None:
+        try:
+            self._request_disarm()
+        except (OSError, SharedMavlinkError) as error:
+            logger.warning("DISARM write failed; retrying: %s", error)
 
     def disarm(self, timeout: float = 10.0) -> None:
         self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=0.5, maximum=30.0)
         if self._flight_started_by_controller:
             raise FlightSafetyError("refusing to force-disarm a flight; use land()")
-        self._request_disarm()
+        self._drain_cleanup_evidence()
+        started = max(time.monotonic(), self.last_heartbeat_time)
         deadline = time.monotonic() + timeout
-        # Discard heartbeats already queued at the request boundary. A cached
-        # disarmed state (especially after an ambiguous arm write) is not a
-        # confirmation that this cleanup request took effect.
-        while time.monotonic() < deadline:
-            if self._connection().recv_match(type="HEARTBEAT", blocking=False) is None:
-                break
+        self._best_effort_disarm()
         next_request = time.monotonic() + 1.0
         while (remaining := deadline - time.monotonic()) > 0:
             now = time.monotonic()
             if now >= next_request:
-                self._request_disarm()
+                self._drain_cleanup_evidence()
+                self._best_effort_disarm()
                 next_request = now + 1.0
-            message = self._connection().recv_match(
-                type="HEARTBEAT", blocking=True, timeout=min(remaining, 0.5)
-            )
-            if (
-                message is None
-                or message.get_type() != "HEARTBEAT"
-                or not self._matching_vehicle_message(message)
-            ):
-                continue
-            self._process_message(message, time.monotonic())
-            if not self.is_armed:
-                self._arm_command_sent = False
-                return
+            try:
+                self._pump_gcs_heartbeat()
+                message = self._connection().recv_match(
+                    type="HEARTBEAT", blocking=True, timeout=min(remaining, 0.5)
+                )
+                if message is not None:
+                    self._process_message(message, time.monotonic())
+                self._resolve_control_ownership()
+                self._require_autonomous_control()
+                if self.last_heartbeat_time > started and not self.is_armed:
+                    self._arm_command_sent = False
+                    return
+            except (OSError, SharedMavlinkError) as error:
+                logger.warning("DISARM receive failed; retrying: %s", error)
+                time.sleep(min(remaining, 0.1))
         raise TimeoutError("flight controller did not confirm disarming")
 
     def _send_level_climb(self, climb_fraction: float) -> None:
@@ -1215,37 +1235,46 @@ class DroneController:
             time.sleep(0.05)
 
     def land(self, timeout: float = 30.0) -> None:
+        self._resolve_control_ownership()
         self._require_autonomous_control()
         finite_in_range(timeout, "timeout", minimum=1.0, maximum=120.0)
+        self._drain_cleanup_evidence()
         self._landing_commanded = True
+        started = max(time.monotonic(), self.last_heartbeat_time)
         deadline = time.monotonic() + timeout
-        next_request = 0.0
+        self.emergency_stop()
+        next_request = started + 1.0
         while time.monotonic() < deadline:
-            with suppress(SharedMavlinkError):
+            try:
                 self.update_telemetry()
+            except (OSError, SharedMavlinkError) as error:
+                logger.warning("LAND receive failed; retrying: %s", error)
+            self._resolve_control_ownership()
             self._require_autonomous_control()
-            now = time.monotonic()
-            if now >= next_request:
-                self.emergency_stop()
-                next_request = now + 1.0
-            if not self.is_armed:
+            if self.last_heartbeat_time > started and not self.is_armed:
                 self.is_flying = False
                 return
+            now = time.monotonic()
+            if now >= next_request:
+                self._drain_cleanup_evidence()
+                self.emergency_stop()
+                next_request = now + 1.0
             time.sleep(0.1)
         raise TimeoutError(
             "LAND remains commanded but disarming was not confirmed; do not approach the vehicle"
         )
 
     def emergency_stop(self) -> None:
-        """Command LAND without force-disarming a possibly airborne vehicle."""
-        if self.connection is None or self._human_control:
-            return
-        self._landing_commanded = True
-        mapping = self.connection.mode_mapping()
-        if not mapping or "LAND" not in mapping:
-            raise FlightSafetyError("flight controller does not expose LAND mode")
-        self.connection.mav.set_mode_send(
-            self.target_system,
-            mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            mapping["LAND"],
-        )
+        """Best-effort LAND; cleanup remains safe even if the link is broken."""
+        try:
+            self._resolve_control_ownership()
+            if self.connection is None or self._human_control:
+                return
+            self._landing_commanded = True
+            self.connection.mav.set_mode_send(
+                self.target_system,
+                mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                COPTER_MODES["LAND"],
+            )
+        except Exception:
+            logger.exception("could not request emergency LAND")

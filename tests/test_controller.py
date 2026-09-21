@@ -203,7 +203,7 @@ def test_disarm_requires_new_heartbeat_not_cached_or_queued_state(
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
     queue = [_message("HEARTBEAT", base_mode=0)] if queued_disarmed else []
 
-    def receive(*, type, blocking, timeout: float | None = None):
+    def receive(*, type=None, blocking, timeout: float | None = None):
         if not blocking and queue:
             return queue.pop()
         if blocking:
@@ -514,6 +514,7 @@ def test_land_timeout_never_force_disarms(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     connection.mode_mapping.return_value = {"LAND": 9}
+    connection.recv_match.return_value = None
     controller.connection = connection
     controller.is_armed = True
     monkeypatch.setattr(controller, "update_telemetry", lambda: None)
@@ -535,6 +536,7 @@ def test_land_retries_until_disarmed_heartbeat_is_observed(monkeypatch) -> None:
     controller = DroneController(device="udp:127.0.0.1:14550")
     connection = MagicMock()
     connection.mode_mapping.return_value = {"LAND": 9}
+    connection.recv_match.return_value = None
     controller.connection = connection
     controller.is_armed = True
     controller._flight_started_by_controller = True
@@ -543,9 +545,8 @@ def test_land_retries_until_disarmed_heartbeat_is_observed(monkeypatch) -> None:
 
     def update() -> None:
         updates[0] += 1
-        if updates[0] >= 12:
-            controller.is_armed = False
-            controller._flight_started_by_controller = False
+        if updates[0] >= 13:
+            controller._process_message(_message("HEARTBEAT", base_mode=0), clock[0])
 
     monkeypatch.setattr(controller, "update_telemetry", update)
     monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
@@ -1246,3 +1247,87 @@ def test_hover_cli_rejects_a_ceiling_at_or_above_one_metre(monkeypatch) -> None:
         )
         == 1
     )
+
+
+@pytest.mark.parametrize("failure", ["receive", "heartbeat", "write"])
+def test_land_retries_after_transport_failure_without_mode_cache(monkeypatch, failure):
+    from ai_drone.mavlink.shared import SharedMavlinkError
+
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    connection.mode_mapping.return_value = None
+    connection.recv_match.return_value = None
+    controller.connection = connection
+    controller.is_armed = True
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    if failure == "receive":
+        connection.recv_match.side_effect = SharedMavlinkError("subscriber failed")
+    elif failure == "heartbeat":
+        connection.mav.heartbeat_send.side_effect = OSError("heartbeat failed")
+    else:
+        connection.mav.set_mode_send.side_effect = OSError("write failed")
+    with pytest.raises(TimeoutError, match="LAND remains commanded"):
+        controller.land(timeout=2.5)
+    assert connection.mav.set_mode_send.call_count == 3
+    assert all(
+        call.args[-1] == 9 for call in connection.mav.set_mode_send.call_args_list
+    )
+    connection.arducopter_disarm.assert_not_called()
+    connection.mode_mapping.assert_not_called()
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_land_requires_post_request_disarmed_heartbeat(monkeypatch, cached):
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    controller.connection = connection
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    if cached:
+        controller._process_message(_message("HEARTBEAT", base_mode=0), clock[0])
+    queued = [_message("HEARTBEAT", base_mode=0)]
+    connection.recv_match.side_effect = lambda **_kwargs: (
+        queued.pop() if queued else None
+    )
+    with pytest.raises(TimeoutError, match="disarming was not confirmed"):
+        controller.land(timeout=1.0)
+    connection.mav.set_mode_send.assert_called_once()
+
+
+def test_disarm_retries_after_failed_write_and_receive(monkeypatch):
+    from ai_drone.mavlink.shared import SharedMavlinkError
+
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    connection = MagicMock()
+    controller.connection = connection
+    controller._arm_command_sent = True
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    connection.recv_match.side_effect = SharedMavlinkError("subscriber failed")
+    connection.arducopter_disarm.side_effect = OSError("write failed")
+    with pytest.raises(TimeoutError, match="did not confirm disarming"):
+        controller.disarm(timeout=2.5)
+    assert connection.arducopter_disarm.call_count == 3
+    assert controller._arm_command_sent
+    connection.mav.set_mode_send.assert_not_called()
+
+
+def test_emergency_stop_preserves_original_error_on_failed_write():
+    controller = DroneController(device="udp:127.0.0.1:14550")
+    controller.connection = MagicMock()
+    controller.connection.mav.set_mode_send.side_effect = OSError("write failed")
+    controller.emergency_stop()
+    assert controller._landing_commanded
