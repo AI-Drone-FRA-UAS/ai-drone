@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
 import shutil
@@ -21,6 +20,7 @@ from ai_drone.durability import atomic_write_text, fsync_directory
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.network import read_link, read_profiles
 from ai_drone.platform import is_raspberry_pi
+from ai_drone.runtime_status import RuntimeStatus
 from ai_drone.settings import Settings, load_settings
 
 UNIT = "ai-drone-runtime.service"
@@ -149,18 +149,7 @@ def _service_state(unit: str) -> dict[str, str]:
 
 
 def _fresh_disarmed(status: dict) -> None:
-    age = status.get("heartbeat_age_s")
-    if (
-        status.get("status") != "disarmed"
-        or status.get("armed") is not False
-        or status.get("fresh") is not True
-        or status.get("source_known") is not True
-        or (status.get("system_id"), status.get("component_id")) != (1, 1)
-        or isinstance(age, bool)
-        or not isinstance(age, int | float)
-        or not math.isfinite(age)
-        or not 0 <= age <= 2
-    ):
+    if not RuntimeStatus.parse(status).disarmed_at_receipt():
         raise RuntimeError("fresh selected-FC disarmed telemetry is required")
     if status.get("control_client") or status.get("network_busy"):
         raise RuntimeError(

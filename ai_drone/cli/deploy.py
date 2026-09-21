@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import math
 import os
 import shutil
 import signal
@@ -21,6 +20,7 @@ from ai_drone.link.deploy import (
     _manifest_paths,
     _validate_runtime_source,
 )
+from ai_drone.runtime_status import RuntimeStatus
 
 
 def _mutable_paths(root: Path, *, environment: bool) -> list[Path]:
@@ -98,26 +98,11 @@ def _runtime_service(action: str) -> None:
 
 
 def _runtime_ready(status: object, now: float) -> bool:
-    if not isinstance(status, dict):
+    try:
+        parsed = RuntimeStatus.parse(status)
+    except ValueError:
         return False
-    age = status.get("heartbeat_age_s")
-    updated = status.get("updated_monotonic")
-    return bool(
-        status.get("fresh") is True
-        and status.get("source_known") is True
-        and (status.get("system_id"), status.get("component_id")) == (1, 1)
-        and status.get("closed") is False
-        and status.get("error") is None
-        and status.get("network_error") is None
-        and isinstance(age, int | float)
-        and not isinstance(age, bool)
-        and math.isfinite(age)
-        and isinstance(updated, int | float)
-        and not isinstance(updated, bool)
-        and math.isfinite(updated)
-        and 0 <= now - updated <= 2
-        and 0 <= age <= 2 - (now - updated)
-    )
+    return parsed.healthy_after_restart(now)
 
 
 def _wait_runtime_ready(socket: str, *, timeout: float = 12) -> None:

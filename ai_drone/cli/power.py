@@ -25,6 +25,7 @@ from ai_drone.mavlink.ownership import SerialDeviceBusyError, require_available_
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.mavlink.safety import heartbeat_is_armed, is_vehicle_message
 from ai_drone.platform import is_raspberry_pi
+from ai_drone.runtime_status import RuntimeStatus
 from ai_drone.settings import load_settings
 
 WALK_UNIT = "ai-drone-walk.service"
@@ -168,21 +169,12 @@ def _runtime_status(*, deadline: float | None = None) -> dict[str, Any] | None:
 
 
 def _runtime_fc(status: dict[str, Any]) -> dict[str, Any]:
-    age = status.get("heartbeat_age_s")
-    updated = status.get("updated_monotonic")
-    if (
-        status.get("fresh") is not True
-        or status.get("source_known") is not True
-        or (status.get("system_id"), status.get("component_id")) != (1, 1)
-        or not isinstance(age, int | float)
-        or isinstance(age, bool)
-        or not isinstance(updated, int | float)
-        or isinstance(updated, bool)
-        or not 0 <= time.monotonic() - updated <= 2
-    ):
+    parsed = RuntimeStatus.parse(status)
+    age = parsed.effective_heartbeat_age(time.monotonic())
+    if not parsed.selected_source or age is None:
         raise RuntimeError("runtime selected-FC status is stale or unknown")
-    fc = {**status, "heartbeat_age_s": age + time.monotonic() - updated}
-    if fc.get("armed") is not False:
+    fc = {**status, "heartbeat_age_s": age}
+    if parsed.armed is not False:
         raise RuntimeError("runtime FC is armed or unknown")
     _require_disarmed(fc)
     return fc
@@ -540,6 +532,7 @@ def _require_disarmed(fc: dict[str, Any]) -> None:
     age = fc.get("heartbeat_age_s")
     if (
         fc.get("status") != "disarmed"
+        or isinstance(age, bool)
         or not isinstance(age, int | float)
         or not 0 <= age <= 2
     ):

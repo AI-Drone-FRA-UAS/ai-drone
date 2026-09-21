@@ -700,6 +700,36 @@ def test_runtime_does_not_excuse_unrelated_hardware_owner():
         power._guard_idle(snapshot)
 
 
+@pytest.mark.parametrize(
+    "fc",
+    [
+        {"status": "absent"},
+        {"status": "busy"},
+        {"status": "unavailable"},
+        {"status": "armed", "heartbeat_age_s": 0.1},
+        {"status": "disarmed", "heartbeat_age_s": 3},
+        {"status": "disarmed", "heartbeat_age_s": True},
+    ],
+)
+def test_runtime_disappearing_before_final_power_check_cannot_authorize(
+    monkeypatch, fc
+):
+    calls = []
+    monkeypatch.setattr(power, "_pi_snapshot", idle)
+    monkeypatch.setattr(power, "_probe_fc", lambda _device: fc)
+    monkeypatch.setattr(
+        power,
+        "runtime_request",
+        lambda _socket, request: calls.append(request) or request,
+    )
+    monkeypatch.setattr(
+        power, "_run", lambda *_args, **_kwargs: pytest.fail("powered off")
+    )
+    with pytest.raises(RuntimeError, match="disarmed state"):
+        power._shared_final_action("shutdown", runtime_status())
+    assert calls == [{"maintenance": True}, {"maintenance": False}]
+
+
 @pytest.mark.parametrize("action", ["idle", "shutdown"])
 def test_shared_final_action_acquires_maintenance_and_never_opens_uart(
     monkeypatch, action
