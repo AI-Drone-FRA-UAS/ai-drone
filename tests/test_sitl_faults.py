@@ -161,3 +161,47 @@ def test_compass_anomaly_before_arm_refuses(tmp_path: Path) -> None:
                     "decay_height_m": 100,
                 },
             )
+
+
+def _offset_sensors(offset: float) -> type[_ExternalMavlinkSensors]:
+    class OffsetSensors(_ExternalMavlinkSensors):
+        @staticmethod
+        def _sensor_values(state, ground_altitude_m):
+            # A simulated launch platform above the optical-flow/range floor.
+            return _ExternalMavlinkSensors._sensor_values(
+                state, ground_altitude_m - offset
+            )
+
+    return OffsetSensors
+
+
+@pytest.mark.parametrize("offset,allowed", [(0.1, True), (0.3, False)])
+def test_floor_offset_is_checked_before_climb(
+    tmp_path: Path, offset: float, allowed: bool
+) -> None:
+    with _running_sitl(
+        _ardupilot_root(), tmp_path, sensor_factory=_offset_sensors(offset)
+    ) as sensors:
+        try:
+            _assert_running_sitl_configuration(sensors)
+            sensors.reset_observations()
+            with _running_cli(
+                tmp_path, "offset", "control", *_production_hover_arguments(10)
+            ) as (process, log):
+                result = process.wait(timeout=100)
+            if allowed:
+                assert result == 0, log.read_text()
+                sensors.wait_for_disarm(timeout=10)
+                assert max(sensors.altitudes_m) + offset < 0.8
+                assert max(sensors.altitudes_m) >= 0.45
+            else:
+                assert result != 0, log.read_text()
+                assert True not in sensors.armed_states, log.read_text()
+                assert max(sensors.altitudes_m) < 0.05
+                assert "ceiling" in log.read_text().lower(), log.read_text()
+        finally:
+            _save_evidence(
+                tmp_path,
+                sensors,
+                {"launch_platform_m_above_floor": offset, "expected_to_arm": allowed},
+            )
