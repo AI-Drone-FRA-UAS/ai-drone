@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ai_drone.review.signals import columns, for_message
+
 COMMON = ["elapsed_s", "timestamp_utc", "message", "source_system", "source_component"]
 CSV_FIELDS = {
     "ranges.csv": [
@@ -67,22 +69,10 @@ CSV_FIELDS = {
         "zmag_raw",
         "temperature_c",
     ],
-    "motion.csv": [
-        *COMMON,
-        "roll_deg",
-        "pitch_deg",
-        "yaw_deg",
-        "north_m",
-        "east_m",
-        "down_m",
-        "velocity_north_m_s",
-        "velocity_east_m_s",
-        "velocity_down_m_s",
-    ],
+    "motion.csv": [*COMMON, *columns("motion.csv")],
     "environment.csv": [
         *COMMON,
-        "pressure_hpa",
-        "temperature_c",
+        *columns("environment.csv"),
         "voltage_v",
         "current_a",
         "remaining_percent",
@@ -469,26 +459,22 @@ def _imu(export: Export, base: dict[str, Any], f: dict[str, Any]) -> None:
     export.csv("imu.csv", row)
 
 
-def _motion(export: Export, base: dict[str, Any], f: dict[str, Any]) -> None:
+def _scalars(export: Export, base: dict[str, Any], fields: dict[str, Any]) -> None:
+    signals = for_message(base["message"])
     row = dict(base)
-    if base["message"] == "ATTITUDE":
-        for axis in ("roll", "pitch", "yaw"):
-            value = scaled(f, axis, 180 / math.pi)
-            row[f"{axis}_deg"] = value
-            export.point(axis, axis.title(), "Attitude", "°", base["elapsed_s"], value)
-    else:
-        for axis, field_name in (("north", "x"), ("east", "y"), ("down", "z")):
-            row[f"{axis}_m"] = number(f.get(field_name))
-            row[f"velocity_{axis}_m_s"] = number(f.get("v" + field_name))
+    for signal in signals:
+        value = scaled(fields, signal.field, signal.factor)
+        row[signal.column] = value
+        if signal.key is not None:
             export.point(
-                f"position_{axis}",
-                f"EKF {axis}",
-                "Estimated local position",
-                "m",
+                signal.key,
+                signal.label,
+                signal.panel,
+                signal.unit,
                 base["elapsed_s"],
-                row[f"{axis}_m"],
+                value,
             )
-    export.csv("motion.csv", row)
+    export.csv(signals[0].filename, row)
 
 
 def _environment(export: Export, base: dict[str, Any], f: dict[str, Any]) -> None:
@@ -531,27 +517,6 @@ def _environment(export: Export, base: dict[str, Any], f: dict[str, Any]) -> Non
                 "sensors_enabled": f.get("onboard_control_sensors_enabled"),
                 "sensors_healthy": f.get("onboard_control_sensors_health"),
             },
-        )
-    else:
-        row.update(
-            pressure_hpa=number(f.get("press_abs")),
-            temperature_c=scaled(f, "temperature", 0.01),
-        )
-        export.point(
-            "pressure",
-            "Pressure",
-            "Barometer",
-            "hPa",
-            base["elapsed_s"],
-            row["pressure_hpa"],
-        )
-        export.point(
-            "temperature",
-            "Barometer temperature",
-            "Temperature",
-            "°C",
-            base["elapsed_s"],
-            row["temperature_c"],
         )
     export.csv("environment.csv", row)
 
@@ -685,10 +650,10 @@ _HANDLERS = {
     "SCALED_IMU2": _imu,
     "SCALED_IMU3": _imu,
     "HIGHRES_IMU": _imu,
-    "ATTITUDE": _motion,
-    "LOCAL_POSITION_NED": _motion,
+    "ATTITUDE": _scalars,
+    "LOCAL_POSITION_NED": _scalars,
     "SYS_STATUS": _environment,
-    "SCALED_PRESSURE": _environment,
+    "SCALED_PRESSURE": _scalars,
     "BATTERY_STATUS": _battery,
     "HEARTBEAT": _event,
     "EKF_STATUS_REPORT": _event,

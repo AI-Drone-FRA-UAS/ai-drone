@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from ai_drone.review.data import Series, export_recording
+from ai_drone.review.data import CSV_FIELDS, Series, export_recording
 
 
 def message(
@@ -60,6 +60,44 @@ def rows(output: Path, name: str) -> list[dict[str, str]]:
 
 def series(payload: dict[str, Any], name: str) -> dict[str, Any]:
     return next(item for item in payload["series"] if item["id"] == name)
+
+
+def test_scalar_table_preserves_csv_column_order_units_and_missing_values(tmp_path):
+    assert CSV_FIELDS["motion.csv"][5:] == [
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg",
+        "north_m",
+        "east_m",
+        "down_m",
+        "velocity_north_m_s",
+        "velocity_east_m_s",
+        "velocity_down_m_s",
+    ]
+    assert CSV_FIELDS["environment.csv"][5:] == [
+        "pressure_hpa",
+        "temperature_c",
+        "voltage_v",
+        "current_a",
+        "remaining_percent",
+    ]
+    capture, output = recording(
+        tmp_path,
+        [
+            message("ATTITUDE", 1, {"roll": math.pi, "pitch": True, "yaw": "bad"}),
+            message("LOCAL_POSITION_NED", 2, {"x": 1, "y": -2, "z": -0.5, "vx": 0.2}),
+            message("SCALED_PRESSURE", 3, {"press_abs": 1012.5, "temperature": 2456}),
+        ],
+    )
+    payload = export_recording(capture, output)
+    motion = rows(output, "motion.csv")
+    assert motion[0]["roll_deg"] == "180.0"
+    assert motion[0]["pitch_deg"] == motion[0]["yaw_deg"] == ""
+    assert motion[1]["down_m"] == "-0.5"
+    assert motion[1]["velocity_north_m_s"] == "0.2"
+    assert rows(output, "environment.csv")[0]["temperature_c"] == "24.560000000000002"
+    assert series(payload, "position_down")["unit"] == "m"
+    assert series(payload, "roll")["unit"] == "°"
 
 
 def distance(elapsed: float, orientation: int, value: int) -> dict[str, Any]:
