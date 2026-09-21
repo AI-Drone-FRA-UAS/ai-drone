@@ -159,16 +159,13 @@ def _flight_session(args: argparse.Namespace):
             and isinstance(value, str | int | float | bool | type(None))
         }
         record = FlightRecorder(hub.subscribe("flight-recording"), metadata)
-        drone.request_telemetry_streams()
+        failure: BaseException | None = None
         try:
+            drone.request_telemetry_streams()
             yield drone, record
         except BaseException as error:
-            record.finish(error)
-            if drone.is_flying and drone.control_owner != "human":
-                try:
-                    drone.emergency_stop()
-                except Exception:
-                    logger.exception("could not request emergency LAND")
+            failure = error
+            _cleanup_failed_session(drone)
             raise
         else:
             try:
@@ -181,9 +178,39 @@ def _flight_session(args: argparse.Namespace):
                 )
             except Exception as error:
                 record.event("dataflash_unavailable", error=str(error))
-            record.finish()
         finally:
-            record.close()
+            _finish_recording(record, drone, failure)
+
+
+def _cleanup_failed_session(drone: DroneController) -> None:
+    # Keep recording active through the first bounded cleanup attempt. The owning
+    # controller context retains its independent retry obligation if this times out.
+    try:
+        if drone.control_owner == "human":
+            drone.supervise_human()
+        elif drone._flight_started_by_controller:
+            drone.land()
+        elif drone.owns_control:
+            drone.disarm()
+    except Exception:
+        logger.exception("flight-session cleanup remains unconfirmed")
+
+
+def _finish_recording(
+    record: FlightRecorder, drone: DroneController, failure: BaseException | None
+) -> None:
+    # All audit work occurs outside the control loop. Attempt each finalizer even
+    # if storage/reporting failed, preserving the mission's original exception.
+    operations = (
+        lambda: record.event("command_audit", **drone.command_audit()),
+        lambda: record.finish(failure),
+        record.close,
+    )
+    for operation in operations:
+        try:
+            operation()
+        except Exception:
+            logger.exception("could not finalize flight recording")
 
 
 def cmd_hover(args: argparse.Namespace) -> int:
@@ -227,7 +254,20 @@ def _run_flight(args: argparse.Namespace, *, altitude_only: bool) -> int:
             else:
                 record.event("loiter_acquisition_started")
                 drone.enter_loiter(timeout=args.navigation_timeout)
-                record.event("loiter_started", ekf_flags=drone.ekf_flags)
+                ground = drone._ground_reference
+                record.event(
+                    "loiter_started",
+                    ekf_flags=drone.ekf_flags,
+                    takeoff_gain_m=args.takeoff_alt,
+                    ground_reference_m=ground,
+                    floor_target_m=None
+                    if ground is None
+                    else ground + args.takeoff_alt,
+                    entry_altitude_m=drone.current_altitude,
+                    duration_s=args.duration,
+                    mode=drone.flight_mode,
+                    horizontal_position_hold=True,
+                )
                 drone.hold_loiter(args.duration)
             record.event("landing_started")
             drone.land()

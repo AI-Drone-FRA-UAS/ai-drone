@@ -61,6 +61,7 @@ from ai_drone.flight.phase import (
     Phase,
     SetMode,
     Unclaimed,
+    attempt_fields,
     cleanup,
     ground_reference,
     observed_disarm,
@@ -167,6 +168,17 @@ class DroneController:
         self.phase: Phase = Unclaimed()
         self.command_attempts: deque[CommandAttempt] = deque(maxlen=256)
         self._command_sequence = 0
+        self._command_outcomes = {"written": 0, "failed": 0}
+        self._command_kind_counts: dict[str, int] = {}
+        self._first_command_attempts: dict[str, CommandAttempt] = {}
+        self._last_climb_attempt: float | None = None
+        self._last_climb_written: float | None = None
+        self._maximum_climb_attempt_gap = 0.0
+        self._maximum_climb_write_gap = 0.0
+        self._maximum_heartbeat_gap = 0.0
+        self._heartbeat_writes = 0
+        self._heartbeat_failures = 0
+        self._last_heartbeat_written: float | None = None
         self._last_gcs_heartbeat_time: float | None = None
         # The CLI sets this to a non-blocking callback backed by its signal/event
         # handling.  Every long pre-landing loop checks it; landing deliberately
@@ -379,14 +391,73 @@ class DroneController:
             self._command_sequence, command, time.monotonic(), "attempting"
         )
         self.command_attempts.append(attempt)
+        self._record_command_intent(attempt)
         try:
             self._perform_command(command)
         except BaseException as error:
-            self.command_attempts[-1] = replace(
-                attempt, outcome="failed", error=f"{type(error).__name__}: {error}"
+            self._record_command_outcome(
+                replace(
+                    attempt, outcome="failed", error=f"{type(error).__name__}: {error}"
+                )
             )
             raise
-        self.command_attempts[-1] = replace(attempt, outcome="written")
+        self._record_command_outcome(replace(attempt, outcome="written"))
+
+    def _record_command_intent(self, attempt: CommandAttempt) -> None:
+        name = type(attempt.command).__name__
+        if isinstance(attempt.command, SetMode):
+            name = attempt.command.name
+        self._command_kind_counts[name] = self._command_kind_counts.get(name, 0) + 1
+        self._first_command_attempts.setdefault(name, attempt)
+        if isinstance(attempt.command, Climb):
+            if self._last_climb_attempt is not None:
+                self._maximum_climb_attempt_gap = max(
+                    self._maximum_climb_attempt_gap,
+                    attempt.attempted_at - self._last_climb_attempt,
+                )
+            self._last_climb_attempt = attempt.attempted_at
+
+    def _record_command_outcome(self, attempt: CommandAttempt) -> None:
+        self.command_attempts[-1] = attempt
+        self._command_outcomes[attempt.outcome] += 1
+        for name, first in self._first_command_attempts.items():
+            if first.sequence == attempt.sequence:
+                self._first_command_attempts[name] = attempt
+        if isinstance(attempt.command, Climb) and attempt.outcome == "written":
+            now = time.monotonic()
+            if self._last_climb_written is not None:
+                self._maximum_climb_write_gap = max(
+                    self._maximum_climb_write_gap, now - self._last_climb_written
+                )
+            self._last_climb_written = now
+
+    def command_audit(self) -> dict[str, object]:
+        """Snapshot bounded details and whole-session aggregates without performing I/O."""
+        return {
+            "attempted": self._command_sequence,
+            **self._command_outcomes,
+            "kinds": dict(self._command_kind_counts),
+            "first_attempts": {
+                name: attempt_fields(attempt)
+                for name, attempt in self._first_command_attempts.items()
+            },
+            "recent_attempts": [
+                attempt_fields(attempt) for attempt in self.command_attempts
+            ],
+            "recent_capacity": self.command_attempts.maxlen,
+            "omitted_attempt_details": self._command_sequence
+            - len(self.command_attempts),
+            "maximum_climb_attempt_gap_s": self._maximum_climb_attempt_gap,
+            "maximum_climb_write_gap_s": self._maximum_climb_write_gap,
+            "last_climb_written_monotonic": self._last_climb_written,
+            "maximum_heartbeat_gap_s": self._maximum_heartbeat_gap,
+            "heartbeat_writes": self._heartbeat_writes,
+            "heartbeat_failures": self._heartbeat_failures,
+            "last_heartbeat_written_monotonic": self._last_heartbeat_written,
+            "profile": self.navigation_profile.name,
+            "profile_initialized_monotonic": self.profile_initialized_at,
+            "profile_elapsed_s": time.monotonic() - self.profile_initialized_at,
+        }
 
     def _perform_command(self, command: Command) -> None:
         connection = self._connection()
@@ -576,13 +647,24 @@ class DroneController:
             and now - self._last_gcs_heartbeat_time < GCS_HEARTBEAT_INTERVAL_S
         ):
             return
-        self.connection.mav.heartbeat_send(
-            mavlink.MAV_TYPE_GCS,
-            mavlink.MAV_AUTOPILOT_INVALID,
-            0,
-            0,
-            mavlink.MAV_STATE_ACTIVE,
-        )
+        try:
+            self.connection.mav.heartbeat_send(
+                mavlink.MAV_TYPE_GCS,
+                mavlink.MAV_AUTOPILOT_INVALID,
+                0,
+                0,
+                mavlink.MAV_STATE_ACTIVE,
+            )
+        except BaseException:
+            self._heartbeat_failures += 1
+            raise
+        written_at = time.monotonic()
+        if self._last_heartbeat_written is not None:
+            self._maximum_heartbeat_gap = max(
+                self._maximum_heartbeat_gap, written_at - self._last_heartbeat_written
+            )
+        self._heartbeat_writes += 1
+        self._last_heartbeat_written = written_at
         self._last_gcs_heartbeat_time = now
 
     def _matching_vehicle_message(self, message: Any) -> bool:

@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -165,3 +166,49 @@ def test_confirmed_pilot_handoff_finishes_with_supervision_without_landing(monke
     assert control.cmd_hover(args) == 0
     assert "supervised through pilot disarm" in calls
     assert calls[-1] == ("pilot_disarmed", {})
+
+
+def test_recording_finalization_attempts_audit_finish_and_close_independently():
+    record = MagicMock()
+    record.event.side_effect = OSError("disk unavailable")
+    record.finish.side_effect = RuntimeError("manifest unavailable")
+    drone = MagicMock()
+    drone.command_audit.return_value = {"attempted": 3}
+    original = OSError("command delivery failed")
+    control._finish_recording(record, drone, original)
+    record.event.assert_called_once_with("command_audit", attempted=3)
+    record.finish.assert_called_once_with(original)
+    record.close.assert_called_once()
+
+
+def test_failed_session_keeps_recording_open_through_cleanup_and_preserves_original_error(
+    monkeypatch,
+):
+    calls = []
+    drone = SimpleNamespace(
+        control_owner="autonomous",
+        _flight_started_by_controller=True,
+        land=lambda: calls.append("LAND cleanup"),
+        command_audit=lambda: {"attempted": 4},
+        request_telemetry_streams=lambda: None,
+    )
+    record = SimpleNamespace(
+        event=lambda name, **_fields: calls.append(name),
+        finish=lambda error: calls.append(error),
+        close=lambda: calls.append("record closed"),
+    )
+
+    @contextmanager
+    def shared(_args):
+        yield drone, SimpleNamespace(subscribe=lambda _name: object())
+
+    monkeypatch.setattr(control, "_shared_controller", shared)
+    monkeypatch.setattr(control, "FlightRecorder", lambda *_args: record)
+    original = RuntimeError("original flight failure")
+    with (
+        pytest.raises(RuntimeError) as caught,
+        control._flight_session(argparse.Namespace()),
+    ):
+        raise original
+    assert caught.value is original
+    assert calls == ["LAND cleanup", "command_audit", original, "record closed"]

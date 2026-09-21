@@ -141,3 +141,33 @@ class CommandAttempt:
     attempted_at: float
     outcome: Literal["attempting", "written", "failed"]
     error: str | None = None
+
+
+def command_fields(command: Command) -> dict[str, str | float | int | list[float]]:
+    match command:
+        case Arm():
+            return {"kind": "arm"}
+        case Disarm():
+            return {"kind": "disarm"}
+        case SetMode(name=name):
+            return {"kind": "set_mode", "mode": name}
+        case Climb(fraction=fraction, yaw=yaw):
+            return {"kind": "climb", "fraction": fraction, "yaw_rad": yaw}
+        case CommandLong(command=identifier, parameters=parameters):
+            return {
+                "kind": "command_long",
+                "command": identifier,
+                "parameters": list(parameters),
+            }
+        case _ as impossible:
+            assert_never(impossible)
+
+
+def attempt_fields(attempt: CommandAttempt) -> dict[str, object]:
+    return {
+        "sequence": attempt.sequence,
+        "attempted_monotonic": attempt.attempted_at,
+        "outcome": attempt.outcome,
+        "error": attempt.error,
+        **command_fields(attempt.command),
+    }

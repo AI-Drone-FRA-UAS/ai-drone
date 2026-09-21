@@ -154,3 +154,53 @@ def test_landing_latch_also_blocks_direct_arm_and_mode_writers(command):
         drone._write_command(command)
     assert drone.phase is before
     assert drone.connection.mock_calls == []
+
+
+def test_command_audit_keeps_whole_session_totals_and_first_intents_when_recent_buffer_wraps(
+    monkeypatch,
+):
+    import json
+
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    drone = controller_in(Unclaimed())
+    drone._write_command(Arm())
+    drone.phase = Armed()
+    for index in range(300):
+        clock[0] += 0.4 if index == 150 else 0.05
+        drone._write_command(Climb(0.0, 0.0))
+    drone._write_command(SetMode("LAND"))
+    audit = drone.command_audit()
+    assert audit["attempted"] == audit["written"] == 302
+    assert audit["failed"] == 0
+    assert audit["omitted_attempt_details"] == 46
+    assert len(audit["recent_attempts"]) == 256
+    assert audit["first_attempts"]["Arm"]["sequence"] == 1
+    assert audit["first_attempts"]["LAND"]["sequence"] == 302
+    assert audit["maximum_climb_attempt_gap_s"] == pytest.approx(0.4)
+    assert audit["maximum_climb_write_gap_s"] == pytest.approx(0.4)
+    json.dumps(audit, allow_nan=False)
+
+
+def test_audit_includes_failed_writes_and_heartbeat_recovery_gap(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    drone = controller_in(Unclaimed())
+    drone.connection.arducopter_arm.side_effect = OSError("ambiguous")
+    with pytest.raises(OSError):
+        drone._write_command(Arm())
+    drone._pump_gcs_heartbeat()
+    clock[0] = 102.0
+    drone.connection.mav.heartbeat_send.side_effect = OSError("lost link")
+    with pytest.raises(OSError):
+        drone._pump_gcs_heartbeat()
+    clock[0] = 103.0
+    drone.connection.mav.heartbeat_send.side_effect = None
+    drone._pump_gcs_heartbeat()
+    audit = drone.command_audit()
+    assert audit["attempted"] == audit["failed"] == 1
+    assert audit["written"] == 0
+    assert audit["first_attempts"]["Arm"]["outcome"] == "failed"
+    assert audit["heartbeat_failures"] == 1
+    assert audit["heartbeat_writes"] == 2
+    assert audit["maximum_heartbeat_gap_s"] == 3.0

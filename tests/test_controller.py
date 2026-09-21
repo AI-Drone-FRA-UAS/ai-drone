@@ -1479,7 +1479,13 @@ def test_hover_cli_runs_guided_nogps_takeoff_loiter_hold_and_land(
 ) -> None:
     calls: list[object] = []
     stop = SimpleNamespace(is_set=lambda: False)
-    drone = SimpleNamespace(ekf_flags=11, stop_requested=None)
+    drone = SimpleNamespace(
+        ekf_flags=11,
+        stop_requested=None,
+        _ground_reference=0.05,
+        current_altitude=0.52,
+        flight_mode="LOITER",
+    )
     drone.takeoff = lambda altitude: calls.append(("takeoff", altitude))
     drone.enter_loiter = lambda **kwargs: calls.append(("loiter", kwargs))
     drone.hold_loiter = lambda duration: calls.append(("hold", drone, duration, 14.4))
