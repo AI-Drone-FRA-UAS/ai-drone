@@ -36,6 +36,8 @@ RUNTIME_FILES = frozenset(
     {
         "README.md",  # Referenced by pyproject.toml during package builds.
         "drone.example.toml",
+        "firmware/FlywooF745-nogps-loiter.manifest.json",
+        "firmware/FlywooF745-nogps-loiter-extra.hwdef",
         "pyproject.toml",
         "scripts/network.py",
         "scripts/transfer.py",

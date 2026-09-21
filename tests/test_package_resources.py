@@ -131,6 +131,8 @@ def test_runtime_bundle_includes_template_and_restoration_helpers():
         "scripts/setup_runtime.py",
         "scripts/power.py",
         "scripts/verify_ardupilot_firmware.py",
+        "firmware/FlywooF745-nogps-loiter.manifest.json",
+        "firmware/FlywooF745-nogps-loiter-extra.hwdef",
         "uv.lock",
     } <= names
     assert "drone.toml" not in names

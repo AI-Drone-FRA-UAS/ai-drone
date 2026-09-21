@@ -168,8 +168,10 @@ in both wheel and sdist. Verify an installed wheel from a separate working
 directory, exercise `drone --help`, and generate a report with escaping and
 relative asset references. A source checkout passing tests does not establish
 that its package includes every resource. Source deployment's own staged bundle
-also requires the template and recovery scripts; a wheel is not a Pi restoration
-archive. Preserve source, environment, configuration, service and parameter
+also requires the template, recovery scripts and reviewed firmware manifest/
+overlay used by the verifier. A wheel or default sdist is not a Pi restoration
+archive: the sdist contains the Python package, but excludes the runtime helper
+scripts and dependency lock. Preserve source, environment, configuration, service and parameter
 snapshots as distinct restoration inputs.
 
 `site/build.py` renders maintained Markdown plus four presentation pages in
