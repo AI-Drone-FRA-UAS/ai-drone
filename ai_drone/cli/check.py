@@ -16,7 +16,7 @@ from typing import Any
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.cli.harness import connection_scope
-from ai_drone.flight import controller as flight_config
+from ai_drone.flight import params as flight_config
 from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import (
     STABLE_FLIGHT_CONTROLLER_DEVICE,
@@ -80,12 +80,57 @@ def _finite(value: Any) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
+@dataclass(frozen=True)
+class ObservationKey:
+    system: int
+    component: int
+    message: str
+    sensor_id: int | None = None
+    orientation: int | None = None
+    parameter_name: str | None = None
+    command: int | None = None
+
+
+def _wire_id(value: Any) -> int:
+    if type(value) is not int or not 0 <= value <= 255:
+        raise ValueError("invalid sensor identity")
+    return value
+
+
+def observation_key(
+    kind: str, fields: dict[str, Any] | None = None, *, source: tuple[int, int] = (1, 1)
+) -> ObservationKey:
+    fields = fields or {}
+    sensor = orientation = command = None
+    parameter = None
+    if kind in {"DISTANCE_SENSOR", "RAW_IMU", "HIGHRES_IMU", "BATTERY_STATUS"}:
+        sensor = _wire_id(fields.get("id", 0))
+    elif kind in {"OPTICAL_FLOW", "OPTICAL_FLOW_RAD"}:
+        sensor = _wire_id(fields.get("sensor_id", 0))
+    elif kind in {"SCALED_IMU", "SCALED_IMU2", "SCALED_IMU3"}:
+        sensor = {"SCALED_IMU": 0, "SCALED_IMU2": 1, "SCALED_IMU3": 2}[kind]
+    if kind == "DISTANCE_SENSOR":
+        orientation = _wire_id(fields.get("orientation"))
+    if kind == "PARAM_VALUE":
+        value = fields.get("param_id")
+        if not isinstance(value, str | bytes):
+            raise ValueError("invalid parameter identity")
+        parameter = decode_parameter_name(value)
+        if not parameter:
+            raise ValueError("empty parameter identity")
+    if kind == "COMMAND_ACK":
+        command = fields.get("command")
+        if type(command) is not int or not 0 <= command <= 65535:
+            raise ValueError("invalid command identity")
+    return ObservationKey(*source, kind, sensor, orientation, parameter, command)
+
+
 @dataclass
 class Observations:
     """Only messages from the exact project FC contribute to this report."""
 
-    latest: dict[str, dict[str, Any]] = field(default_factory=dict)
-    seen: dict[str, float] = field(default_factory=dict)
+    latest: dict[ObservationKey, dict[str, Any]] = field(default_factory=dict)
+    seen: dict[ObservationKey, float] = field(default_factory=dict)
     counts: Counter[str] = field(default_factory=Counter)
     parameters: dict[str, float] = field(default_factory=dict)
     status_text: list[str] = field(default_factory=list)
@@ -105,11 +150,15 @@ class Observations:
             raise RuntimeError("FC reported ARMED; bench check aborted")
         self.counts[kind] += 1
         fields = message.to_dict()
-        key = (
-            f"DISTANCE_SENSOR:{fields.get('orientation')}"
-            if kind == "DISTANCE_SENSOR"
-            else kind
-        )
+        try:
+            key = observation_key(
+                kind,
+                fields,
+                source=(message.get_srcSystem(), message.get_srcComponent()),
+            )
+        except (ValueError, UnicodeError):
+            self.warnings.append(f"{kind}: invalid observation identity ignored")
+            return
         now = time.monotonic()
         received = received_monotonic(message, default=now)
         if received > now or received < self.seen.get(key, -math.inf):
@@ -136,10 +185,24 @@ class Observations:
             if text and text not in self.status_text:
                 self.status_text.append(text)
 
-    def fresh(self, key: str, now: float) -> dict[str, Any] | None:
+    def fresh(
+        self,
+        kind: str,
+        now: float,
+        *,
+        sensor_id: int | None = None,
+        orientation: int | None = None,
+    ) -> dict[str, Any] | None:
+        fields = {}
+        if sensor_id is not None:
+            fields.update(id=sensor_id, sensor_id=sensor_id)
+        if orientation is not None:
+            fields["orientation"] = orientation
+        key = observation_key(kind, fields)
         age = now - self.seen.get(key, -math.inf)
         if key not in self.latest or not 0 <= age <= FRESHNESS_S:
-            self.errors.append(f"{key}: missing or stale FC telemetry")
+            label = f"{kind}:{orientation}" if orientation is not None else kind
+            self.errors.append(f"{label}: missing or stale FC telemetry")
             return None
         return self.latest[key]
 
@@ -200,7 +263,7 @@ def _read_parameters(
 
 
 def _firmware(observed: Observations) -> dict[str, Any]:
-    data = observed.latest.get("AUTOPILOT_VERSION", {})
+    data = observed.latest.get(observation_key("AUTOPILOT_VERSION"), {})
     packed = data.get("flight_sw_version", 0)
     version = tuple((int(packed) >> shift) & 255 for shift in (24, 16, 8))
     custom = data.get("flight_custom_version", b"")
@@ -245,9 +308,19 @@ def _health(observed: Observations, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _range(observed: Observations, orientation: int, now: float) -> dict[str, Any]:
-    data = observed.fresh(f"DISTANCE_SENSOR:{orientation}", now) or {}
     expected_id = 0 if orientation == 25 else 1
-    if data and data.get("id") != expected_id:
+    data = (
+        observed.fresh(
+            "DISTANCE_SENSOR", now, sensor_id=expected_id, orientation=orientation
+        )
+        or {}
+    )
+    if not data and any(
+        key.message == "DISTANCE_SENSOR"
+        and key.orientation == orientation
+        and key.sensor_id != expected_id
+        for key in observed.latest
+    ):
         observed.errors.append(
             f"Range orientation {orientation}: expected FC instance ID {expected_id}"
         )

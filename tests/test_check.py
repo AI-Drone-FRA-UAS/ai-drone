@@ -6,6 +6,7 @@ from collections import Counter, deque
 import pytest
 
 from ai_drone.cli import check
+from ai_drone.flight.controller import DroneController
 
 mavlink = check.mavlink
 
@@ -207,9 +208,7 @@ def rig(monkeypatch):
     def forbidden_controller(*_args, **_kwargs):
         pytest.fail("Bench check must never create a DroneController")
 
-    monkeypatch.setattr(
-        check.flight_config.DroneController, "__init__", forbidden_controller
-    )
+    monkeypatch.setattr(DroneController, "__init__", forbidden_controller)
     return clock, connection
 
 
@@ -413,10 +412,70 @@ def test_old_or_foreign_sample_cannot_replace_current_observation(monkeypatch):
     observed.observe(Message("ATTITUDE", roll=1, _received_monotonic=9))
     observed.observe(Message("ATTITUDE", roll=2, _received_monotonic=8))
     observed.observe(Message("ATTITUDE", source=(2, 1), roll=3, _received_monotonic=10))
-    assert observed.latest["ATTITUDE"]["roll"] == 1
-    assert observed.seen["ATTITUDE"] == 9
+    assert observed.latest[check.observation_key("ATTITUDE")]["roll"] == 1
+    assert observed.seen[check.observation_key("ATTITUDE")] == 9
     with pytest.raises(RuntimeError, match="ARMED"):
         observed.observe(Message("HEARTBEAT", base_mode=128, _received_monotonic=1))
+
+
+def test_ranges_preserve_sensor_id_and_orientation_when_another_instance_arrives(
+    monkeypatch,
+):
+    monkeypatch.setattr(check.time, "monotonic", lambda: 10)
+    observed = check.Observations()
+    for identifier, orientation, distance in ((1, 0, 120), (2, 0, 900), (1, 25, 45)):
+        observed.observe(
+            Message(
+                "DISTANCE_SENSOR",
+                id=identifier,
+                orientation=orientation,
+                current_distance=distance,
+                _received_monotonic=9,
+            )
+        )
+    selected = observed.fresh("DISTANCE_SENSOR", 10, sensor_id=1, orientation=0)
+    assert selected is not None and selected["current_distance"] == 120
+    assert len(observed.latest) == 3
+    assert all((key.system, key.component) == (1, 1) for key in observed.latest)
+
+
+def test_parameter_receipt_order_is_independent_for_each_name(monkeypatch):
+    monkeypatch.setattr(check.time, "monotonic", lambda: 10)
+    observed = check.Observations()
+    for name, value, received in (
+        (b"ARMING_SKIPCHK", 0, 9),
+        (b"FLOW_TYPE", 5, 8),
+        (b"FLOW_TYPE", 99, 7),
+    ):
+        observed.observe(
+            Message(
+                "PARAM_VALUE",
+                param_id=name,
+                param_value=value,
+                _received_monotonic=received,
+            )
+        )
+    assert observed.parameters == {"ARMING_SKIPCHK": 0, "FLOW_TYPE": 5}
+    assert {key.parameter_name for key in observed.latest} == {
+        "ARMING_SKIPCHK",
+        "FLOW_TYPE",
+    }
+
+
+def test_malformed_sensor_identity_does_not_alias_a_valid_sensor(monkeypatch):
+    monkeypatch.setattr(check.time, "monotonic", lambda: 10)
+    observed = check.Observations()
+    observed.observe(
+        Message("DISTANCE_SENSOR", id=0, orientation=25, current_distance=20)
+    )
+    observed.observe(
+        Message("DISTANCE_SENSOR", id=False, orientation=25, current_distance=99)
+    )
+    selected = observed.fresh("DISTANCE_SENSOR", 10, sensor_id=0, orientation=25)
+    assert selected is not None and selected["current_distance"] == 20
+    assert observed.warnings == [
+        "DISTANCE_SENSOR: invalid observation identity ignored"
+    ]
 
 
 def test_parameter_transport_error_still_only_closes(rig, capsys, monkeypatch):
