@@ -10,6 +10,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
 from ai_drone.mavlink.safety import distance_sensor_valid, heartbeat_is_armed, is_fresh
+from ai_drone.validation import json_int
 
 T = TypeVar("T")
 NAVIGATION_SAMPLE_MAX_AGE_S = 1.0
@@ -42,6 +43,12 @@ class Heartbeat:
 class Firmware:
     version: int
     commit: bytes
+
+
+@dataclass(frozen=True)
+class StatusText:
+    severity: int
+    text: str
 
 
 @dataclass(frozen=True)
@@ -92,7 +99,7 @@ class Reading:
     value: float | int | None
 
 
-Payload = Heartbeat | Firmware | TimedReading | Reading
+Payload = Heartbeat | Firmware | StatusText | TimedReading | Reading
 
 
 @dataclass(frozen=True)
@@ -140,6 +147,20 @@ def _pose_reading(message: Any, kind: str) -> TimedReading | None:
     return TimedReading(field, value if math.isfinite(value) else None, boot)
 
 
+def _status_text(message: Any) -> StatusText | None:
+    text = getattr(message, "text", None)
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    if not isinstance(text, str):
+        return None
+    try:
+        severity = json_int(message.severity, "STATUSTEXT severity")
+    except (AttributeError, ValueError):
+        return None
+    text = text.split("\0", 1)[0].strip()
+    return StatusText(severity, text[:50]) if text and 0 <= severity <= 7 else None
+
+
 def decode(
     message: Any, *, received: float, fallback_mode: object = None
 ) -> Observation | None:
@@ -159,6 +180,8 @@ def decode(
         payload = Firmware(
             int(message.flight_sw_version), bytes(message.flight_custom_version)
         )
+    elif kind == "STATUSTEXT":
+        payload = _status_text(message)
     elif kind in {"ATTITUDE", "LOCAL_POSITION_NED", "DISTANCE_SENSOR", "RC_CHANNELS"}:
         payload = _pose_reading(message, kind)
     elif kind == "SYS_STATUS":
@@ -338,5 +361,7 @@ def observe(
             return state if accepted is None else _reading(accepted, payload, received)
         case TimedReading() as payload:
             return _timed_reading(state, payload, received)
+        case StatusText():
+            return state  # diagnostics do not change vehicle health or authority
         case _ as impossible:
             assert_never(impossible)

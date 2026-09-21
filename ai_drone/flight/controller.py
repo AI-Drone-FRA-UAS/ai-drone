@@ -70,6 +70,8 @@ from ai_drone.flight.phase import (
     request_landing,
 )
 from ai_drone.flight.state import (
+    Sample,
+    StatusText,
     VehicleState,
     align_altitude,
     decode,
@@ -80,6 +82,7 @@ from ai_drone.mavlink.connection import open_ardupilot_connection
 from ai_drone.mavlink.devices import resolve_mavlink_endpoint
 from ai_drone.mavlink.parameters import request_parameter
 from ai_drone.mavlink.safety import (
+    is_fresh,
     is_vehicle_message,
     require_ardupilot_heartbeat,
     require_fresh_disarmed_heartbeat,
@@ -183,6 +186,10 @@ class DroneController:
         self._heartbeat_writes = 0
         self._heartbeat_failures = 0
         self._last_heartbeat_written: float | None = None
+        self._arm_requested_at: float | None = None
+        self._arm_request_finished_at: float | None = None
+        self._arm_status_text: deque[Sample[StatusText]] = deque(maxlen=32)
+        self._arm_status_count = 0
         self._last_gcs_heartbeat_time: float | None = None
         # The CLI sets this to a non-blocking callback backed by its signal/event
         # handling.  Every long pre-landing loop checks it; landing deliberately
@@ -408,6 +415,7 @@ class DroneController:
         self._record_command_outcome(replace(attempt, outcome="written"))
 
     def _record_command_intent(self, attempt: CommandAttempt) -> None:
+        self._arm_diagnostic_boundary(attempt)
         name = type(attempt.command).__name__
         if isinstance(attempt.command, SetMode):
             name = attempt.command.name
@@ -420,6 +428,18 @@ class DroneController:
                     attempt.attempted_at - self._last_climb_attempt,
                 )
             self._last_climb_attempt = attempt.attempted_at
+
+    def _arm_diagnostic_boundary(self, attempt: CommandAttempt) -> None:
+        if isinstance(attempt.command, Arm):
+            self._arm_requested_at = attempt.attempted_at
+            self._arm_request_finished_at = None
+            self._arm_status_text.clear()
+            self._arm_status_count = 0
+        elif self._arm_request_finished_at is None and (
+            isinstance(attempt.command, Disarm)
+            or (isinstance(attempt.command, SetMode) and attempt.command.name == "LAND")
+        ):
+            self._arm_request_finished_at = attempt.attempted_at
 
     def _record_command_outcome(self, attempt: CommandAttempt) -> None:
         self.command_attempts[-1] = attempt
@@ -463,6 +483,18 @@ class DroneController:
             "profile_elapsed_s": time.monotonic() - self.profile_initialized_at,
             "altitude_hold_limit_s": self.altitude_hold_limit_s,
             "aircraft_clearance_qualified": False,
+            "arm_requested_monotonic": self._arm_requested_at,
+            "arm_request_finished_monotonic": self._arm_request_finished_at,
+            "arm_diagnostics": [
+                {
+                    "received_monotonic": sample.received_at,
+                    "severity": sample.value.severity,
+                    "text": sample.value.text,
+                }
+                for sample in self._arm_status_text
+            ],
+            "omitted_arm_diagnostics": self._arm_status_count
+            - len(self._arm_status_text),
         }
 
     def _perform_command(self, command: Command) -> None:
@@ -683,12 +715,21 @@ class DroneController:
     def _process_message(self, message: Any, now: float) -> None:
         if not self._matching_vehicle_message(message):
             return
+        try:
+            received = received_monotonic(message, default=now)
+        except ValueError:
+            if message.get_type() != "STATUSTEXT":
+                raise
+            return  # malformed optional diagnostics cannot change flight behavior
         observation = decode(
             message,
-            received=received_monotonic(message, default=now),
+            received=received,
             fallback_mode=getattr(self.connection, "flightmode", None),
         )
         if observation is None:
+            return
+        if isinstance(observation.payload, StatusText):
+            self._observe_arm_status(observation.payload, observation.received_at, now)
             return
         previous = self.state
         self.state = observe(
@@ -701,6 +742,27 @@ class DroneController:
         )
         if self.state.heartbeat is not previous.heartbeat and not self.is_armed:
             self.phase = observed_disarm(self.phase)
+
+    def _observe_arm_status(
+        self, status: StatusText, received: float, now: float
+    ) -> None:
+        if (
+            self._arm_requested_at is None
+            or received <= self._arm_requested_at
+            or self._arm_request_finished_at is not None
+            or not is_fresh(received, now, self.ownership_policy.heartbeat_max_age)
+            or status.severity > mavlink.MAV_SEVERITY_WARNING
+            or not status.text.startswith(("Arm:", "PreArm:"))
+        ):
+            return
+        self._arm_status_count += 1
+        self._arm_status_text.append(Sample(status, received))
+
+    def _arming_diagnostic_detail(self) -> str:
+        messages = list(
+            dict.fromkeys(sample.value.text for sample in self._arm_status_text)
+        )
+        return f": {'; '.join(messages)}" if messages else ""
 
     def update_telemetry(self, max_messages: int = 50) -> None:
         if isinstance(max_messages, bool) or not 1 <= max_messages <= 1_000:
@@ -1076,6 +1138,18 @@ class DroneController:
             raise FlightSafetyError("downward altitude became stale before arming")
         self._verify_takeoff_reference(takeoff_gain_m)
         self._write_command(Arm())
+        try:
+            self._wait_for_arming(timeout)
+        except Exception as error:
+            detail = self._arming_diagnostic_detail()
+            if detail:
+                error.add_note(f"selected FC arming diagnostics{detail}")
+                logger.error("selected FC arming diagnostics%s", detail)
+            raise
+        finally:
+            self._arm_request_finished_at = time.monotonic()
+
+    def _wait_for_arming(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self._pump_gcs_heartbeat()
@@ -1087,8 +1161,11 @@ class DroneController:
             self._raise_if_stop_requested()
             if self.is_armed:
                 self.phase = Armed()
+                self._arm_request_finished_at = time.monotonic()
                 return
-        raise TimeoutError("flight controller did not confirm arming")
+        raise TimeoutError(
+            f"flight controller did not confirm arming{self._arming_diagnostic_detail()}"
+        )
 
     def _verify_takeoff_reference(self, takeoff_gain_m: float | None) -> None:
         if takeoff_gain_m is not None:
