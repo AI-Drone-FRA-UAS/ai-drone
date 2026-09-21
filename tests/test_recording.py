@@ -1425,6 +1425,65 @@ def test_summary_failure_writes_minimal_manifest(tmp_path, monkeypatch, failure)
     assert manifest["finalization_error"] == (str(failure) or type(failure).__name__)
 
 
+@pytest.mark.parametrize("invalid", [float("nan"), threading.Lock()])
+def test_invalid_manifest_value_becomes_atomic_failure_manifest(
+    tmp_path, monkeypatch, invalid
+):
+    output = tmp_path / "invalid-summary"
+
+    def startup(recording):
+        recording.storage = SimpleNamespace(
+            close=lambda: None, manifest=lambda: {"invalid": invalid}
+        )
+
+    monkeypatch.setattr(inspect_cli, "_start_recording", startup)
+    monkeypatch.setattr(inspect_cli, "_record_capture", lambda recording: None)
+    assert run(["--output-dir", str(output)]) == 1
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["schema"] == 1
+    assert manifest["operation"] == "inspect"
+    assert manifest["completed"] is False
+    assert manifest["finalization_error"]
+    assert "storage" not in manifest
+
+
+def test_manifest_preserves_version_one_keys_and_relative_artifacts(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "manifest-contract"
+
+    def startup(recording):
+        recording.paths.camera_events.write_text('{"frame": 0, "tags": []}\n')
+
+    monkeypatch.setattr(inspect_cli, "_start_recording", startup)
+    monkeypatch.setattr(inspect_cli, "_record_capture", lambda recording: None)
+    assert run(["--output-dir", str(output), "--allow-flight"]) == 0
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert set(manifest) == {
+        "schema",
+        "operation",
+        "requested_duration_s",
+        "actual_duration_s",
+        "started_utc",
+        "ended_utc",
+        "completed",
+        "armed_abort",
+        "error",
+        "stop_reason",
+        "components",
+        "storage",
+        "safety",
+        "camera",
+        "telemetry",
+        "tag_servo",
+        "files",
+    }
+    assert manifest["files"] == {"camera_events": "camera.jsonl"}
+    assert manifest["safety"]["allow_flight"] is True
+    assert manifest["safety"]["gpio_servo_actuation_enabled"] is False
+    assert manifest["tag_servo"] is None
+
+
 def test_lifecycle_attempts_all_cleanup_before_finalization(tmp_path, monkeypatch):
     output = tmp_path / "lifecycle-failures"
     calls = []

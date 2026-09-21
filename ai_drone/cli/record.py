@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any
 
 from pymavlink.dialects.v10 import ardupilotmega as mavlink
 
+from ai_drone.capture.manifest import ArtifactFiles, ComponentRecord, Manifest
+from ai_drone.capture.operations import RecordingOperation, parse_operation, parser_spec
 from ai_drone.capture.reporting import (
     _component_report,
     _print_live_status,
@@ -48,7 +50,6 @@ from ai_drone.platform import is_raspberry_pi
 from ai_drone.recording import (
     RecordingPaths,
     create_recording_paths,
-    json_safe,
     request_telemetry_messages,
     video_timestamp_summary,
 )
@@ -72,13 +73,8 @@ _TAG_MOUNT_OPERATION = "tag-mount"
 
 
 def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
-    if operation not in {
-        _INSPECT_OPERATION,
-        _TAG_SERVO_OPERATION,
-        _TAG_MOUNT_OPERATION,
-    }:
-        raise ValueError(f"unknown recording operation {operation!r}")
-    tag_servo = operation in {_TAG_SERVO_OPERATION, _TAG_MOUNT_OPERATION}
+    spec = parser_spec(operation)
+    tag_servo = spec.actuation_enabled
     parser = argparse.ArgumentParser(
         description=(
             (
@@ -105,7 +101,7 @@ def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
     parser.add_argument(
         "--duration",
         type=float,
-        default=None if tag_servo else 10.0,
+        default=spec.default_duration,
         metavar="SECONDS",
         help=(
             "optional maximum runtime; omit to run until stopped"
@@ -160,8 +156,8 @@ def _parser(*, operation: str = _INSPECT_OPERATION) -> argparse.ArgumentParser:
     parser.add_argument("--warmup", type=float, default=2.0)
     parser.add_argument(
         "--backend",
-        choices=("native",) if tag_servo else ("auto", "native", "opencv"),
-        default="native" if tag_servo else "auto",
+        choices=spec.backends,
+        default=spec.default_backend,
     )
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--decimate", type=float, default=1.0)
@@ -884,13 +880,11 @@ class _CameraCapture:
 @dataclass
 class _Recording:
     args: argparse.Namespace
-    operation: str
+    operation: RecordingOperation
     paths: RecordingPaths
     window: CaptureWindow
     stop: threading.Event
     frames: queue.Queue[AnalysisFrame | None]
-    tag_servo: bool
-    allow_flight: bool
     on_pi: bool
     state: CaptureState = field(default_factory=CaptureState)
     details: dict[str, str] = field(default_factory=dict)
@@ -905,6 +899,14 @@ class _Recording:
     ended_utc: datetime | None = None
     signals: ExitStack = field(default_factory=ExitStack)
 
+    @property
+    def tag_servo(self) -> bool:
+        return self.operation.actuation_enabled
+
+    @property
+    def allow_flight(self) -> bool:
+        return self.operation.allow_flight
+
 
 def _recording(args: argparse.Namespace, operation: str) -> _Recording:
     tag_servo = operation in {_TAG_SERVO_OPERATION, _TAG_MOUNT_OPERATION}
@@ -918,13 +920,13 @@ def _recording(args: argparse.Namespace, operation: str) -> _Recording:
         stop = threading.Event()
     return _Recording(
         args=args,
-        operation=operation,
+        operation=parse_operation(
+            operation, allow_flight=getattr(args, "allow_flight", False)
+        ),
         paths=paths,
         window=window,
         stop=stop,
         frames=queue.Queue(maxsize=1 if tag_servo else 8),
-        tag_servo=tag_servo,
-        allow_flight=tag_servo or args.allow_flight,
         on_pi=is_raspberry_pi(),
     )
 
@@ -1056,7 +1058,7 @@ def _start_flight_capture(recording: _Recording) -> None:
         state=recording.state,
         sync=IntervalSync(recording.args.sync_interval),
         allow_armed_at_any_time=recording.allow_flight,
-        stop_after_disarm=recording.operation == _TAG_SERVO_OPERATION,
+        stop_after_disarm=recording.operation.stop_after_disarm,
     )
     flight.worker.start()
 
@@ -1565,7 +1567,7 @@ def _write_minimal_manifest(recording: _Recording, error: BaseException) -> None
     state = recording.state.snapshot()
     manifest = {
         "schema": 1,
-        "operation": recording.operation,
+        "operation": recording.operation.name,
         "error": state.worker_error or str(error) or type(error).__name__,
         "finalization_error": str(error) or type(error).__name__,
         **({"errors": list(state.errors)} if state.errors else {}),
@@ -1660,36 +1662,35 @@ def _finish_recording(recording: _Recording) -> int:
             "feedback_available": False,
             "completed_commanded_pulses": state.servo_pulses_completed,
         }
-    files = {
-        "video": recording.paths.video,
-        "video_timestamps": recording.paths.video_timestamps,
-        "camera_events": recording.paths.camera_events,
-        "telemetry_tlog": recording.paths.telemetry_tlog,
-        "telemetry_events": recording.paths.telemetry_events,
-        "actuation_events": recording.paths.actuation_events,
-        "storage_events": recording.paths.storage_events,
-        "first_frame": recording.paths.first_frame,
-        "last_frame": recording.paths.last_frame,
-    }
-    manifest = {
-        "schema": 1,
-        "operation": recording.operation,
-        "requested_duration_s": recording.args.duration,
-        "actual_duration_s": round(actual_duration, 6),
-        "started_utc": recording.started_utc.isoformat()
+    files = ArtifactFiles(
+        video=recording.paths.video,
+        video_timestamps=recording.paths.video_timestamps,
+        camera_events=recording.paths.camera_events,
+        telemetry_tlog=recording.paths.telemetry_tlog,
+        telemetry_events=recording.paths.telemetry_events,
+        actuation_events=recording.paths.actuation_events,
+        storage_events=recording.paths.storage_events,
+        first_frame=recording.paths.first_frame,
+        last_frame=recording.paths.last_frame,
+    )
+    manifest = Manifest(
+        operation=recording.operation.name,
+        requested_duration_s=recording.args.duration,
+        actual_duration_s=round(actual_duration, 6),
+        started_utc=recording.started_utc.isoformat()
         if recording.started_utc
         else None,
-        "ended_utc": recording.ended_utc.isoformat() if recording.ended_utc else None,
-        "completed": not state.armed_abort and state.worker_error is None,
-        "armed_abort": state.armed_abort,
-        "error": state.worker_error,
-        **({"errors": list(state.errors)} if state.errors else {}),
-        "stop_reason": state.stop_reason,
-        "components": components,
-        "storage": recording.storage.manifest()
-        if recording.storage is not None
-        else None,
-        "safety": {
+        ended_utc=recording.ended_utc.isoformat() if recording.ended_utc else None,
+        completed=not state.armed_abort and state.worker_error is None,
+        armed_abort=state.armed_abort,
+        error=state.worker_error,
+        errors=state.errors,
+        stop_reason=state.stop_reason,
+        components={
+            name: ComponentRecord.from_dict(item) for name, item in components.items()
+        },
+        storage=recording.storage.manifest() if recording.storage is not None else None,
+        safety={
             "initial_vehicle_state": recording.flight.initial_vehicle_state,
             "allow_flight": recording.allow_flight,
             "saw_armed": state.saw_armed,
@@ -1707,7 +1708,7 @@ def _finish_recording(recording: _Recording) -> int:
             ],
             "gpio_servo_actuation_enabled": recording.tag_servo,
         },
-        "camera": {
+        camera={
             "video_enabled": not recording.args.no_video,
             "frame_timeout_s": recording.args.frame_timeout,
             "recording_resolution": list(recording.args.resolution),
@@ -1715,7 +1716,7 @@ def _finish_recording(recording: _Recording) -> int:
             "backend": getattr(recording.camera.detector, "backend_name", None),
             **timestamp_summary,
         },
-        "telemetry": {
+        telemetry={
             "endpoint": recording.flight.endpoint,
             "baud": recording.args.baud,
             "requested_messages": recording.flight.requested_messages,
@@ -1732,17 +1733,17 @@ def _finish_recording(recording: _Recording) -> int:
                 else ["MAV_CMD_SET_MESSAGE_INTERVAL for requested_messages"]
             ),
         },
-        "tag_servo": (
+        tag_servo=(
             recording.servo_session.manifest()
             if recording.servo_session is not None
             else None
         ),
-        "files": {name: path.name for name, path in files.items() if path.exists()},
-    }
+        files=files,
+    )
     try:
         atomic_write_text(
             recording.paths.manifest,
-            json.dumps(json_safe(manifest), indent=2, sort_keys=True) + "\n",
+            manifest.to_json(),
         )
     except OSError as error:
         print(f"FAILED: could not write manifest: {error}", flush=True)
