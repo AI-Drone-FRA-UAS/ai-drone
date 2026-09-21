@@ -16,7 +16,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from ai_drone.link.targets import REMOTE_UV, DeployTarget, resolve_deploy_target
+from ai_drone.link.targets import (
+    DeployTarget,
+    remote_python_command,
+    resolve_deploy_target,
+    ssh_base_command,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_NAME = ".__ai_drone_manifest"
@@ -83,13 +88,6 @@ class DeployPlan:
     target: DeployTarget
     dry_run: bool
     offline: bool = False
-
-
-def ssh_base_command(target: DeployTarget) -> list[str]:
-    command = ["ssh"]
-    if target.ssh_config:
-        command.extend(["-F", target.ssh_config])
-    return command
 
 
 def _validated_remote_project_dir(target: DeployTarget) -> str:
@@ -203,7 +201,7 @@ def build_plan(
 def remote_command(
     target: DeployTarget, command: str, *, tty: bool = False
 ) -> list[str]:
-    ssh_command = ssh_base_command(target)
+    ssh_command = ssh_base_command(target.ssh_config)
     if tty:
         ssh_command.append("-t")
     return [*ssh_command, target.ssh_target, command]
@@ -480,11 +478,17 @@ def _deploy_transaction(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
         "from ai_drone.cli.deploy import _transaction_entry;"
         f"_transaction_entry({stage!r}, {project!r}, {deployment_id!r}, offline={plan.offline!r})"
     )
-    command = remote_command(
+    command = remote_python_command(
         plan.target,
-        f"cd {shlex.quote(project)} && PYTHONPATH={shlex.quote(stage)} "
-        f"{REMOTE_UV} run --no-project --no-config --offline "
-        f"--python {shlex.quote(project + '/.venv/bin/python')} python -P -c {shlex.quote(payload)}",
+        ["-P", "-c", payload],
+        uv_flags=[
+            "--no-project",
+            "--no-config",
+            "--offline",
+            "--python",
+            project + "/.venv/bin/python",
+        ],
+        environment={"PYTHONPATH": stage},
     )
     print(
         "Stage runtime; verify disarmed idle state; back up source/environment; update and restart.",

@@ -20,7 +20,7 @@ from ai_drone.config.snapshot import (
 )
 from ai_drone.durability import atomic_write_text
 from ai_drone.link import deploy
-from ai_drone.link.targets import REMOTE_UV
+from ai_drone.link.targets import remote_uv_command
 
 
 def _run(
@@ -49,14 +49,13 @@ def remote_export_command(
 ) -> list[str]:
     """Build the non-interactive SSH command that emits one JSON bundle."""
 
-    target = plan.target
-    command = (
-        f"cd {shlex.quote(target.project_dir)} && "
-        f"{REMOTE_UV} run --no-sync python -m ai_drone.cli.config_export "
-        f"{('--device ' + shlex.quote(device) + ' ') if device else ''}--baud {baud} "
-        f"--download-timeout {timeout}"
-    )
-    return deploy.remote_command(target, command)
+    arguments = (["--device", device] if device else []) + [
+        "--baud",
+        str(baud),
+        "--download-timeout",
+        str(timeout),
+    ]
+    return remote_uv_command(plan.target, "ai_drone.cli.config_export", arguments)
 
 
 def _captured_at(value: object) -> datetime:

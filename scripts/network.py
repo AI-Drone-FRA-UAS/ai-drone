@@ -5,11 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 
-from ai_drone.link.targets import REMOTE_UV, resolve_deploy_target, ssh_base_command
+from ai_drone.link.targets import remote_python_command, resolve_deploy_target
 from ai_drone.mavlink.remote import runtime_request
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.settings import load_settings
@@ -35,14 +34,8 @@ def main(arguments: list[str] | None = None) -> int:
             if args.host:
                 values["PI_HOST"] = args.host
             target = resolve_deploy_target(values)
-            command = (
-                f"cd {shlex.quote(target.project_dir)} && {REMOTE_UV} run --no-sync python scripts/network.py "
-                + shlex.join(action)
-            )
-            return subprocess.run(
-                [*ssh_base_command(target.ssh_config), target.ssh_target, command],
-                check=False,
-            ).returncode
+            command = remote_python_command(target, ["scripts/network.py", *action])
+            return subprocess.run(command, check=False).returncode
         if args.action == "list":
             return subprocess.run(
                 [

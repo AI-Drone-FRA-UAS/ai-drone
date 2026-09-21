@@ -9,7 +9,6 @@ import io
 import json
 import os
 import re
-import shlex
 import shutil
 import stat
 import subprocess
@@ -17,11 +16,12 @@ import sys
 import tarfile
 import tempfile
 import uuid
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
 from ai_drone.durability import fsync_directory
-from ai_drone.link.targets import REMOTE_UV, resolve_deploy_target, ssh_base_command
+from ai_drone.link.targets import remote_uv_command, resolve_deploy_target
 from ai_drone.settings import load_settings
 
 HEADER = ".ai-drone-transfer-start.json"
@@ -413,8 +413,10 @@ def _ssh(
     encoded = (
         "" if payload is None else base64.urlsafe_b64encode(_json(payload)).decode()
     )
-    remote = f"cd {shlex.quote(endpoint['project'])} && {REMOTE_UV} run --no-sync python -m ai_drone.transfer {operation} {encoded}"
-    return [*ssh_base_command(target.ssh_config), endpoint["host"], remote]
+    remote_target = replace(
+        target, ssh_target=endpoint["host"], project_dir=endpoint["project"]
+    )
+    return remote_uv_command(remote_target, "ai_drone.transfer", [operation, encoded])
 
 
 def _observed(endpoint: dict[str, Any]) -> dict[str, Any]:

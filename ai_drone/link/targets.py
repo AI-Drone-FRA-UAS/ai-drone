@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ai_drone.settings import load_settings
@@ -60,6 +61,44 @@ def ssh_base_command(ssh_config: str | None) -> list[str]:
     if ssh_config:
         command.extend(["-F", ssh_config])
     return command
+
+
+def remote_python_command(
+    target: DeployTarget,
+    arguments: Sequence[str],
+    *,
+    uv_flags: Sequence[str] = ("--no-sync",),
+    environment: Mapping[str, str] | None = None,
+    ssh_options: Sequence[str] = (),
+) -> list[str]:
+    """Quote remote argv once; keep shell previews separate from local execution."""
+    assignments = " ".join(
+        f"{name}={shlex.quote(value)}" for name, value in (environment or {}).items()
+    )
+    if assignments:
+        assignments += " "
+    remote = (
+        f"cd {shlex.quote(target.project_dir)} && {assignments}{REMOTE_UV} run "
+        f"{shlex.join([*uv_flags, 'python', *arguments])}"
+    )
+    return [
+        *ssh_base_command(target.ssh_config),
+        *ssh_options,
+        target.ssh_target,
+        remote,
+    ]
+
+
+def remote_uv_command(
+    target: DeployTarget,
+    module: str,
+    arguments: Sequence[str],
+    *,
+    ssh_options: Sequence[str] = (),
+) -> list[str]:
+    return remote_python_command(
+        target, ["-m", module, *arguments], ssh_options=ssh_options
+    )
 
 
 def ping_command(host: str, system: str | None = None) -> list[str]:
