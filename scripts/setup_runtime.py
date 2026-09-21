@@ -22,10 +22,13 @@ from ai_drone.network import read_link, read_profiles
 from ai_drone.platform import is_raspberry_pi
 from ai_drone.runtime_status import RuntimeStatus
 from ai_drone.settings import Settings, load_settings
+from ai_drone.system import unit_state
 
 UNIT = "ai-drone-runtime.service"
 LEGACY = "ai-drone-network.service"
 UNIT_PATH = Path("/etc/systemd/system") / UNIT
+LOCKS_CONFIG = Path("/etc/tmpfiles.d/ai-drone-locks.conf")
+LOCKS_DIRECTORY = Path("/run/ai-drone-locks")
 BACKUPS = Path("/var/backups/ai-drone")
 NM_PATHS = (
     Path("/etc/NetworkManager/system-connections"),
@@ -127,24 +130,22 @@ def _service_state(unit: str) -> dict[str, str]:
         ["systemctl", "show", unit, "--property=LoadState,ActiveState,UnitFileState"],
         check=False,
     )
-    values = dict(
-        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
-    )
-    if values.get("LoadState") == "not-found":
+    state = unit_state(result)
+    if state.load == "not-found":
         return {"load": "not-found", "active": "inactive", "enabled": "disabled"}
     if (
         result.returncode
-        or values.get("LoadState") != "loaded"
-        or values.get("ActiveState") not in {"active", "inactive", "failed"}
-        or values.get("UnitFileState") not in {"enabled", "disabled", "static"}
+        or state.load != "loaded"
+        or state.active not in {"active", "inactive", "failed"}
+        or state.enabled not in {"enabled", "disabled", "static"}
     ):
         raise RuntimeError(
             f"cannot safely inspect {unit}; masked or changing units require manual review"
         )
     return {
-        "load": values["LoadState"],
-        "active": values["ActiveState"],
-        "enabled": values["UnitFileState"],
+        "load": state.load,
+        "active": state.active,
+        "enabled": state.enabled,
     }
 
 
@@ -287,6 +288,7 @@ def backup(plan: Plan, profiles: dict, states: dict) -> tuple[Path, dict]:
         "services": states,
         "files": {
             "runtime.service": _backup_file(UNIT_PATH, directory / "runtime.service"),
+            "locks.conf": _backup_file(LOCKS_CONFIG, directory / "locks.conf"),
             "profiles.json": _backup_file(
                 Path(plan.settings.runtime.network_profiles),
                 directory / "profiles.json",
@@ -449,6 +451,35 @@ def _write_network_policy(manifest: Path, profiles: dict, selected: dict) -> Non
     _write(manifest, json.dumps(selected, indent=2) + "\n", 0o644)
 
 
+def _account_ids(user: str) -> tuple[int, int]:
+    import pwd
+
+    account = pwd.getpwnam(user)
+    return account.pw_uid, account.pw_gid
+
+
+def provision_locks(plan: Plan) -> None:
+    """Keep GPIO exclusion in one boot-lifetime directory, independent of service restarts."""
+    uid, gid = _account_ids(plan.user)
+    if LOCKS_DIRECTORY.exists() or LOCKS_DIRECTORY.is_symlink():
+        current = LOCKS_DIRECTORY.lstat()
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or current.st_uid != uid
+            or current.st_gid != gid
+            or stat.S_IMODE(current.st_mode) != 0o700
+        ):
+            raise PermissionError(
+                "servo lock directory has unexpected ownership or mode"
+            )
+    _write(
+        LOCKS_CONFIG,
+        f"# GPIO exclusion survives ai-drone-runtime restarts.\nd {LOCKS_DIRECTORY} 0700 {uid} {gid} -\n",
+        0o644,
+    )
+    run(["systemd-tmpfiles", "--create", str(LOCKS_CONFIG)])
+
+
 def install(plan: Plan) -> Path:
     require_disarmed(plan)
     profiles = _profiles()
@@ -487,6 +518,7 @@ def install(plan: Plan) -> Path:
         if states[LEGACY]["load"] != "not-found":
             run(["systemctl", "disable", LEGACY])
         _write_network_policy(manifest, profiles, selected)
+        provision_locks(plan)
         _write(UNIT_PATH, unit_text(plan), 0o644)
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "enable", UNIT])
@@ -621,6 +653,9 @@ def main(arguments: list[str] | None = None) -> int:
                 "No flight, recording, AP activation, disconnect, or reboot is requested. Add --apply to execute."
             )
             if not args.revert:
+                print(
+                    f"Provision {LOCKS_DIRECTORY} via {LOCKS_CONFIG}; keep GPIO lock files across service restarts."
+                )
                 print(unit_text(plan))
             return 0
         _validate_apply(plan)
@@ -636,8 +671,13 @@ def main(arguments: list[str] | None = None) -> int:
                     "backup does not match this project, configuration, and user"
                 )
             expected = {str(UNIT_PATH), plan.settings.runtime.network_profiles}
+            expected_names = {"runtime.service", "profiles.json"}
+            # Older restoration bundles predate independent servo-lock provisioning.
+            if "locks.conf" in metadata["files"]:
+                expected.add(str(LOCKS_CONFIG))
+                expected_names.add("locks.conf")
             if (
-                set(metadata["files"]) != {"runtime.service", "profiles.json"}
+                set(metadata["files"]) != expected_names
                 or {info["path"] for info in metadata["files"].values()} != expected
                 or set(metadata["services"]) != {UNIT, LEGACY}
             ):

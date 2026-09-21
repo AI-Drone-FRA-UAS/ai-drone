@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 from dataclasses import replace
@@ -48,6 +49,8 @@ def host(tmp_path, monkeypatch):
         "[runtime]\nnetwork_profiles = " + json.dumps(str(manifest)) + "\n"
     )
     unit = tmp_path / "systemd" / setup.UNIT
+    locks_config = tmp_path / "etc" / "locks.conf"
+    locks_directory = tmp_path / "run-locks"
     backups = tmp_path / "backups"
     keyfiles = tmp_path / "NetworkManager"
     keyfiles.mkdir()
@@ -81,6 +84,8 @@ def host(tmp_path, monkeypatch):
             states[command[2]]["active"] = "active"
         elif command[:2] == ["systemctl", "stop"]:
             states[command[2]]["active"] = "inactive"
+        elif command[:2] == ["systemd-tmpfiles", "--create"]:
+            locks_directory.mkdir(mode=0o700, exist_ok=True)
         return subprocess.CompletedProcess(command, 0, "", "")
 
     def nmcli(arguments):
@@ -97,6 +102,9 @@ def host(tmp_path, monkeypatch):
         return FRESH if value == {"status": True} else value
 
     monkeypatch.setattr(setup, "UNIT_PATH", unit)
+    monkeypatch.setattr(setup, "LOCKS_CONFIG", locks_config)
+    monkeypatch.setattr(setup, "LOCKS_DIRECTORY", locks_directory)
+    monkeypatch.setattr(setup, "_account_ids", lambda _user: (os.getuid(), os.getgid()))
     monkeypatch.setattr(setup, "BACKUPS", backups)
     monkeypatch.setattr(setup, "NM_PATHS", (keyfiles,))
     monkeypatch.setattr(setup, "_private_directory", private)
@@ -487,6 +495,33 @@ def test_no_eligible_client_refuses_install_before_mutation(host):
     with pytest.raises(ValueError, match="at least one"):
         setup.install(host.plan)
     assert host.events == [["disarmed"]]
+
+
+def test_servo_lock_namespace_survives_service_restart_and_rollback(host):
+    directory = setup.install(host.plan)
+    locks = setup.LOCKS_DIRECTORY
+    identity = locks.stat().st_ino
+    (locks / "bcm12-servo.lock").touch(mode=0o600)
+    assert (
+        f"d {locks} 0700 {os.getuid()} {os.getgid()} -"
+        in setup.LOCKS_CONFIG.read_text()
+    )
+    assert "ai-drone-locks" not in setup.unit_text(host.plan)
+    setup.run(["systemctl", "stop", setup.UNIT])
+    setup.run(["systemctl", "start", setup.UNIT])
+    setup.safe_restore(
+        host.plan, directory, json.loads((directory / "backup.json").read_text())
+    )
+    assert locks.stat().st_ino == identity
+    assert (locks / "bcm12-servo.lock").exists()
+    assert not setup.LOCKS_CONFIG.exists()
+
+
+def test_provisioning_refuses_existing_unsafe_lock_directory(host):
+    setup.LOCKS_DIRECTORY.mkdir(mode=0o755)
+    with pytest.raises(PermissionError, match="ownership or mode"):
+        setup.provision_locks(host.plan)
+    assert not setup.LOCKS_CONFIG.exists()
 
 
 def test_manually_started_runtime_must_be_stopped_before_install(host):
