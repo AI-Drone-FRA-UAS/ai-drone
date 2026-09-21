@@ -1,11 +1,5 @@
 # Projektplakat
 
-Archivierte Präsentation, Stand August 2026, übernommen aus main bei
-`24d3bff0ad19c074be443ac5249e1b31c73d6d80`. Die PDF-Dateien bleiben unverändert.
-Ihre Firmware-, Funk-, Servo- und Flugbeschreibungen sind keine aktuellen
-Betriebsanweisungen. Der aktuelle Stand steht in der [Konfiguration](../DRONE_CONFIGURATION.md)
-und im [Flugtestverfahren](../PI_MAVLINK_CONTROL.md).
-
 `plakat.html` ist die Quelle: eine einzelne HTML-Datei, gesetzt für **A1 hoch
 (594 × 841 mm)**, ohne externe Abhängigkeiten. Daraus entstehen vier Druckstände:
 
@@ -17,10 +11,54 @@ und im [Flugtestverfahren](../PI_MAVLINK_CONTROL.md).
 | `plakat-a3.pdf` | 297 × 420 mm | Handout und Korrekturausdruck |
 
 Nur A1 wird gerendert; A0, A2 und A3 sind maßstäbliche Skalierungen derselben
-Seite. Schrift und Grafik bleiben dabei vektoriell, nur das Foto ändert seine
-effektive Auflösung: 261 dpi auf A1, 185 dpi auf A0, 523 dpi auf A3. Auf A3 ist
-der kleinste Fließtext nur noch rund 2,5 mm hoch — als Handout lesbar, als
-Aushang nicht.
+Seite. Schrift und Grafik bleiben dabei vektoriell.
+
+## Aufbau
+
+Das Plakat ist bewusst bildlastig — der Text ist knapp gehalten, damit beim
+Vortrag frei geredet werden kann.
+
+- **Oben:** das Hauptbild der Drohne über zwei Spalten, mit Führungslinien zu
+  den Bauteilen. Die Beschriftung liegt als SVG über dem Foto, ist also
+  vektoriell und bleibt im Druck scharf. Sie ersetzt die frühere Hardwaretabelle.
+- **Links:** Kennzahlen und der Blick von unten mit nummerierten Markern
+  (Servo, MTF-01P, Kamera).
+- **Mitte:** die Ablaufgrafik „Tag erkannt → Last fällt", das Foto des
+  Abwurfmechanismus und die gedruckten Teile.
+- **Rechts:** die Geschichte von oben nach unten — erst der Simulator, dann die
+  Flugversuche, der Absturz mit Messkurve und QR-Code zum Video, die drei
+  gemessenen Ursachen, die Konsequenzen und der heutige Stand.
+
+## Bilder
+
+| Datei | Verwendung |
+|---|---|
+| `fotos/Bild neu.jpg` | Originalaufnahme: die Drohne hängt an einem Kabelbinder |
+| `fotos/draufsicht-ohne-hand.jpg` | daraus das Hauptbild: Hand und Kabelbinder herausgerechnet, zugeschnitten |
+| `fotos/Draufsicht.jpg` | ältere Aufnahme derselben Ansicht (Finger vor der Kamera) |
+| `fotos/Servo 1.jpg` | Originalaufnahme des Abwurfmechanismus |
+| `fotos/abwurf-servo.jpg` | daraus der Zuschnitt für Abb. 2 |
+| `fotos/Bild von unten Lidar Servo Kamera.jpg` | Original der Unterseite |
+| `fotos/blick-von-unten.jpg` | daraus der Zuschnitt mit den drei Bauteilen |
+| `fotos/teil-*.png` | die STL-Ansichten, freigestellt und in die Plakatfarben gebracht |
+| `fotos/drohne-flug-*.jpg` | Flugaufnahmen, genutzt auf der Projektseite |
+
+Hand und Kabelbinder im Hauptbild wurden nicht übermalt, sondern
+herausgerechnet: Die Unterkante des Arms wird spaltenweise an der Hautfarbe
+verfolgt, die beiden Binderstränge als schmale, farblose Bänder erfasst, die
+Drohne selbst geschützt, und die Wandfläche per Mehrgitter-Diffusion
+rekonstruiert. Damit die Füllung keine Farbe von Klett und Kabeln zieht, sind
+alle nicht-wandigen Pixel in der Nachbarschaft von der Farbquelle
+ausgenommen. Die abgeleiteten Dateien lassen sich aus den Originalen jederzeit
+neu erzeugen.
+
+Der **QR-Code** ist als Pfad-SVG direkt im HTML eingebettet (kein externer
+Dienst, kein Bild-Asset) und zeigt auf das Video des Absturzes vom 21.08.2026
+auf Instagram: `instagram.com/reel/DcbRrKNRIA_`. Bewusst ohne Tracking- und
+Share-Parameter — das hält den Code klein und hängt keinen Sitzungsbezug an
+einen gedruckten Aushang.
+Der **AprilTag** in der Ablaufgrafik ist der echte `tag36h11`-Marker mit ID 3 —
+derselbe, auf den die Drohne reagiert.
 
 ## PDFs neu erzeugen
 
@@ -31,8 +69,7 @@ Zuerst A1 aus dem HTML rendern:
 ```
 
 Dann die drei übrigen Formate daraus skalieren — reine Skalierung derselben
-Seite, damit alle vier Druckstände garantiert denselben Satz zeigen. Das Skript
-braucht `pypdf`, das `uv` hier nur für diesen einen Lauf beschafft:
+Seite, damit alle vier Druckstände denselben Satz zeigen:
 
 ```bash
 cd docs/poster && uv run --with pypdf python skaliere_plakat.py
@@ -52,8 +89,7 @@ ZIELE = {"a0": (841.0, 1189.0), "a2": (420.0, 594.0), "a3": (297.0, 420.0)}
 for name, (breite, hoehe) in ZIELE.items():
     seite = PdfReader("plakat-a1.pdf").pages[0]
     faktor = min(breite / QUELLE[0], hoehe / QUELLE[1])
-    # Die DIN-Reihe rundet auf ganze Millimeter, sodass Breiten- und
-    # Hoehenverhaeltnis minimal auseinanderfallen; den Rest mittig verteilen.
+    # Die DIN-Reihe rundet auf ganze Millimeter; den Rest mittig verteilen.
     dx = (breite - QUELLE[0] * faktor) / 2 * MM
     dy = (hoehe - QUELLE[1] * faktor) / 2 * MM
     seite.add_transformation(Transformation().scale(faktor).translate(dx, dy))
@@ -73,48 +109,16 @@ for name, (breite, hoehe) in ZIELE.items():
 Alternativ im Browser öffnen und drucken: Papierformat wählen, Ränder **keine**,
 Option **Hintergrundgrafiken** aktivieren, Skalierung „an Seite anpassen".
 
-## Was auf dem Plakat steht
+## Stand der Angaben
 
-Linke Spalte Ziel, Hardware, Kennzahlen, Vorgehen und das Foto; mittlere Spalte
-Systemarchitektur, Navigation ohne GPS, das Zwischenergebnis aus Tag-Erkennung
-und Nutzlast-Freigabe, Rahmen und Werkzeuge; rechte Spalte die Flugversuche vom
-August, die drei gemessenen Ursachen des Absturzes, der QR-Code zum Video, die
-Absicherung gegen ArduPilot-SITL, die Konsequenzen im Code und der Ausblick.
-
-Stand September 2026: eigene ArduCopter-4.7.1-Firmware mit EKF3-Flussfusion,
-vorderer MT-15 an UART3 in Betrieb, Freigabe der Halterung bei Tag ID 3. Der
-offene Blocker ist die Kompass-Vorflugprüfung; die Drohne ist nicht für Tests
-mit Propellern freigegeben. Wer das Plakat anfasst, prüft diese Angaben zuerst
+September 2026: eigene ArduCopter-4.7.1-Firmware mit EKF3-Flussfusion, vorderer
+MT-15 an UART3 in Betrieb, Freigabe der Halterung bei Tag ID 3. Der offene
+Blocker ist die Kompass-Vorflugprüfung; die Drohne ist nicht für Tests mit
+Propellern freigegeben. Wer das Plakat anfasst, prüft diese Angaben zuerst
 gegen die neueste Aufzeichnung unter `state/`.
 
-Der **QR-Code** ist als Pfad-SVG direkt im HTML eingebettet (kein externer
-Dienst, kein Bild-Asset) und zeigt auf das Video des Absturzes vom 21.08.2026.
-Neu erzeugen lässt er sich mit `segno`; der Inhalt ist die reine URL.
-
-## Fotos
-
-`fotos/drohne-flug-quer.jpg` (1800 × 1125) steckt als **Abb. 1** im Kasten „Die
-Drohne". `fotos/drohne-flug-hoch.jpg` ist derselbe Flug im Hochformat und wird
-auf der Projektseite (`site/`) als Titelbild verwendet. Beide sind aus dem
-Original `Bild.png` (3840 × 2160, um 90° gedreht) erzeugt.
-
-Ein Foto tauschen heißt, im HTML das `img` im Kasten `.foto` zu ersetzen:
-
-```html
-<div class="foto foto-gross">
-  <img src="fotos/drohne-flug-quer.jpg" alt="Die Drohne im Flug">
-</div>
-```
-
-Das Bild wird formatfüllend zugeschnitten (`object-fit: cover`). Für den Druck
-sollte es mindestens 1600 px breit sein.
-
-## Quellen des Inhalts
-
-Der Text stammt aus `docs/drone-project.md`, `docs/DRONE_CONFIGURATION.md`,
+Quellen: `docs/drone-project.md`, `docs/DRONE_CONFIGURATION.md`,
 [ArduCopter 4.7 no-GPS Loiter](../ARDUCOPTER_4_7_NOGPS_LOITER.md),
-[Sensoraufzeichnung](../SENSOR_RECORDING.md), `docs/FRAME_AND_3D_PRINTS.md`,
-dem AprilTag-Durchsatztest in
-`state/2026-08-18/camera-apriltag-benchmark.json`, den Aufzeichnungen zu
-Firmware und vorderem Sensor in `state/2026-09-09/` und dem heute
-[archivierten Flugprotokoll](../../notes/archive/preflight-and-nogps-takeoff/README.md).
+[Sensoraufzeichnung](../SENSOR_RECORDING.md), die Aufzeichnungen unter
+`state/2026-09-09/` und das
+[archivierte Flugprotokoll](../../notes/archive/preflight-and-nogps-takeoff/README.md).
