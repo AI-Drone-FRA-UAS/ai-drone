@@ -97,7 +97,7 @@ def test_real_encoder_failure_cannot_claim_written_or_clear_cleanup(
     try:
         with pytest.raises(OSError):
             drone._write_command(Climb(0.3, 0))
-        assert drone._command_outcomes == {"written": 0, "failed": 1}
+        assert drone._command_outcomes == {"written": 0, "queued": 0, "failed": 1}
         assert cleanup(drone.phase) == "land"
         assert raw.mav.total_packets_sent == raw.mav.total_bytes_sent == 0
         assert len(raw.port.calls) == 1
