@@ -114,6 +114,9 @@ def test_servo_initializes_only_after_exact_confirmation(monkeypatch) -> None:
             self.closed = True
 
     monkeypatch.setattr(servo, "is_raspberry_pi", lambda: True)
+    monkeypatch.setattr(
+        servo, "ServoProcessLock", lambda: SimpleNamespace(close=lambda: None)
+    )
     monkeypatch.setitem(sys.modules, "gpiozero", SimpleNamespace(Servo=FakeServo))
     monkeypatch.setattr("builtins.input", lambda _prompt: "q")
 

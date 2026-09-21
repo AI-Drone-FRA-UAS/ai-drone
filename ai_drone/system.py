@@ -9,7 +9,7 @@ import signal
 import subprocess
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -120,11 +120,8 @@ def handled_signals(handlers: Mapping[int, SignalHandler]) -> Iterator[None]:
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    previous = {}
-    try:
+    with ExitStack() as restoration:
         for number, handler in handlers.items():
-            previous[number] = signal.signal(number, handler)
+            previous = signal.signal(number, handler)
+            restoration.callback(signal.signal, number, previous)
         yield
-    finally:
-        for number, handler in reversed(previous.items()):
-            signal.signal(number, handler)

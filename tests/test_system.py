@@ -4,6 +4,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 from ai_drone.system import handled_signals, namespace_to_flags, unit_state
 
 
@@ -68,3 +70,24 @@ def test_signal_scope_can_be_used_from_a_worker():
     thread.start()
     thread.join(timeout=1)
     assert completed == [True]
+
+
+def test_all_signal_restorations_attempted_if_one_fails(monkeypatch):
+    restored = []
+
+    def install(number, handler):
+        if handler == signal.SIG_DFL:
+            restored.append(number)
+            if number == signal.SIGTERM:
+                raise OSError("restore failed")
+        return signal.SIG_DFL
+
+    monkeypatch.setattr(signal, "signal", install)
+    with (
+        pytest.raises(OSError, match="restore failed"),
+        handled_signals(
+            {signal.SIGINT: signal.SIG_IGN, signal.SIGTERM: signal.SIG_IGN}
+        ),
+    ):
+        pass
+    assert restored == [signal.SIGTERM, signal.SIGINT]

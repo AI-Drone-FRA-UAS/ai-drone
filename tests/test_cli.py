@@ -37,6 +37,7 @@ def test_unknown_command_cannot_import_a_task(monkeypatch):
 def test_dispatch_injects_one_settings_without_environment_mutation(
     tmp_path, monkeypatch
 ):
+    monkeypatch.chdir(tmp_path)
     config = tmp_path / "explicit.toml"
     config.write_text('[connection]\nhost = "custom@host"\n')
     monkeypatch.setenv("AI_DRONE_CONFIG", "unchanged-and-unread")
