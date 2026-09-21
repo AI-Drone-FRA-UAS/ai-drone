@@ -84,6 +84,8 @@ def observed_disarm(phase: Phase) -> Phase:
 
 def request_landing(phase: Phase) -> Phase:
     match phase:
+        case Landed(landing_commanded=False):
+            return Landed()
         case Human() | Landing() | Landed():
             return phase
         case Unclaimed() | ArmPending() | Armed() | Flight():

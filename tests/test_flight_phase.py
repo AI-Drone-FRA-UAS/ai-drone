@@ -70,12 +70,35 @@ def test_landing_latch_remains_after_confirmation_and_cannot_erase_human():
         assert request_landing(phase) is phase
 
 
+def test_explicit_land_after_ground_disarm_sets_the_cleanup_latch():
+    ground_disarmed = observed_disarm(Armed())
+    assert ground_disarmed == Landed(landing_commanded=False)
+    assert request_landing(ground_disarmed) == Landed(landing_commanded=True)
+
+
 def controller_in(phase):
     drone = DroneController(device="tcp:127.0.0.1:5760")
     drone.phase = phase
     drone.connection = MagicMock()
     drone.connection.recv_match.return_value = None
     return drone
+
+
+def test_explicit_land_after_ground_disarm_is_not_interrupted_by_stop_callback(
+    monkeypatch,
+):
+    clock = [100.0]
+    monkeypatch.setattr("ai_drone.flight.controller.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "ai_drone.flight.controller.time.sleep",
+        lambda seconds: clock.__setitem__(0, round(clock[0] + seconds, 6)),
+    )
+    drone = controller_in(Landed(landing_commanded=False))
+    drone.stop_requested = lambda: True
+    with pytest.raises(TimeoutError, match="disarming was not confirmed"):
+        drone.land(timeout=1.0)
+    drone.connection.mav.set_mode_send.assert_called_once()
+    assert drone._landing_commanded
 
 
 @pytest.mark.parametrize("command", [Arm(), Climb(0.3, 0.0)])
