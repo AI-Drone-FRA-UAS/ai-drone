@@ -30,7 +30,6 @@ from ai_drone.capture.state import (
 )
 from ai_drone.capture.workers import DetectionWorker, TelemetryWorker
 from ai_drone.cli.record import (
-    _cleanup_capture,
     _parser,
     _safe_video_timestamp_summary,
     _start_capture_epoch,
@@ -1072,9 +1071,10 @@ def test_cleanup_attempts_every_resource_and_retains_first_error(tmp_path) -> No
             events.append(f"write:{path}")
             return not path.endswith("first-frame.jpg")
 
-    paths = create_recording_paths(tmp_path / "cleanup")
-    state = CaptureState()
-    stop = threading.Event()
+    recording = inspect_cli._recording(
+        _parser().parse_args(["--output-dir", str(tmp_path / "cleanup")]), "inspect"
+    )
+    paths, state, stop = recording.paths, recording.state, recording.stop
     connection = Connection()
     telemetry = TelemetryWorker(
         connection=connection,
@@ -1101,22 +1101,21 @@ def test_cleanup_attempts_every_resource_and_retains_first_error(tmp_path) -> No
     )
     frame = np.zeros((2, 2), dtype=np.uint8)
 
-    _cleanup_capture(
-        camera=Camera(),
+    recording.camera = inspect_cli._CameraCapture(
+        device=Camera(),
         encoder=object(),
-        camera_started=True,
+        started=True,
         encoder_started=True,
-        telemetry_worker=telemetry,
-        detection_worker=detection,
-        frames=queue.Queue(),
+        worker=detection,
         cv2=Cv2(),
-        paths=paths,
         first_frame=frame,
         last_frame=frame,
-        connection=connection,
-        stop=stop,
-        state=state,
     )
+    recording.flight = inspect_cli._FlightCapture(
+        connection=connection, worker=telemetry
+    )
+    with inspect_cli._recording_lifecycle(recording):
+        pass
     paths.manifest.write_text("manifest still reachable\n")
 
     assert events == [
@@ -1140,25 +1139,17 @@ def test_cleanup_does_not_replace_original_capture_error(tmp_path) -> None:
             raise RuntimeError("cleanup failed")
 
     connection = SimpleNamespace(logfile=None, close=lambda: None)
-    paths = create_recording_paths(tmp_path / "original-error")
-    state = CaptureState(worker_error="original capture failure")
-
-    _cleanup_capture(
-        camera=Camera(),
-        encoder=None,
-        camera_started=False,
-        encoder_started=False,
-        telemetry_worker=None,
-        detection_worker=None,
-        frames=queue.Queue(),
-        cv2=SimpleNamespace(imwrite=lambda *_args: True),
-        paths=paths,
-        first_frame=None,
-        last_frame=None,
-        connection=connection,
-        stop=threading.Event(),
-        state=state,
+    recording = inspect_cli._recording(
+        _parser().parse_args(["--output-dir", str(tmp_path / "original-error")]),
+        "inspect",
     )
+    state = recording.state = CaptureState(worker_error="original capture failure")
+    recording.camera = inspect_cli._CameraCapture(
+        device=Camera(), cv2=SimpleNamespace(imwrite=lambda *_args: True)
+    )
+    recording.flight.connection = connection
+    with inspect_cli._recording_lifecycle(recording):
+        pass
 
     assert state.worker_error == "original capture failure"
 
@@ -1166,7 +1157,10 @@ def test_cleanup_does_not_replace_original_capture_error(tmp_path) -> None:
 def test_cleanup_fsyncs_raw_telemetry_and_camera_artifacts(
     tmp_path, monkeypatch
 ) -> None:
-    paths = create_recording_paths(tmp_path / "durable")
+    recording = inspect_cli._recording(
+        _parser().parse_args(["--output-dir", str(tmp_path / "durable")]), "inspect"
+    )
+    paths = recording.paths
     paths.video.write_bytes(b"video")
     paths.video_timestamps.write_text("0.0\n")
     logfile = paths.telemetry_tlog.open("wb")
@@ -1180,22 +1174,9 @@ def test_cleanup_fsyncs_raw_telemetry_and_camera_artifacts(
         inspect_cli.os, "fsync", lambda descriptor: synced.append(descriptor)
     )
 
-    _cleanup_capture(
-        camera=None,
-        encoder=None,
-        camera_started=False,
-        encoder_started=False,
-        telemetry_worker=None,
-        detection_worker=None,
-        frames=queue.Queue(),
-        cv2=None,
-        paths=paths,
-        first_frame=None,
-        last_frame=None,
-        connection=connection,
-        stop=threading.Event(),
-        state=CaptureState(),
-    )
+    recording.flight.connection = connection
+    with inspect_cli._recording_lifecycle(recording):
+        pass
 
     assert len(synced) == 3
     assert logfile.closed

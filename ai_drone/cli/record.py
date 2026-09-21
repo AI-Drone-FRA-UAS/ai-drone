@@ -451,38 +451,6 @@ def _sync_existing_file(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
-def _cleanup_capture(
-    *,
-    camera: Any | None,
-    encoder: Any | None,
-    camera_started: bool,
-    encoder_started: bool,
-    telemetry_worker: TelemetryWorker | None,
-    detection_worker: DetectionWorker | None,
-    frames: queue.Queue[AnalysisFrame | None],
-    cv2: Any | None,
-    paths: RecordingPaths,
-    first_frame: NDArray[np.uint8] | None,
-    last_frame: NDArray[np.uint8] | None,
-    connection: Any | None,
-    stop: threading.Event,
-    state: CaptureState,
-) -> None:
-    """Attempt every resource cleanup and retain only the first new failure."""
-
-    stop.set()
-    _cleanup_camera(
-        camera,
-        encoder,
-        state,
-        camera_started=camera_started,
-        encoder_started=encoder_started,
-    )
-    _stop_capture_workers(telemetry_worker, detection_worker, frames, state)
-    _finalize_camera_artifacts(cv2, paths, first_frame, last_frame, state)
-    _cleanup_mavlink_connection(connection, state)
-
-
 def _finalize_camera_artifacts(
     cv2: Any,
     paths: RecordingPaths,
@@ -1491,19 +1459,6 @@ def _record_capture(recording: _Recording) -> None:
         recording.state.set_stop_reason("runtime_error")
 
 
-@contextmanager
-def _resource(
-    state: CaptureState,
-    label: str,
-    close: Callable[[], object],
-) -> Iterator[None]:
-    """Keep every independent cleanup reachable after a failed teardown."""
-    try:
-        yield
-    finally:
-        _cleanup_action(state, label, close)
-
-
 def _close_stream(recording: _Recording) -> None:
     if recording.camera.server is not None:
         _cleanup_action(
@@ -1578,7 +1533,7 @@ def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
                 ),
             ),
         ):
-            resources.enter_context(_resource(recording.state, label, close))
+            resources.callback(_cleanup_action, recording.state, label, close)
         try:
             yield
         finally:
