@@ -626,11 +626,12 @@ class SharedMavlink:
             if not self._send_lock.acquire(timeout=timeout):
                 raise TimeoutError("MAVLink sender did not stop")
             try:
-                self._raw.close()
+                # End the owned interval before closing the descriptor cancels RX.
+                if self._transport_metrics is not None:
+                    self._transport_metrics.close()
             finally:
                 try:
-                    if self._transport_metrics is not None:
-                        self._transport_metrics.close()
+                    self._raw.close()
                 finally:
                     self._send_lock.release()
         except BaseException as error:
