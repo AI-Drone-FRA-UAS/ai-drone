@@ -42,7 +42,7 @@ ARMED_FLIGHT_CONFIRMATION = "ARMED_FLIGHT_TAG_SERVO_CLEAR"
 MAX_PULSE_DURATION_S = 2.0
 MAX_SETTLE_DURATION_S = 2.0
 MAX_DETECTION_AGE_S = 1.0
-MAX_HEARTBEAT_AGE_S = 5.0
+MAX_HEARTBEAT_AGE_S = 100.0
 
 
 class ActuationStop(threading.Event):
@@ -111,7 +111,7 @@ def mount_recording_defaults() -> dict[str, object]:
         "confirmation_frames": 3,
         "min_decision_margin": 30.0,
         "max_detection_age": 0.5,
-        "max_heartbeat_age": 2.5,
+        "max_heartbeat_age": 100.0,
         "min_us": DEFAULT_MIN_PULSE_US,
         "max_us": DEFAULT_MAX_PULSE_US,
         "active_us": active_us,

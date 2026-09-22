@@ -1,5 +1,9 @@
 # Separate Pi Python 3.14 candidate — 2026-09-21
 
+Later native builds and actual Pi checks are recorded in the
+[September 22 completion report](../2026-09-22/refactor-completion.md).
+The failures below remain historical evidence, not the latest candidate state.
+
 This extends [the earlier read-only readiness check](python-314-readiness.md).
 It is a compatibility experiment, not a deployed runtime migration.
 The working `/home/seb/ai-drone/.venv` still uses system CPython 3.13.5;

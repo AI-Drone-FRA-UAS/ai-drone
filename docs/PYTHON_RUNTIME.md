@@ -27,20 +27,30 @@ explicitly `/usr/bin/python3.13`. Repair of an existing environment requires
 known supported version metadata and preserves its recorded base interpreter;
 unknown metadata fails closed instead of falling back to `/usr/bin/python3`.
 
-Deployment currently **refuses an existing Python 3.14 environment** before
-clearing or syncing its dependencies, whether or not it includes system packages.
-An isolated candidate can contain separately built native wheels absent from the
-runtime lock; a rebuild or exact sync would discard them. Promotion needs a
-reviewed native-artifact manifest and installation contract that preserves or
-reinstalls the qualified wheels, verifies their hashes and matching system-library
-versions, and tests paired rollback. This deployment work remains incomplete even
-if candidate imports and acquisition succeed. Keep the working 3.13 route selected.
+Generic deployment **refuses an existing Python 3.14 environment** before
+maintenance or dependency changes. The explicit `--native-payload DIRECTORY`
+route accepts a complete reviewed source and native-wheel payload. It verifies
+every file hash, the retained interpreter and libpython identities, ABI/GIL,
+installed native-library hashes and package versions before maintenance. The
+payload must also contain successful matching-source native/tag, passive camera,
+runtime transport and final disarmed qualification evidence. An unqualified
+preview cannot be deployed.
+
+The native payload contains its own metadata and lock, with all dependencies
+supplied as local wheels and `native` and `raspi` as default groups. Installation
+is offline with source builds disabled; later exact syncs preserve those groups.
+The environment is pinned to the target project's `.venv` even if the caller has
+set `UV_PROJECT_ENVIRONMENT`. Source execution uses the explicit Python module
+entry point and a project-pinned `drone` launcher. System Python and libraries
+are never replaced. Keep the working 3.13 route selected until a reviewed service
+change is separately authorized.
 
 Before a successful deployment can restart the runtime, the selected interpreter
 must be standard GIL-enabled Python within the supported range and import the
 application's native dependencies, including libcamera, pyKMS, lgpio, prctl and
-AprilTag. Imports do not construct camera or actuator objects. This check catches
-ABI incompatibility; it does not replace acquisition or timing qualification.
+AprilTag. Imports construct no camera or actuator objects, but Picamera2 import
+performs read-only V4L2 capability queries. This check catches ABI incompatibility;
+it does not replace acquisition or timing qualification.
 
 A separate uv candidate environment can be prepared beside the working project,
 with an explicit standard 3.14 interpreter and the same lock. Do not reuse
@@ -54,11 +64,17 @@ with `uv add --group candidate /absolute/path/to/package.whl` in the separate
 candidate project; its metadata and lock are evidence, not automatic promotion
 inputs for the working installation.
 
-Deployment backs up source and `.venv` together before mutation. An installation
-or native-import failure restores both; failed restoration leaves the service
+Deployment backs up source and `.venv` together before mutation, including any
+existing native payload. A successful native update also retains that backup.
+An installation or native-import failure restores both; failed restoration leaves the service
 stopped and retains the rollback directory. A successful source install with a
 failed health check also retains the backup. Recovery must restore both trees
 from the same directory, retain the explicit environment interpreter, and repeat
 the read-only post-restart health check. Do not restore just source over a changed
 native environment. No migration or rollback described here grants permission
 for live flight commands, parameter writes or service changes.
+
+The candidate AprilTag wrapper uses the reviewed [native binding patch](../scripts/native/README.md)
+to release the GIL during detection and preserve Python signal handling. The
+working Pi 3.13 Debian binding is unchanged. See the [dated qualification report](../state/2026-09-22/refactor-completion.md)
+for actual host, simulator and Pi results, retained failures and remaining gates.

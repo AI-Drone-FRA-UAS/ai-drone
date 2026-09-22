@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -447,8 +448,13 @@ def test_transaction_updates_old_checkout_after_gate_and_restarts_runtime(
     maintenance_update,
 ):
     state = maintenance_update
+    pipe = state["project"] / ".lgd-nfy0"
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(pipe)
     apply_update(state)
     project = state["project"]
+    if hasattr(os, "mkfifo"):
+        assert pipe.is_fifo()
     assert (project / "ai_drone/runtime.py").read_text() == "VALUE = 1\n"
     assert not (project / "legacy.py").exists()
     assert (project / "scripts/setup_runtime.py").is_file()

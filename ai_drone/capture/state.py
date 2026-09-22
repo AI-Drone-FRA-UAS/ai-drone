@@ -157,7 +157,7 @@ class CaptureState:
 
     def heartbeat_is_current(self, observed_at: float) -> bool:
         with self.lock:
-            return is_fresh(observed_at, time.monotonic(), 2.5) and (
+            return is_fresh(observed_at, time.monotonic(), 100.0) and (
                 self.last_vehicle_heartbeat_monotonic is None
                 or observed_at > self.last_vehicle_heartbeat_monotonic
             )

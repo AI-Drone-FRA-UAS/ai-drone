@@ -212,6 +212,46 @@ Use `--calibration FILE --tag-size METRES` for metric poses. Calibration must
 match focus, crop and resolution; without it only IDs/corners are reported.
 Measure the camera-to-body transform before using poses for control.
 
+### Camera focus preview
+
+The IMX500 AI Camera has a manually adjustable lens; software cannot turn it.
+Use the supplied focus tool while viewing a stationary, well-lit target at the
+intended working distance. Turn in small increments and compare fine edges in
+the centre and corners. Recalibrate camera intrinsics after changing focus.
+See the [AI Camera specifications](https://datasheets.raspberrypi.com/camera/ai-camera-product-brief.pdf).
+
+On the grounded, disarmed Pi, start a 15-minute preview:
+
+```bash
+ssh seb@seb-is-pm
+cd ~/ai-drone
+uv run --no-sync drone walk --device /dev/serial0 --duration 900 \
+  --stream --port 8081 --no-video --fps 10 \
+  --resolution 1280x960 --analysis-resolution 1280x960 \
+  --backend opencv --detect-every 10
+```
+
+On the laptop, open a tunnel in another terminal and leave it running:
+
+```bash
+ssh -N -L 127.0.0.1:8081:127.0.0.1:8081 seb@seb-is-pm
+```
+
+Open `http://localhost:8081/` in a browser; `/snap` returns one JPEG.
+The larger preview shows more detail for focusing, and detection runs only on
+every tenth frame. This uses the existing passive recorder and saves telemetry
+and camera metadata, including `FocusFoM` when the camera supplies it. Compare
+focus scores only with the same stationary scene, distance and lighting.
+The job survives SSH disconnection and ends after 15 minutes. To stop early:
+
+```bash
+ssh seb@seb-is-pm 'sudo systemctl stop ai-drone-walk.service'
+```
+
+Only one camera job can run at a time. The explicit UART path above supports
+the current installation without the shared access service; once that service
+is installed, omit `--device /dev/serial0` to use its socket instead.
+
 ## Reports and transfer
 
 Fetch a finalized dataset from the laptop into a new directory:
@@ -270,6 +310,33 @@ It supports disarmed capture and flight recording without taking flight control:
 uv run --locked --group raspi python scripts/mount.py close
 uv run --locked --group raspi python scripts/tag_mount_capture.py --tag-id 3 --duration 60
 ```
+
+For a manual flight using the installed Pi environment and direct FC UART,
+start a detached recording and one-shot release on **tag36h11 ID 6**:
+
+```bash
+cd ~/ai-drone
+bash scripts/payload_flight.sh start 6
+bash scripts/payload_flight.sh logs
+```
+
+Wait for `READY`. Keep ID 6 out of view until release is intended: the trigger
+also works while disarmed. Closing the SSH connection or journal viewer leaves
+capture running. There is no time limit and no automatic startup after reboot.
+Stop after landing and wait for the command to finish before removing power:
+
+```bash
+bash scripts/payload_flight.sh stop
+```
+
+The helper saves colour H.264 at 1280×960, 30 fps and a target 8 Mbit/s, plus
+frame timestamps, camera metadata, AprilTag detections, telemetry and servo
+events under `artifacts/sensor-recordings/`. Video uses approximately 3.6 GB
+per hour; logs require additional space. Preserve the complete recording
+directory for later analysis and training, including frames with no detections.
+These are compressed colour recordings, not full-resolution raw sensor data or
+IMX500 inference input tensors. Camera or FC-heartbeat failure can stop capture;
+check the final manifest for completeness.
 
 Manual mount commands and tag capture share the GPIO setup in `ai_drone.mount`:
 BCM12, 900–2100 µs mapping, PWM off at startup, and the existing gpiozero pin

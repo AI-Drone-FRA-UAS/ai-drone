@@ -1,5 +1,9 @@
 # Refactor implementation and validation — 2026-09-21
 
+This is the preserved September 21 checkpoint. See the
+[September 22 completion report](../2026-09-22/refactor-completion.md) for the
+latest commits, tests, Pi candidate results and remaining qualification.
+
 Integration branch: `refactor/concise-runtime`, workspace
 `/home/abaris/drone/ai-drone`. The governing expanded plan from `codex/refactor`,
 including `84855d0`, is integrated and remains text-identical to that branch's

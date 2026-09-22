@@ -265,7 +265,9 @@ def _is_excluded(relative: Path) -> bool:
         _is_secret_path(relative)
         or relative.suffix.lower() in {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
         or any(
-            part in EXCLUDE_NAMES or part.startswith("drone-tone-handover-backup-")
+            part in EXCLUDE_NAMES
+            # lgpio creates transient notification pipes in its working directory.
+            or part.startswith((".lgd-nfy", "drone-tone-handover-backup-"))
             for part in relative.parts
         )
     )
