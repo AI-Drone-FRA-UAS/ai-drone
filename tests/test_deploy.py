@@ -16,6 +16,7 @@ from ai_drone.link import deploy
 from ai_drone.link.targets import DeployTarget
 
 DEPLOYMENT_ID = "0123456789abcdef0123456789abcdef"
+OLD_ENVIRONMENT = "version = 3.13.5\ninclude-system-site-packages = true\n"
 
 
 def _target(
@@ -329,7 +330,7 @@ def maintenance_update(tmp_path, monkeypatch):
     _write_file(project, "ai_drone/runtime.py", "OLD_VERSION = 1\n")
     _write_file(project, "legacy.py", "old source\n")
     _write_file(project, ".venv/lib/dependency.py", "old dependency\n")
-    _write_file(project, ".venv/pyvenv.cfg", "old config\n")
+    _write_file(project, ".venv/pyvenv.cfg", OLD_ENVIRONMENT)
     _write_file(project, ".env", "credentials\n")
     _write_file(project, "ai_drone/.env", "nested credentials\n")
     _write_file(project, "drone.toml", "per-machine configuration\n")
@@ -483,7 +484,7 @@ def test_failed_install_restores_source_environment_and_restarts_old_runtime(
     assert (project / "ai_drone/runtime.py").read_text() == "OLD_VERSION = 1\n"
     assert (project / "legacy.py").read_text() == "old source\n"
     assert (project / ".venv/lib/dependency.py").read_text() == "old dependency\n"
-    assert (project / ".venv/pyvenv.cfg").read_text() == "old config\n"
+    assert (project / ".venv/pyvenv.cfg").read_text() == OLD_ENVIRONMENT
     assert not (project / ".venv/lib/new-dependency.py").exists()
     assert_local_state_preserved(project)
     assert "start" in state["events"]

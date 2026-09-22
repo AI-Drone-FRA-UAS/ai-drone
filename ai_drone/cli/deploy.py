@@ -168,9 +168,9 @@ def _wait_runtime_ready(socket: str, *, timeout: float = 12) -> None:
 def _environment_interpreter(project: Path) -> tuple[str, bool, str]:
     """Preserve the installed minor version, independently of developer defaults.
 
-    New Pi installs stay on the qualified system 3.13 route. Candidate 3.14
-    environments need a reviewed native-artifact preservation/install contract;
-    rebuilding or exactly syncing them would discard separately built bindings.
+    New Pi installs stay on the qualified system 3.13 route. Python 3.14 uses
+    only the separate explicit native-payload path; a generic sync could discard
+    its separately built bindings.
     """
     config = project / ".venv/pyvenv.cfg"
     if not config.exists():
@@ -190,9 +190,8 @@ def _environment_interpreter(project: Path) -> tuple[str, bool, str]:
         )
     if version.startswith("3.14."):
         raise RuntimeError(
-            "Python 3.14 deployment is blocked pending a reviewed native-binding "
-            "artifact manifest and installation contract; preserve the separate "
-            "candidate environment and keep the working Python 3.13 runtime"
+            "Python 3.14 deployment is blocked without an explicit reviewed "
+            "--native-payload; preserve the candidate and working Python 3.13 runtime"
         )
     if values.get("include-system-site-packages") == "true":
         return ".venv/bin/python", False, ".".join(version.split(".")[:2])
@@ -202,10 +201,18 @@ def _environment_interpreter(project: Path) -> tuple[str, bool, str]:
     return executable, True, ".".join(version.split(".")[:2])
 
 
-def _install_local(project: Path, *, offline: bool) -> None:
+def _install_local(project: Path, *, offline: bool, native: bool = False) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv is required on the Pi")
+    if native:
+        from ai_drone.link.native import install, validate_payload, validate_target
+
+        document = validate_payload(project)
+        validate_target(document, project, uv)
+        install(project, document, uv)
+        _validate_runtime_interpreter(project, uv, "3.14")
+        return
     interpreter, rebuild, minor = _environment_interpreter(project)
     if rebuild:
         subprocess.run(
@@ -261,7 +268,8 @@ def _validate_runtime_interpreter(project: Path, uv: str, minor: str) -> None:
             "assert sys.version_info[:2] == tuple(map(int, sys.argv[1].split('.'))); "
             "assert not sysconfig.get_config_var('Py_GIL_DISABLED'); "
             "import numpy, PIL, pymavlink, cv2, picamera2, libcamera, pykms, "
-            "gpiozero, lgpio, prctl, apriltag",
+            "gpiozero, lgpio, prctl, apriltag; "
+            "exec('import OpenEXR, pidng' if sys.argv[1] == '3.14' else '')",
             minor,
         ],
         cwd=project,
@@ -296,13 +304,37 @@ def _staged_source_paths(stage: Path, project: Path, deployment_id: str) -> list
 
 
 def _apply_staged_update(
-    stage: Path, project: Path, deployment_id: str, *, offline: bool
+    stage: Path,
+    project: Path,
+    deployment_id: str,
+    *,
+    offline: bool,
+    native: bool = False,
 ) -> None:
     """Run from uploaded code, so an old installation need not know this protocol."""
     from ai_drone.cli.power import _guard_idle, _pi_fc, _pi_snapshot, _require_disarmed
     from ai_drone.mavlink.remote import runtime_request
 
     source_paths = _staged_source_paths(stage, project, deployment_id)
+    native_space = 0
+    if native:
+        from ai_drone.link.native import (
+            unpacked_bytes,
+            validate_payload,
+            validate_target,
+        )
+
+        uv = shutil.which("uv")
+        if uv is None:
+            raise RuntimeError("uv is required on the Pi")
+        document = validate_payload(stage)
+        validate_target(document, project, uv, stage=stage)
+        # Allow both uv's extracted cache and a separate environment copy.
+        native_space = 2 * unpacked_bytes(stage, document)
+    else:
+        if (stage / "native-runtime").exists():
+            raise RuntimeError("native runtime requires explicit payload selection")
+        _environment_interpreter(project)
     initial = _pi_snapshot()
     _guard_idle(initial)
     _require_disarmed(_pi_fc(initial))
@@ -315,7 +347,7 @@ def _apply_staged_update(
             "runtime service/socket mismatch or existing maintenance; refusing deploy"
         )
     old_paths = _mutable_paths(project, environment=True)
-    required = sum(
+    required = native_space + sum(
         path.lstat().st_size
         for path in [*old_paths, *source_paths]
         if not path.is_dir()
@@ -345,7 +377,7 @@ def _apply_staged_update(
         state = Installing(state.restart_socket)
         _remove_mutable(project, environment=False)
         _copy_paths(stage, project, source_paths)
-        _install_local(project, offline=offline)
+        _install_local(project, offline=offline, native=native)
         state = Installed(state.restart_socket)
     except BaseException:
         if isinstance(state, Installing):
@@ -354,10 +386,12 @@ def _apply_staged_update(
             state = Restored(state.restart_socket)
         raise
     finally:
-        _finish_deployment(state, backup)
+        _finish_deployment(state, backup, retain=native)
 
 
-def _finish_deployment(state: DeployState, backup: Path) -> None:
+def _finish_deployment(
+    state: DeployState, backup: Path, *, retain: bool = False
+) -> None:
     from ai_drone.mavlink.remote import runtime_request
 
     restarted = state.restart_socket is None
@@ -371,7 +405,7 @@ def _finish_deployment(state: DeployState, backup: Path) -> None:
             with contextlib.suppress(OSError, RuntimeError, TimeoutError):
                 runtime_request(state.restart_socket, {"maintenance": False})
     finally:
-        if (isinstance(state, Installed) and restarted) or isinstance(
+        if (isinstance(state, Installed) and restarted and not retain) or isinstance(
             state, Prepared | Stopping | BackedUp
         ):
             shutil.rmtree(backup)
@@ -380,7 +414,7 @@ def _finish_deployment(state: DeployState, backup: Path) -> None:
 
 
 def _transaction_entry(
-    stage: str, project: str, deployment_id: str, *, offline: bool
+    stage: str, project: str, deployment_id: str, *, offline: bool, native: bool = False
 ) -> None:
     import fcntl
 
@@ -395,7 +429,11 @@ def _transaction_entry(
         ):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             _apply_staged_update(
-                Path(stage), Path(project), deployment_id, offline=offline
+                Path(stage),
+                Path(project),
+                deployment_id,
+                offline=offline,
+                native=native,
             )
     finally:
         os.close(descriptor)

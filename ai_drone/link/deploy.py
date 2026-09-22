@@ -33,7 +33,7 @@ SENTINEL_PREFIX = "ai-drone-deploy-v1:"
 
 # Keep the deployed tree deliberately smaller than the development checkout.
 # These are the only source paths needed to install and operate the Pi runtime.
-RUNTIME_TREES = ("ai_drone",)
+RUNTIME_TREES = ("ai_drone", "native-runtime")
 RUNTIME_FILES = frozenset(
     {
         "README.md",  # Referenced by pyproject.toml during package builds.
@@ -92,6 +92,7 @@ class DeployPlan:
     target: DeployTarget
     dry_run: bool
     offline: bool = False
+    native_payload: Path | None = None
 
 
 def _validated_remote_project_dir(target: DeployTarget) -> str:
@@ -183,6 +184,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--offline", action="store_true", help="install from the Pi's uv cache only"
     )
+    parser.add_argument(
+        "--native-payload",
+        type=Path,
+        help="explicit reviewed source/native-wheel payload (always installs offline)",
+    )
     return parser
 
 
@@ -199,6 +205,7 @@ def build_plan(
         target=target,
         dry_run=args.dry_run,
         offline=args.offline,
+        native_payload=args.native_payload,
     )
 
 
@@ -459,6 +466,13 @@ def _run_remote_preflight(plan: DeployPlan) -> None:
 
 
 def _deploy_transaction(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
+    if plan.native_payload is not None:
+        from ai_drone.link.native import validate_payload
+
+        repo_root = plan.native_payload.resolve()
+        validate_payload(repo_root)
+    elif (repo_root / "native-runtime").exists():
+        raise ValueError("native runtime requires explicit --native-payload selection")
     _validate_runtime_source(repo_root, _iter_sync_paths(repo_root))
     _run_remote_preflight(plan)
     deployment_id = secrets.token_hex(16)
@@ -470,7 +484,8 @@ def _deploy_transaction(plan: DeployPlan, repo_root: Path = REPO_ROOT) -> None:
     )
     payload = (
         "from ai_drone.cli.deploy import _transaction_entry;"
-        f"_transaction_entry({stage!r}, {project!r}, {deployment_id!r}, offline={plan.offline!r})"
+        f"_transaction_entry({stage!r}, {project!r}, {deployment_id!r}, "
+        f"offline={plan.offline!r}, native={plan.native_payload is not None!r})"
     )
     command = remote_python_command(
         plan.target,
