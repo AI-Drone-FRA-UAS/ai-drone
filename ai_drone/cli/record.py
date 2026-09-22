@@ -15,6 +15,7 @@ from concurrent.futures import CancelledError
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1316,6 +1317,12 @@ def _start_recording(recording: _Recording) -> None:
         force=True,
     )
     _install_capture_signals(recording)
+    if recording.on_pi and not recording.stop.is_set():
+        # Native OpenCV initialization can hold the GIL long enough to overflow
+        # a live telemetry subscription. Report optional import failures later
+        # through normal camera startup, without opening any camera here.
+        with suppress(ImportError, OSError, RuntimeError, ValueError):
+            import_module("cv2")
     _start_flight_capture(recording)
     _start_camera_capture(recording)
     _ready_to_capture(recording)
