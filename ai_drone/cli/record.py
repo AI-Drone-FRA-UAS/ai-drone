@@ -1473,7 +1473,7 @@ def _close_stream(recording: _Recording) -> None:
 
 @contextmanager
 def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
-    """Own partial startup and the producer -> worker -> artifact shutdown order."""
+    """Stop actuation and telemetry before slower camera/artifact cleanup."""
     with ExitStack() as resources:
         # Explicit dependency order, rather than reverse acquisition order.
         for label, close in (
@@ -1481,20 +1481,6 @@ def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
             (
                 "close storage event log",
                 lambda: recording.storage.close() if recording.storage else None,
-            ),
-            (
-                "finish transport metrics",
-                lambda: (
-                    recording.flight.transport.close()
-                    if recording.flight.transport
-                    else None
-                ),
-            ),
-            (
-                "close flight capture",
-                lambda: _cleanup_mavlink_connection(
-                    recording.flight.connection, recording.state
-                ),
             ),
             (
                 "finalize camera artifacts",
@@ -1509,7 +1495,7 @@ def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
             (
                 "stop capture workers",
                 lambda: _stop_capture_workers(
-                    recording.flight.worker,
+                    None,
                     recording.camera.worker,
                     recording.frames,
                     recording.state,
@@ -1526,6 +1512,29 @@ def _recording_lifecycle(recording: _Recording) -> Iterator[None]:
                 ),
             ),
             ("close browser stream", lambda: _close_stream(recording)),
+            (
+                "close flight capture",
+                lambda: _cleanup_mavlink_connection(
+                    recording.flight.connection, recording.state
+                ),
+            ),
+            (
+                "finish transport metrics",
+                lambda: (
+                    recording.flight.transport.close()
+                    if recording.flight.transport
+                    else None
+                ),
+            ),
+            (
+                "stop telemetry worker",
+                lambda: (
+                    _join_telemetry_worker(recording.flight.worker)
+                    if recording.flight.worker is not None
+                    and recording.flight.worker.ident is not None
+                    else None
+                ),
+            ),
             (
                 "close payload servo session",
                 lambda: (

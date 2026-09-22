@@ -1119,17 +1119,17 @@ def test_cleanup_attempts_every_resource_and_retains_first_error(tmp_path) -> No
     paths.manifest.write_text("manifest still reachable\n")
 
     assert events == [
+        "flush_log",
+        "close_log",
+        "close_connection",
         "stop_encoder",
         "stop_camera",
         "close_camera",
         f"write:{paths.first_frame}",
         f"write:{paths.last_frame}",
-        "flush_log",
-        "close_log",
-        "close_connection",
     ]
     assert connection.logfile is None
-    assert state.worker_error == "stop H.264 encoder: encoder stop failed"
+    assert state.worker_error == "flush MAVLink logfile: flush failed"
     assert paths.manifest.read_text() == "manifest still reachable\n"
 
 
@@ -1506,12 +1506,12 @@ def test_lifecycle_attempts_all_cleanup_before_finalization(tmp_path, monkeypatc
     assert run(["--output-dir", str(output)]) == 1
     assert calls == [
         "servo",
+        "flight",
         "stream-stop",
         "stream-close",
         "camera",
         "workers",
         "artifacts",
-        "flight",
         "storage",
         "signals",
         "manifest",
